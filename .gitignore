@@ -1,0 +1,29 @@
+# runtime data (archive, journal, live dumps, slot files)
+data/
+data-*/
+*.sqlite
+*.sqlite-*
+*.jsonl
+*.bin
+*.bin.json
+last_request.json
+# local tokenizer / Strata checkout used by optional tests
+tok/
+Strata/
+# local config
+config.json
+cfg*.json
+!examples/config.example.json
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+# archives
+*.tar
+*.tar.*
+*.zip
+*.gz

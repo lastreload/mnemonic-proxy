@@ -1,0 +1,18 @@
+{
+  "window": 131072,
+  "mask_reasoning": true,
+  "mask_tool_args": true,
+  "mask_anchor": true,
+  "anchor_min_tokens": 24000,
+  "slot_dir": "/path/to/strata/sessions",
+  "slot_save": true,
+  "seal_experimental": true,
+  "notes_max_tokens": 12288,
+  "response_floor": 16384,
+  "live_dump": true,
+  "autosave": true,
+  "autosave_idle_s": 180,
+  "autosave_keep": 10,
+  "autosave_max_gb": 25,
+  "autosave_min_free_gb": 8
+}

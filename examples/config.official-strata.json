@@ -1,0 +1,12 @@
+{
+  "window": 131072,
+  "mask_reasoning": true,
+  "mask_tool_args": true,
+  "mask_anchor": false,
+  "slot_save": false,
+  "seal_experimental": false,
+  "autosave": false,
+  "notes_max_tokens": 12288,
+  "response_floor": 16384,
+  "live_dump": true
+}

@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>Contesto virtuale · monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<style>
+/* Superficie: MONITOR. Densità e lettura a colpo d'occhio, niente hero, un solo accento (ciano). */
+:root{
+  --bg:#0e1013; --pn:#14171c; --pn2:#191d23; --ln:#262b33; --ln2:#1e2229;
+  --tx:#dfe3e8; --mu:#8b939e; --dim:#5d6570;
+  --ac:#5fc3d6; --ac-weak:rgba(95,195,214,.28);
+  --ok:#4fbf6a; --warn:#e2c541; --high:#e8913a; --bad:#e5584f;
+  --sans:"IBM Plex Sans","Source Sans 3","Noto Sans","Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono","JetBrains Mono","DejaVu Sans Mono",ui-monospace,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx)}
+body{font:13px/1.45 var(--sans);overflow-y:scroll;scrollbar-color:#323842 transparent}
+*{scrollbar-color:#323842 transparent;scrollbar-width:thin}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.mu{color:var(--mu)} .dim{color:var(--dim)}
+button,select,input{font:inherit;color:var(--tx);background:var(--pn2);border:1px solid var(--ln);border-radius:4px}
+button{padding:4px 10px;cursor:pointer} button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--ac);outline-offset:1px}
+button:disabled{cursor:not-allowed;color:var(--dim);border-style:dashed}
+
+/* barra superiore: altezza fissa */
+.top{position:sticky;top:0;z-index:10;height:40px;display:flex;align-items:center;gap:14px;padding:0 16px;background:var(--bg);border-bottom:1px solid var(--ln)}
+.top h1{font-size:14px;font-weight:600;margin:0;letter-spacing:.01em}
+.top .src{color:var(--dim);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.top label{color:var(--mu);font-size:12px;display:flex;align-items:center;gap:6px}
+.conn{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--mu);width:150px}
+.conn i{width:7px;height:7px;border-radius:50%;background:var(--dim);flex:none}
+.conn.on i{background:var(--ok)} .conn.off i{background:var(--bad)}
+
+/* fascia di stato: altezze riservate */
+.status{display:grid;grid-template-columns:minmax(330px,1.6fr) minmax(210px,1fr) minmax(170px,.8fr) minmax(210px,1fr) 170px;border-bottom:1px solid var(--ln);background:var(--pn)}
+.cell{padding:12px 16px;height:104px;border-right:1px solid var(--ln2);min-width:0;overflow:hidden}
+.cell:last-child{border-right:0}
+.lbl{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--mu);height:16px;white-space:nowrap}
+.big{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:26px;line-height:34px;height:34px;white-space:nowrap;font-weight:500}
+.big small{font-size:14px;color:var(--mu);font-weight:400}
+.sub{font-size:12px;color:var(--mu);height:18px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stale{opacity:.45}
+.mem-head{display:flex;align-items:center;gap:8px}
+.mem-dot{width:12px;height:12px;border-radius:50%;background:var(--dim);flex:none;box-shadow:0 0 0 3px rgba(255,255,255,.04)}
+.mem-dot.s0{background:var(--ok)} .mem-dot.s1{background:var(--warn)} .mem-dot.s2{background:var(--high)} .mem-dot.s3{background:var(--bad)}
+.mem-state{font-size:13px;color:var(--tx);white-space:nowrap}
+.gauge{position:relative;height:8px;margin-top:8px;background:#20252c;border-radius:2px;overflow:hidden}
+.gauge .f{position:absolute;left:0;top:0;bottom:0;background:var(--ac);transition:width .6s ease}
+.gauge .r{position:absolute;top:0;bottom:0;background:repeating-linear-gradient(135deg,rgba(223,227,232,.35) 0 3px,transparent 3px 6px);transition:left .6s ease,width .6s ease}
+.gauge .t{position:absolute;top:0;bottom:0;width:1px;background:var(--bg)}
+.prog{height:5px;background:#20252c;margin-top:9px;border-radius:2px;overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--ac);transition:width .5s linear}
+.compact button{margin-top:6px;width:100%;height:32px}
+
+/* riga secondaria: celle a larghezza fissa */
+.facts{display:flex;gap:0;height:32px;align-items:center;padding:0 16px;border-bottom:1px solid var(--ln);font-size:12px;color:var(--mu);overflow:hidden;white-space:nowrap}
+.facts .g{display:flex;gap:14px;padding-right:18px;margin-right:18px;border-right:1px solid var(--ln2)}
+.facts .g:last-child{border-right:0}
+.facts b{font-weight:400;color:var(--tx)}
+.err{color:var(--bad);font-size:12px;height:0;overflow:hidden;padding:0 16px}
+.err.show{height:22px;line-height:22px}
+
+main{padding:14px 16px 24px;display:grid;gap:14px}
+section{min-width:0}
+.sh{display:flex;align-items:baseline;gap:14px;height:28px}
+.sh h2{font-size:13px;font-weight:600;margin:0}
+.sh .opts{margin-left:auto;display:flex;gap:12px;color:var(--mu);font-size:12px}
+.sh .opts label{display:flex;gap:5px;align-items:center;cursor:pointer}
+
+/* grafico */
+.chartrow{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:16px}
+.chartwrap{position:relative;height:484px;background:var(--pn);border:1px solid var(--ln);border-radius:4px}
+.chartwrap canvas{position:absolute;left:0;top:0;width:100%;height:100%}
+#tip{position:absolute;top:10px;width:300px;pointer-events:none;background:#0b0d10f2;border:1px solid var(--ln);border-radius:4px;padding:8px 10px;font-size:12px;display:none;z-index:3}
+#tip .h{color:var(--mu);margin-bottom:4px;white-space:nowrap}
+#tip .r{display:flex;justify-content:space-between;gap:8px;white-space:nowrap}
+#tip .r span:first-child{color:var(--mu)}
+#tip .ev{margin-top:5px;padding-top:5px;border-top:1px solid var(--ln);color:var(--tx);white-space:normal}
+.legend{font-size:12px;color:var(--mu);display:grid;gap:9px;align-content:start;padding-top:2px}
+.legend .it{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start}
+.legend .it b{color:var(--tx);font-weight:500}
+.sw{height:14px;margin-top:2px;position:relative}
+.sw.area{background:var(--ac-weak);border-top:2px solid var(--ac)}
+.sw.line{height:2px;margin-top:8px;background:#c9ced6}
+.sw.lim{height:0;margin-top:8px;border-top:2px dashed var(--bad)}
+.sw.band{background:#1b1f26;border:1px solid var(--ln)}
+.sw.mask::before{content:"";position:absolute;left:10px;top:0;bottom:2px;width:1px;background:#c9ced6}
+.sw.mask::after{content:"";position:absolute;left:7px;bottom:0;border:3.5px solid transparent;border-top:5px solid #c9ced6;border-bottom:0}
+.sw.rec::before{content:"";position:absolute;left:7px;top:4px;width:7px;height:7px;border-radius:50%;background:var(--ac)}
+.sw.br::before{content:"";position:absolute;left:10px;top:2px;width:2px;height:10px;background:var(--mu)}
+.sw.seg::before{content:"";position:absolute;left:6px;top:3px;width:8px;height:8px;transform:rotate(45deg);background:var(--tx)}
+.sw.rd{background:linear-gradient(to top,rgba(95,195,214,.55) 70%,transparent 70%)}
+.legend .note{border-top:1px solid var(--ln2);padding-top:8px;color:var(--dim)}
+.sumline{font-size:12px;color:var(--mu);height:22px;line-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* eventi + prompt */
+.lower{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.chips{display:flex;flex-wrap:wrap;gap:4px 6px;min-height:52px;align-content:flex-start;margin-bottom:6px}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border:1px solid var(--ln);border-radius:12px;color:var(--mu);cursor:pointer;user-select:none;background:transparent}
+.chip.on{color:var(--tx);border-color:#3a414b;background:var(--pn2)}
+.chip .num{color:var(--dim)}
+.tbox{height:520px;overflow-y:auto;border:1px solid var(--ln);border-radius:4px;background:var(--pn)}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+th{position:sticky;top:0;background:var(--pn2);color:var(--mu);font-weight:500;text-align:left;padding:0 8px;height:26px;z-index:1}
+td{height:26px;padding:0 8px;border-top:1px solid var(--ln2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+tr.x td{white-space:normal;height:auto;padding:4px 8px}
+tbody tr{cursor:pointer} tbody tr:hover td{background:#191d24}
+.k{font-family:var(--mono);font-size:11.5px}
+.k.ac{color:var(--ac)} .k.bad{color:var(--bad)} .k.req{color:var(--dim)}
+.det{font-family:var(--mono);font-size:11.5px;color:#b6bec8}
+.fl-off-request tr[data-t="request"],.fl-off-mask tr[data-t="mask"],.fl-off-recall tr[data-t="recall"],.fl-off-recall_dropped tr[data-t="recall_dropped"],
+.fl-off-freeze tr[data-t="freeze"],.fl-off-notes tr[data-t="notes"],.fl-off-seal tr[data-t="seal"],.fl-off-save tr[data-t="save"],.fl-off-switch tr[data-t="switch"],
+.fl-off-branch tr[data-t="branch"],.fl-off-new_conversation tr[data-t="new_conversation"],.fl-off-errori tr[data-g="errori"]{display:none}
+tr.othconv{display:none}
+
+.pbox{border:1px solid var(--ln);border-radius:4px;background:var(--pn)}
+.resp{height:150px;overflow:auto;padding:8px 10px;font:12px/1.45 var(--mono);white-space:pre-wrap;word-break:break-word;border-bottom:1px solid var(--ln)}
+.pinfo{height:30px;line-height:30px;padding:0 10px;font-size:12px;color:var(--mu);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border-bottom:1px solid var(--ln2);display:flex;gap:10px}
+.pinfo .opts{margin-left:auto;display:flex;gap:6px;align-items:center}
+.pinfo button{padding:0 8px;height:22px;font-size:11.5px}
+.plist{height:390px;overflow:auto}
+.msg{border-bottom:1px solid var(--ln2)}
+.msg .hd{display:flex;gap:10px;padding:0 10px;height:26px;align-items:center;font-size:11.5px;color:var(--mu);cursor:pointer;white-space:nowrap;overflow:hidden}
+.msg .hd:hover{background:#191d24}
+.msg .role{color:var(--tx);width:64px;flex:none}
+.msg .pv{overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
+.msg pre{margin:0;padding:6px 10px 10px 10px;white-space:pre-wrap;word-break:break-word;font:11.5px/1.4 var(--mono);max-height:260px;overflow:auto;color:#c5ccd5}
+.msg.c pre{display:none}
+.msg:not(.c) .pv{visibility:hidden}
+mark.ph{background:rgba(95,195,214,.14);color:var(--ac);border-radius:2px;padding:0 2px}
+mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padding:0 2px}
+.empty{padding:14px 10px;color:var(--dim);font-size:12px}
+
+@media (max-width:1250px){
+  .facts{height:auto;flex-wrap:wrap;row-gap:4px;padding:6px 16px;min-height:32px}
+  .status{grid-template-columns:1fr 1fr 1fr}
+  .chartrow{grid-template-columns:1fr} .lower{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="top">
+  <h1>Contesto virtuale</h1>
+  <span class="conn" id="conn"><i></i><span id="connTxt">connessione…</span></span>
+  <span class="src" id="src"></span>
+  <label>conversazione <select id="conv"></select></label>
+  <label><input type="checkbox" id="pause"> pausa</label>
+  <span class="num dim" id="upd" style="width:70px;text-align:right">—</span>
+</div>
+
+<div class="status">
+  <div class="cell" title="Pallino: verde sotto il 60% del limite, giallo 60–80%, arancione oltre l'80%, rosso se il prossimo turno (contesto + riserva per la risposta) non entra.">
+    <div class="lbl">Memoria · contesto fisico</div>
+    <div class="mem-head"><span class="mem-dot" id="memDot"></span>
+      <span class="big" id="memVal">—</span><span class="mem-state" id="memState"></span></div>
+    <div class="gauge" title="riempito = contesto fisico; tratteggio = riserva per la risposta; tacche a 60% e 80%">
+      <div class="f" id="gF" style="width:0"></div><div class="r" id="gR" style="left:0;width:0"></div>
+      <div class="t" style="left:60%"></div><div class="t" style="left:80%"></div></div>
+    <div class="sub" id="memSub" style="margin-top:6px"></div>
+  </div>
+  <div class="cell">
+    <div class="lbl">Fase</div>
+    <div class="big" id="phase" style="font-family:var(--sans);font-size:22px">—</div>
+    <div class="sub" id="phaseSub"></div>
+    <div class="prog"><i id="phaseProg"></i></div>
+  </div>
+  <div class="cell">
+    <div class="lbl">Velocità (media 2 s)</div>
+    <div class="big" id="tps">—<small> tok/s</small></div>
+    <div class="sub" id="tpsSub"></div>
+  </div>
+  <div class="cell">
+    <div class="lbl">Storia virtuale</div>
+    <div class="big" id="virt">—</div>
+    <div class="sub" id="virtSub"></div>
+  </div>
+  <div class="cell compact">
+    <div class="lbl">Azioni</div>
+    <button disabled title="Segnaposto: la compattazione manuale non è ancora collegata al proxy">Compatta ora</button>
+    <div class="sub" style="margin-top:6px">non ancora disponibile</div>
+  </div>
+</div>
+<div class="facts" id="facts">
+  <span class="g"><span>ultima richiesta</span><span>riusati <b class="num" id="fReu">—</b></span><span>riletti <b class="num" id="fRd">—</b></span><span>decode <b class="num" id="fDec">—</b></span><span>draft <b class="num" id="fDr">—</b></span></span>
+  <span class="g"><span>sessione</span><span><b class="num" id="fTot">—</b></span><span>riuso <b class="num" id="fTr">—</b></span></span>
+  <span class="g"><span>GPU <b class="num" id="fGpu">—</b></span><span>RAM <b class="num" id="fRam">—</b></span></span>
+</div>
+<div class="err" id="errs"></div>
+
+<main>
+<section>
+  <div class="sh"><h2>Uso del contesto</h2><span class="mu" style="font-size:12px">quanto contesto usa davvero il modello, rispetto a quanta storia esiste</span>
+    <span class="opts">
+      <label><input type="radio" name="ax" value="i" checked> per richiesta</label>
+      <label><input type="radio" name="ax" value="t"> per orario</label>
+      <label><input type="checkbox" id="onlyR0"> solo round 0</label>
+    </span></div>
+  <div class="chartrow">
+    <div>
+      <div class="chartwrap" id="cw"><canvas id="cv"></canvas><canvas id="ov"></canvas><div id="tip"></div></div>
+      <div class="sumline num" id="rsum"></div>
+    </div>
+    <div class="legend">
+      <div class="it"><span class="sw area"></span><span><b>Contesto fisico</b>: i token che il modello legge davvero a ogni richiesta.</span></div>
+      <div class="it"><span class="sw line"></span><span><b>Storia virtuale</b>: tutta la conversazione che esiste, anche la parte nascosta. <span id="lgEst"></span></span></div>
+      <div class="it"><span class="sw lim"></span><span><b>Limite 131.072</b>: oltre questa linea il contesto fisico non entra nel modello.</span></div>
+      <div class="it"><span class="sw band"></span><span><b>Segmento</b> (seg 0, seg 1…): tratto di conversazione con la stessa cache; a ogni cambio il vecchio tratto viene riassunto in note.</span></div>
+      <div class="it"><span class="sw seg"></span><span><b>Cambio segmento</b>: congelamento, note, sigillo e salvataggio del segmento precedente.</span></div>
+      <div class="it"><span class="sw mask"></span><span><b>Mask −NK</b>: il proxy nasconde vecchie uscite degli strumenti; il contesto fisico scende di N mila token.</span></div>
+      <div class="it"><span class="sw rec"></span><span><b>Recall</b> (punti sotto l'asse): il modello ha richiamato un pezzo nascosto. Punto più grande = più richiami vicini.</span></div>
+      <div class="it"><span class="sw br"></span><span><b>Branch</b>: il client ha ripreso la storia da un punto precedente.</span></div>
+      <div class="it"><span class="sw rd"></span><span><b>Riletti</b> (in basso): token che il modello ha dovuto rileggere; il resto viene dalla cache. Basso è meglio.</span></div>
+      <div class="note">Passa il mouse sul grafico per i dettagli di ogni richiesta.</div>
+    </div>
+  </div>
+</section>
+
+<section class="lower">
+  <div>
+    <div class="sh"><h2>Operazioni del proxy</h2><span class="mu num" id="evcount" style="font-size:12px"></span></div>
+    <div class="chips" id="chips"></div>
+    <div class="tbox" id="tbox"><table><colgroup><col style="width:74px"><col style="width:118px"><col></colgroup>
+      <thead><tr><th>ora</th><th>evento</th><th>dettagli (clic per espandere)</th></tr></thead><tbody id="evtb"></tbody></table></div>
+  </div>
+  <div>
+    <div class="sh"><h2>Prompt e risposta</h2><span class="mu" id="lrinfo" style="font-size:12px"></span></div>
+    <div class="pbox">
+      <div class="pinfo"><span>Risposta</span><span id="respinfo" class="dim"></span></div>
+      <div class="resp" id="resp"><span class="dim">—</span></div>
+      <div class="pinfo"><span>Prompt fisico dell'ultima richiesta</span><span id="phcount" class="num dim"></span>
+        <span class="opts"><label class="mu"><input type="checkbox" id="onlyPh"> solo con segnaposto</label><button id="expand">espandi</button><button id="collapse">comprimi</button></span></div>
+      <div class="plist" id="prompt"><div class="empty">Il proxy non scrive ancora <code>live/last_request.json</code> (opzione <code>live_dump</code>).</div></div>
+    </div>
+    <div class="sh" style="margin-top:10px"><h2>📌 Punti fermi e 🗑 usa e getta</h2><span class="mu" id="mkinfo" style="font-size:12px"></span></div>
+    <div class="pbox"><div class="plist" id="marks" style="max-height:260px"><div class="empty">nessuna conversazione</div></div></div>
+  </div>
+</section>
+</main>
+
+<script>
+"use strict";
+const W = 131072, POLL_MS = 1000, RESERVE_DEFAULT = 16384, MAX_ROWS = 600;
+const $ = id => document.getElementById(id);
+const nf0 = new Intl.NumberFormat("it-IT", {maximumFractionDigits: 0});
+const nf1 = new Intl.NumberFormat("it-IT", {minimumFractionDigits: 1, maximumFractionDigits: 1});
+const full = n => n == null ? "—" : nf0.format(n);
+const kfmt = n => n == null ? "—" : Math.abs(n) >= 1000 ? nf1.format(n / 1000) + "K" : nf0.format(n);
+const secs = ms => ms == null ? "—" : nf1.format(ms / 1000) + " s";
+const pct = (a, b) => b ? nf1.format(100 * a / b) + "%" : "—";
+const hhmmss = ts => ts ? new Date(ts * 1000).toLocaleTimeString("it-IT", {hour12: false}) : "—";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+// scritture DOM solo se il valore cambia
+function setText(el, s) { if (el._t !== s) { el._t = s; el.textContent = s; } }
+function setHTML(el, s) { if (el._h !== s) { el._h = s; el.innerHTML = s; } }
+function setStyle(el, k, v) { el._st ||= {}; if (el._st[k] !== v) { el._st[k] = v; el.style[k] = v; } }
+function setCls(el, c, on) { if (el.classList.contains(c) !== !!on) el.classList.toggle(c, !!on); }
+
+const S = {ev: 0, pt: 0, lr: null, events: [], points: [], conv: null, userConv: false, convs: [], lastLive: null,
+           ax: "i", tps: [], tpsShown: null, dataVer: 0, lastStatus: null};
+
+// ---------- controlli ----------
+document.querySelectorAll("input[name=ax]").forEach(r => r.addEventListener("change", e => { S.ax = e.target.value; S.dataVer++; drawChart(); }));
+$("onlyR0").addEventListener("change", () => { S.dataVer++; drawChart(); });
+$("conv").addEventListener("change", e => { S.conv = e.target.value; S.userConv = true; S.dataVer++; drawChart(); applyConvFilter(); });
+
+// ---------- polling (mai due richieste sovrapposte) ----------
+async function tick() {
+  const t0 = performance.now();
+  if (!$("pause").checked) {
+    try {
+      const r = await fetch(`/api/state?ev=${S.ev}&pt=${S.pt}&lr=${S.lr ?? ""}`, {cache: "no-store"});
+      const d = await r.json();
+      ingest(d);
+      setCls($("conn"), "on", true); setCls($("conn"), "off", false); setText($("connTxt"), "dashboard collegata");
+      setText($("upd"), hhmmss(d.now));
+    } catch (e) {
+      setCls($("conn"), "on", false); setCls($("conn"), "off", true); setText($("connTxt"), "dashboard non risponde");
+    }
+  }
+  setTimeout(tick, Math.max(200, POLL_MS - (performance.now() - t0)));
+}
+
+function ingest(d) {
+  if (d.series.start === 0 && S.pt > 0 && d.series.points.length && d.series.start < S.pt) { S.points = []; S.dataVer++; }
+  if (d.journal.start < S.ev) { S.events = []; $("evtb").textContent = ""; }
+  if (d.series.points.length) { S.points.push(...d.series.points); S.dataVer++; }
+  S.pt = d.series.next;
+  const newEv = d.journal.events;
+  if (newEv.length) {
+    S.events.push(...newEv); S.dataVer++;
+    if (S.events.length > 20000) S.events.splice(0, S.events.length - 20000);
+    for (const e of newEv) if (e.conv && !S.convs.includes(e.conv)) S.convs.push(e.conv);
+  }
+  S.ev = d.journal.next;
+  const lastConv = S.points.length ? S.points[S.points.length - 1].conv : null;
+  if (!S.userConv && lastConv && S.conv !== lastConv) { S.conv = lastConv; S.dataVer++; applyConvFilter(); }
+  const sel = $("conv");
+  if (sel.options.length !== S.convs.length) {
+    sel.textContent = "";
+    for (const c of S.convs) { const o = document.createElement("option"); o.value = o.textContent = c; sel.appendChild(o); }
+  }
+  if (S.conv && sel.value !== S.conv) sel.value = S.conv;
+  setText($("src"), `${(d.metrics && d.metrics.engine && d.metrics.engine.model) || "Strata"} · ${d.strata_url} · ${d.data_dir}`);
+  renderStatus(d);
+  drawChart();
+  if (newEv.length) addEvents(newEv);
+  if (d.live_request) { S.lastLive = d.live_request; S.lr = d.live_request_mtime; renderPrompt(d.live_request); }
+  renderResponse(d);
+}
+
+// ---------- fascia di stato ----------
+const PHASES = [[/read|prompt|prefill/i, "lettura prompt"], [/think/i, "ragionamento"], [/answer|content|writ/i, "risposta"], [/tool/i, "chiamata strumento"]];
+function phaseName(p) { for (const [re, n] of PHASES) if (re.test(p || "")) return n; return p || "generazione"; }
+function lastFreezeReserve() {
+  for (let i = S.events.length - 1; i >= 0; i--) if (S.events[i].event === "freeze" && S.events[i].response) return S.events[i].response;
+  return RESERVE_DEFAULT;
+}
+function renderStatus(d) {
+  const st = d.status || {}, m = d.metrics || {}, lv = m.live || {}, eng = m.engine || {}, hw = m.hardware || {};
+  const ctx = eng.context || W, busy = !!st.busy, phase = st.phase || lv.phase || "";
+  const reading = busy && /read|prompt|prefill/i.test(phase);
+  const lastPt = S.points.length ? S.points[S.points.length - 1] : null;
+  // --- memoria ---
+  const phys = busy ? (st.prompt_tokens ?? lv.prompt_tokens) : (lastPt ? (lastPt.phys ?? lastPt.phys_est) : null);
+  const reserve = lastFreezeReserve();
+  let lvl = -1, lab = "nessun dato";
+  if (phys != null) {
+    const f = phys / ctx;
+    if (phys + reserve > ctx) { lvl = 3; lab = "il prossimo turno non entra"; }
+    else if (f > .8) { lvl = 2; lab = "alta"; } else if (f >= .6) { lvl = 1; lab = "attenzione"; } else { lvl = 0; lab = "ok"; }
+  }
+  const dot = $("memDot"); for (let i = 0; i < 4; i++) setCls(dot, "s" + i, i === lvl);
+  setText($("memState"), lab);
+  setHTML($("memVal"), `${kfmt(phys)}<small> / ${kfmt(ctx)} · ${phys != null ? nf0.format(100 * phys / ctx) + "%" : "—"}</small>`);
+  const fw = phys != null ? Math.min(100, 100 * phys / ctx) : 0;
+  setStyle($("gF"), "width", fw.toFixed(1) + "%");
+  setStyle($("gR"), "left", fw.toFixed(1) + "%");
+  setStyle($("gR"), "width", Math.max(0, Math.min(100 - fw, 100 * reserve / ctx)).toFixed(1) + "%");
+  setText($("memSub"), `riserva per la risposta ${kfmt(reserve)} · soglie 60% e 80%`);
+  // --- fase ---
+  let ph = "inattivo", phSub = "", prog = 0;
+  if (!d.status) { ph = "Strata non risponde"; phSub = (d.errors && d.errors.status) || ""; }
+  else if (busy) {
+    ph = phaseName(phase);
+    const el = st.elapsed_s ?? lv.elapsed_s;
+    if (reading) {
+      const pr = lv.prompt_read, ptot = lv.prompt_total || st.prompt_tokens;
+      prog = pr != null && ptot ? pr / ptot : 0;
+      phSub = `da ${el != null ? nf0.format(el) : "—"} s · ${pr != null ? kfmt(pr) + " di " + kfmt(ptot) : kfmt(st.prompt_tokens) + " token"}`;
+    } else {
+      const g = st.generated ?? lv.generated, mx = st.max_tokens ?? lv.max_tokens;
+      prog = mx ? (g || 0) / mx : 0;
+      phSub = `da ${el != null ? nf0.format(el) : "—"} s · ${full(g)} / ${full(mx)} token`;
+    }
+    if (st.queued) phSub += ` · in coda ${st.queued}`;
+  } else if (lastPt) phSub = `ultima richiesta alle ${hhmmss(lastPt.ts)}`;
+  setText($("phase"), ph);
+  setText($("phaseSub"), phSub);
+  setStyle($("phaseProg"), "width", (100 * Math.min(1, prog)).toFixed(1) + "%");
+  // --- velocità: media mobile sugli ultimi ~2 s, intera ---
+  const now = performance.now(), gen = busy && !reading;
+  const v = st.tokens_per_s ?? lv.tok_s;
+  if (gen && v != null && v > 0) S.tps.push([now, v]);
+  S.tps = S.tps.filter(([t]) => now - t <= 2100);
+  if (S.tps.length) S.tpsShown = S.tps.reduce((a, [, x]) => a + x, 0) / S.tps.length;
+  setHTML($("tps"), `${S.tpsShown != null ? nf0.format(S.tpsShown) : "—"}<small> tok/s</small>`);
+  setCls($("tps"), "stale", !gen);
+  setText($("tpsSub"), `${gen ? "in generazione" : "fermo"} · prefill ${lv.prefill_tok_s_mean != null ? kfmt(lv.prefill_tok_s_mean) : "—"} tok/s`);
+  // --- storia virtuale ---
+  const vt = lastPt ? lastPt.virtual : null, vp = lastPt ? (lastPt.phys ?? lastPt.phys_est) : null;
+  setText($("virt"), kfmt(vt));
+  setText($("virtSub"), vt != null && vp ? `${nf1.format(vt / vp)}× il contesto fisico${lastPt.virtual_src === "stima" ? " · stima" : ""}` : "");
+  setText($("lgEst"), lastPt && lastPt.virtual_src === "stima" ? "Qui è stimata dall'archivio del proxy." : "");
+  // --- fatti secondari ---
+  const reqs = m.requests || [], r = reqs[0] && reqs[1] && reqs[1].time > reqs[0].time ? reqs[reqs.length - 1] : (reqs[0] || {});
+  setText($("fReu"), r.prompt_tokens ? `${kfmt(r.reused)} (${pct(r.reused || 0, r.prompt_tokens)})` : "—");
+  setText($("fRd"), r.prompt_read != null ? `${full(r.prompt_read)} in ${secs(r.prompt_ms)}` : "—");
+  setText($("fDec"), r.decode_tok_s != null ? `${nf0.format(r.decode_tok_s)} tok/s` : "—");
+  setText($("fDr"), r.drafts_offered ? nf0.format(100 * r.drafts_accepted / r.drafts_offered) + "%" : "—");
+  const tt = m.totals || {};
+  setText($("fTot"), tt.requests != null ? `${full(tt.requests)} richieste` : "—");
+  setText($("fTr"), tt.prompt_tokens ? pct(tt.reused, tt.prompt_tokens) : "—");
+  setText($("fGpu"), hw.gpu_util != null ? `${String(hw.gpu_util).padStart(3, " ")}% · ${nf1.format(hw.gpu_mem_used / 2 ** 30)}/${nf1.format(hw.gpu_mem_total / 2 ** 30)} GiB · ${hw.gpu_temp}°C` : "—");
+  setText($("fRam"), hw.ram_used != null ? `${nf1.format(hw.ram_used / 2 ** 30)}/${nf0.format(hw.ram_total / 2 ** 30)} GiB · CPU ${String(nf0.format(hw.cpu)).padStart(3, " ")}%` : "—");
+  const errs = Object.entries(d.errors || {}).filter(([, x]) => x).map(([k, x]) => `${k}: ${x}`).join(" · ");
+  setText($("errs"), errs); setCls($("errs"), "show", !!errs);
+}
+
+// ---------- grafico del contesto (canvas; ridisegnato solo quando cambiano dati o dimensioni) ----------
+const cw = $("cw"), cv = $("cv"), ov = $("ov"), tip = $("tip");
+const M = {L: 84, R: 14, T: 30, plotH: 280, axH: 22, laneH: 17, gap: 22, readH: 72};
+const kAxis = v => v ? nf0.format(v / 1000) + "K" : "0";
+let G = null, drawnKey = null;
+function sizeCanvas(c) {
+  const dpr = window.devicePixelRatio || 1, w = cw.clientWidth, h = cw.clientHeight;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); return [g, w, h];
+}
+function niceStep(range, target) {
+  const raw = range / target, p = 10 ** Math.floor(Math.log10(raw)), f = raw / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+}
+function firstAtOrAfter(pts, ts) { let lo = 0, hi = pts.length; while (lo < hi) { const m = (lo + hi) >> 1; if (pts[m].ts < ts) lo = m + 1; else hi = m; } return lo; }
+function chartModel() {
+  let pts = S.points.filter(p => !S.conv || p.conv === S.conv);
+  if ($("onlyR0").checked) pts = pts.filter(p => !p.round);
+  const evs = S.events.filter(e => !S.conv || e.conv === S.conv);
+  const per = pts.map(() => []);               // eventi associati alla richiesta che li segue
+  const segs = [{seg: 0, i0: 0, grp: []}];
+  let pending = [];
+  for (const e of evs) {
+    if (e.event === "request") continue;
+    const i = firstAtOrAfter(pts, e.ts);
+    if (i < pts.length) per[i].push(e);
+    if (["freeze", "notes", "seal", "save"].includes(e.event)) pending.push(e);
+    if (e.event === "switch") {
+      if (i < pts.length) segs.push({seg: e.seg, i0: i, ts: e.ts, grp: [...pending, e]});
+      pending = [];
+    }
+  }
+  segs.forEach((s, k) => s.i1 = k + 1 < segs.length ? segs[k + 1].i0 : pts.length);
+  return {pts, evs, per, segs};
+}
+function drawChart() {
+  const key = `${S.dataVer}|${cw.clientWidth}x${cw.clientHeight}|${window.devicePixelRatio}`;
+  if (key === drawnKey) return;
+  drawnKey = key;
+  const [g, w, h] = sizeCanvas(cv); sizeCanvas(ov);
+  const {pts, per, segs} = chartModel();
+  const L = M.L, R = M.R, T = M.T, PW = w - L - R, PB = T + M.plotH;
+  g.clearRect(0, 0, w, h);
+  g.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
+  g.textBaseline = "middle";
+  if (!pts.length) { g.fillStyle = "#8b939e"; g.fillText("nessuna richiesta nel giornale", L + 10, T + 40); G = null; return; }
+  // dominio y stabile: gradini da 50K
+  const vmaxRaw = Math.max(W * 1.08, ...pts.map(p => Math.max(p.phys ?? p.phys_est ?? 0, p.virtual ?? 0)));
+  const vmax = Math.ceil(vmaxRaw / 50000) * 50000;
+  const Y = v => T + M.plotH * (1 - v / vmax);
+  // dominio x stabile: cresce a gradini (richieste: 25; orario: 5 min)
+  const n = pts.length, t0 = pts[0].ts;
+  let X, xTicks = [];
+  if (S.ax === "t") {
+    const t1 = t0 + Math.max(300, Math.ceil((pts[n - 1].ts - t0 + 60) / 300) * 300);
+    X = i => L + PW * (pts[i].ts - t0) / (t1 - t0);
+    const st = niceStep((t1 - t0) / 60, 8) * 60;
+    for (let t = Math.ceil(t0 / st) * st; t <= t1; t += st) xTicks.push([L + PW * (t - t0) / (t1 - t0), hhmmss(t).slice(0, 5)]);
+  } else {
+    const nd = Math.max(25, Math.ceil((n + 1) / 25) * 25);
+    X = i => L + PW * (i + .5) / nd;
+    const st = niceStep(nd, 8);
+    for (let k = st; k <= nd; k += st) xTicks.push([L + PW * (k - .5) / nd, "#" + k]);
+  }
+  // bande di segmento
+  segs.forEach((s, k) => {
+    if (s.i1 <= s.i0) return;
+    const xa = k === 0 ? L : (X(s.i0 - 1) + X(s.i0)) / 2, xb = s.i1 >= n ? L + PW : (X(s.i1 - 1) + X(s.i1)) / 2;
+    g.fillStyle = k % 2 ? "#1c222b" : "#14171c"; g.fillRect(xa, T, xb - xa, M.plotH);
+    g.textAlign = "left";
+    if (k > 0) {
+      g.strokeStyle = "#4a525d"; g.lineWidth = 1; g.beginPath(); g.moveTo(xa + .5, T - 14); g.lineTo(xa + .5, PB); g.stroke();
+      g.fillStyle = "#dfe3e8"; g.save(); g.translate(xa + .5, T - 14); g.rotate(Math.PI / 4); g.fillRect(-4.5, -4.5, 9, 9); g.restore();
+    }
+    if (xb - xa > 60) {
+      g.fillStyle = "#dfe3e8"; g.fillText(`seg ${s.seg}`, xa + (k ? 12 : 6), T - 14);
+      g.fillStyle = "#8b939e"; g.fillText(k ? `da #${s.i0 + 1}` : "", xa + 66, T - 14);
+    }
+  });
+  // griglia y
+  g.strokeStyle = "#232830"; g.lineWidth = 1; g.fillStyle = "#5d6570"; g.textAlign = "right";
+  const ys = vmax > 300000 ? 100000 : 50000;
+  for (let v = 0; v <= vmax; v += ys) { const y = Math.round(Y(v)) + .5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + PW, y); g.stroke(); g.fillText(kAxis(v), L - 8, y); }
+  g.save(); g.translate(14, T + M.plotH / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillStyle = "#5d6570"; g.fillText("token", 0, 0); g.restore();
+  // contesto fisico: area piena
+  const pv = p => p.phys ?? p.phys_est;
+  g.beginPath(); let open = false, xFirst = 0, xLast = 0;
+  const closeArea = () => { if (open) { g.lineTo(xLast, PB); g.lineTo(xFirst, PB); g.closePath(); open = false; } };
+  pts.forEach((p, i) => {
+    const v = pv(p); if (v == null) { closeArea(); return; }
+    const x = X(i), y = Y(v);
+    if (!open) { g.moveTo(x, PB); g.lineTo(x, y); xFirst = x; open = true; } else g.lineTo(x, y);
+    xLast = x;
+  });
+  closeArea(); g.fillStyle = "rgba(95,195,214,.28)"; g.fill();
+  g.beginPath(); open = false;
+  pts.forEach((p, i) => { const v = pv(p); if (v == null) { open = false; return; } open ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v)); open = true; });
+  g.strokeStyle = "#5fc3d6"; g.lineWidth = 1.5; g.stroke();
+  // storia virtuale: linea
+  g.beginPath(); open = false;
+  pts.forEach((p, i) => { if (p.virtual == null) { open = false; return; } open ? g.lineTo(X(i), Y(p.virtual)) : g.moveTo(X(i), Y(p.virtual)); open = true; });
+  g.strokeStyle = "#c9ced6"; g.lineWidth = 1.6; g.stroke();
+  // limite
+  const yl = Math.round(Y(W)) + .5;
+  g.strokeStyle = "#e5584f"; g.lineWidth = 1.6; g.setLineDash([7, 4]); g.beginPath(); g.moveTo(L, yl); g.lineTo(L + PW, yl); g.stroke(); g.setLineDash([]);
+  g.textAlign = "right"; const lt = "limite del modello 131.072"; const ltw = g.measureText(lt).width;
+  g.fillStyle = "#14171c"; g.fillRect(L + PW - ltw - 12, yl - 18, ltw + 10, 15); g.fillStyle = "#ff7a70"; g.fillText(lt, L + PW - 7, yl - 10);
+  // mask: freccia di calo + "−NK" (etichette che non si sovrappongono)
+  let lastLab = -1e9;
+  g.textAlign = "center";
+  per.forEach((list, i) => list.forEach(e => {
+    if (e.event !== "mask") return;
+    const x = Math.round(X(i)) + .5, ya = Y(e.est_before ?? 0), yb = Y(e.est_after ?? 0);
+    g.strokeStyle = "#c9ced6"; g.lineWidth = 1; g.beginPath(); g.moveTo(x, ya); g.lineTo(x, yb - 4); g.stroke();
+    g.fillStyle = "#c9ced6"; g.beginPath(); g.moveTo(x - 3.5, yb - 5); g.lineTo(x + 3.5, yb - 5); g.lineTo(x, yb); g.closePath(); g.fill();
+    if (x - lastLab > 44) { g.fillStyle = "#dfe3e8"; g.fillText("−" + kfmt(e.tokens_saved), x, ya - 8); lastLab = x; }
+  }));
+  // asse x
+  const ay = PB + M.axH / 2 + 2; g.fillStyle = "#5d6570"; g.textAlign = "center";
+  for (const [x, t] of xTicks) g.fillText(t, x, ay);
+  // corsie sotto l'asse: recall, branch (raggruppati per 6 px)
+  const lanes = [["recall", PB + M.axH + M.laneH * .5 + 2], ["branch", PB + M.axH + M.laneH * 1.5 + 2]];
+  const bucket = {recall: new Map(), recall_dropped: new Map(), branch: new Map()}, tot = {recall: 0, branch: 0};
+  per.forEach((list, i) => list.forEach(e => {
+    const k = e.event === "new_conversation" ? "branch" : e.event; if (!bucket[k]) return;
+    const b = Math.round(X(i) / 6); bucket[k].set(b, (bucket[k].get(b) || 0) + 1);
+    if (k !== "recall_dropped") tot[k]++;
+  }));
+  g.textAlign = "right"; g.fillStyle = "#8b939e";
+  g.fillText(`recall ${tot.recall}`, L - 8, lanes[0][1]); g.fillText(`branch ${tot.branch}`, L - 8, lanes[1][1]);
+  g.fillStyle = "#5fc3d6";
+  for (const [b, c] of bucket.recall) { g.beginPath(); g.arc(b * 6, lanes[0][1], Math.min(6, 2.2 + c * .9), 0, 7); g.fill(); }
+  g.strokeStyle = "#5fc3d6"; g.lineWidth = 1;
+  for (const [b] of bucket.recall_dropped) { g.beginPath(); g.arc(b * 6, lanes[0][1], 3, 0, 7); g.stroke(); }
+  g.fillStyle = "#8b939e";
+  for (const [b, c] of bucket.branch) g.fillRect(b * 6 - 1, lanes[1][1] - Math.min(7, 3 + c), 2, 2 * Math.min(7, 3 + c));
+  // riletti per richiesta
+  const RT = PB + M.axH + 2 * M.laneH + M.gap + 8, RB = RT + M.readH;
+  const rmax = Math.max(1000, ...pts.map(p => p.read || 0)); const rs = niceStep(rmax, 2); const rtop = Math.ceil(rmax / rs) * rs;
+  g.strokeStyle = "#232830"; g.fillStyle = "#5d6570"; g.textAlign = "right";
+  for (let v = 0; v <= rtop; v += rs) { const y = Math.round(RB - M.readH * v / rtop) + .5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + PW, y); g.stroke(); g.fillText(kAxis(v), L - 8, y); }
+  g.strokeStyle = "#262b33"; g.beginPath(); g.moveTo(0, RT - 20.5); g.lineTo(w, RT - 20.5); g.stroke();
+  g.textAlign = "left"; g.fillStyle = "#8b939e"; g.fillText("token riletti per richiesta (il resto viene dalla cache)", L, RT - 9);
+  const bw = Math.max(1, Math.min(8, (S.ax === "t" ? PW / Math.max(n, 1) : X(1) - X(0)) - 1));
+  g.fillStyle = "rgba(95,195,214,.55)";
+  pts.forEach((p, i) => { const v = p.read || 0; if (!v) return; const hh = M.readH * v / rtop; g.fillRect(X(i) - bw / 2, RB - hh, bw, hh); });
+  G = {pts, per, segs, X, Y, L, R, T, PB, RT, RB, PW, n, h};
+  // riepilogo
+  const tr = pts.reduce((a, p) => a + (p.read || 0), 0), tu = pts.reduce((a, p) => a + (p.reused || 0), 0);
+  setText($("rsum"), `${full(n)} richieste · riletti ${kfmt(tr)} · riusati ${kfmt(tu)} (${pct(tu, tu + tr)} dalla cache)`);
+  if (hoverI != null) drawHover(hoverI);
+}
+// sovrapposizione per il mouse: canvas separato, il grafico non si ridisegna
+let hoverI = null;
+const EVN = {mask: "mask", recall: "recall", recall_dropped: "recall scartato", freeze: "congelamento", notes: "note", seal: "sigillo", save: "salvataggio", switch: "cambio segmento", branch: "branch", new_conversation: "nuova conversazione", autosave: "autosalvataggio", autorestore: "ripristino automatico", autosave_prune: "pulizia salvataggi", strata_state_lost: "stato di Strata perso"};
+function drawHover(i) {
+  const [g, w, h] = sizeCanvas(ov); g.clearRect(0, 0, w, h);
+  if (!G || i == null || i >= G.pts.length) { tip.style.display = "none"; return; }
+  const p = G.pts[i], x = Math.round(G.X(i)) + .5;
+  g.strokeStyle = "rgba(223,227,232,.35)"; g.lineWidth = 1; g.beginPath(); g.moveTo(x, G.T); g.lineTo(x, G.RB); g.stroke();
+  const dot = (v, c) => { if (v == null) return; g.fillStyle = c; g.beginPath(); g.arc(x, G.Y(v), 3.5, 0, 7); g.fill(); };
+  dot(p.phys ?? p.phys_est, "#5fc3d6"); dot(p.virtual, "#dfe3e8");
+  const seg = G.segs.filter(s => s.i0 <= i).pop();
+  const evs = G.per[i]; const cnt = {};
+  let maskTxt = [];
+  for (const e of evs) { if (e.event === "mask") maskTxt.push("−" + kfmt(e.tokens_saved)); else cnt[e.event] = (cnt[e.event] || 0) + 1; }
+  const evParts = [...maskTxt.map(t => "mask " + t), ...Object.entries(cnt).map(([k, c]) => (c > 1 ? c + " × " : "") + (EVN[k] || k))];
+  const ph = p.phys ?? p.phys_est;
+  const row = (a, b) => `<div class="r"><span>${a}</span><span class="num">${b}</span></div>`;
+  tip.innerHTML = `<div class="h">Richiesta #${G.pts.indexOf(p) + 1} · ${hhmmss(p.ts)} · seg ${seg ? seg.seg : 0} · round ${p.round ?? 0}</div>` +
+    row("contesto fisico", `${full(ph)} (${pct(ph || 0, W)})`) +
+    row("storia virtuale", `${full(p.virtual)}${p.virtual_src === "stima" ? " stima" : ""}`) +
+    row("riusati dalla cache", full(p.reused)) +
+    row("riletti", `${full(p.read)} · ${secs(p.prompt_ms)}`) +
+    row("risposta", `${full(p.out)} tok · ${secs(p.ms)} · ${esc(p.finish || "")}`) +
+    `<div class="ev">${evParts.length ? "eventi prima: " + esc(evParts.join(" · ")) : '<span class="dim">nessun evento del proxy</span>'}</div>` +
+    (seg && seg.i0 === i && seg.grp.length ? `<div class="ev">${esc(segText(seg))}</div>` : "");
+  tip.style.display = "block";
+  const tw = 300; tip.style.left = (x + 14 + tw > w ? x - tw - 14 : x + 14) + "px";
+}
+function segText(s) {
+  const out = [`inizio seg ${s.seg}:`];
+  for (const e of s.grp) {
+    if (e.event === "freeze") out.push(`congelato a ${kfmt(e.est_tokens)}`);
+    if (e.event === "notes") out.push(`note ${full(e.tokens)} tok in ${secs(e.ms)}`);
+    if (e.event === "save" && e.result) out.push(`salvato ${nf1.format(e.result.n_written / 2 ** 30)} GiB`);
+  }
+  return out.join(" · ");
+}
+ov.addEventListener("mousemove", ev => {
+  if (!G) return; const x = ev.clientX - ov.getBoundingClientRect().left;
+  let lo = 0, hi = G.n - 1;            // X è monotona: ricerca binaria
+  while (lo < hi) { const m = (lo + hi) >> 1; if (G.X(m) < x) lo = m + 1; else hi = m; }
+  if (lo > 0 && Math.abs(G.X(lo - 1) - x) < Math.abs(G.X(lo) - x)) lo--;
+  if (lo !== hoverI) { hoverI = lo; drawHover(lo); }
+});
+ov.addEventListener("mouseleave", () => { hoverI = null; drawHover(null); });
+new ResizeObserver(() => drawChart()).observe(cw);
+
+// ---------- eventi: righe aggiunte in cima, mai ricostruite ----------
+const EVTYPES = ["mask", "recall", "recall_dropped", "freeze", "notes", "seal", "save", "switch", "autosave", "autorestore", "branch", "new_conversation", "errori", "request"];
+const evOn = Object.fromEntries(EVTYPES.map(t => [t, t !== "request"]));
+const counts = {}; const chipEls = {};
+for (const t of EVTYPES) {
+  const c = document.createElement("span"); c.className = "chip" + (evOn[t] ? " on" : ""); c.tabIndex = 0;
+  c.innerHTML = `<span>${t === "errori" ? "errori" : t}</span><span class="num">0</span>`;
+  c.addEventListener("click", () => { evOn[t] = !evOn[t]; setCls(c, "on", evOn[t]); setCls($("evtb"), "fl-off-" + t, !evOn[t]); });
+  c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } });
+  chipEls[t] = c; $("chips").appendChild(c);
+  if (!evOn[t]) $("evtb").classList.add("fl-off-" + t);
+}
+const isErr = t => /error|miss/.test(t);
+function evDetail(e) {
+  const f = (k, l) => e[k] != null ? `${l || k} ${typeof e[k] === "number" ? full(e[k]) : typeof e[k] === "object" ? JSON.stringify(e[k]) : e[k]}` : null;
+  let p;
+  switch (e.event) {
+    case "mask": p = [`−${kfmt(e.tokens_saved)}`, `${kfmt(e.est_before)} → ${kfmt(e.est_after)}`, f("count", "messaggi"), f("first_index", "da indice"), f("reread_est", "rilettura stimata")]; break;
+    case "recall": { let q = e.args; try { q = JSON.parse(e.args).query ?? e.args; } catch (_) {} p = [`«${q}»`, f("tokens", "tok"), e.ms != null ? nf1.format(e.ms) + " ms" : null]; break; }
+    case "recall_dropped": p = [f("count", "scartati"), f("round")]; break;
+    case "freeze": p = [f("seg"), `stima ${kfmt(e.est_tokens)}`, f("cut_index", "taglio"), f("response", "riserva")]; break;
+    case "notes": p = [f("seg"), f("tokens", "tok"), secs(e.ms), e.timings ? nf1.format(e.timings.predicted_per_second) + " tok/s" : null]; break;
+    case "seal": p = [secs(e.ms), f("cached", "in cache"), e.timings ? `riletti ${full(e.timings.prompt_n)}` : null]; break;
+    case "save": p = [f("file"), secs(e.ms), e.result ? `${nf1.format(e.result.n_written / 2 ** 30)} GiB` : null]; break;
+    case "switch": p = [f("seg"), f("cut_index", "taglio"), f("notes_msg_tokens", "note tok")]; break;
+    case "branch": p = [f("known", "noti"), f("messages", "messaggi")]; break;
+    case "new_conversation": p = [f("messages", "messaggi")]; break;
+    case "request": p = [`fisico ${kfmt(e.prompt_tokens)}`, `riletti ${full(e.prompt_read)}`, `round ${e.round ?? 0}`, f("messages", "msg"), `out ${full(e.completion_tokens)}`, secs(e.ms), e.finish]; break;
+    case "autosave": p = [f("file"), `${kfmt(e.tokens)} tok`, e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null, secs(e.ms), e.idle_s != null ? `fermo da ${full(e.idle_s)} s` : null]; break;
+    case "autorestore": p = [f("file"), `${kfmt(e.tokens)} tok ripristinati`, `guadagno ${kfmt(e.gain_tokens)}`, secs(e.ms), e.reason === "strata_restart" ? "dopo riavvio/perdita di Strata" : "Strata aveva un'altra conversazione"]; break;
+    case "autosave_prune": p = [f("file"), e.reason === "superseded" ? "superato" : "oltre i limiti", e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null]; break;
+    case "strata_state_lost": p = [f("reason", "motivo"), e.tokens ? `${kfmt(e.tokens)} tok persi in Strata` : null]; break;
+    default: { const {ts, event, conv, ...rest} = e; p = [JSON.stringify(rest).slice(0, 400)]; }
+  }
+  return p.filter(Boolean).join(" · ");
+}
+function addEvents(list) {
+  const tb = $("evtb"), box = $("tbox"), frag = document.createDocumentFragment();
+  let added = 0;
+  for (let k = list.length - 1; k >= 0; k--) {     // il più recente in cima
+    const e = list[k], t = e.event, grp = isErr(t) ? "errori" : t;
+    counts[grp] = (counts[grp] || 0) + 1;
+    if (list.length - k > MAX_ROWS) continue;
+    const tr = document.createElement("tr");
+    tr.dataset.t = t; tr.dataset.g = grp; if (e.conv) tr.dataset.c = e.conv;
+    if (S.conv && e.conv && e.conv !== S.conv) tr.className = "othconv";
+    const cls = t === "mask" || t === "switch" || t === "recall" || t === "autosave" || t === "autorestore" ? "ac" : isErr(t) ? "bad" : t === "request" ? "req" : "";
+    const det = evDetail(e);
+    tr.innerHTML = `<td class="num dim">${hhmmss(e.ts)}</td><td class="k ${cls}">${esc(t)}</td><td class="det" title="${esc(det)}">${esc(det)}</td>`;
+    frag.appendChild(tr); added++;
+  }
+  const keep = box.scrollTop > 2;                  // l'utente sta leggendo: non spostare la vista
+  const before = tb.offsetHeight;
+  tb.insertBefore(frag, tb.firstChild);
+  while (tb.children.length > MAX_ROWS) tb.lastChild.remove();
+  if (keep) box.scrollTop += tb.offsetHeight - before;
+  for (const t of EVTYPES) setText(chipEls[t].lastChild, full(counts[t] || 0));
+  const tot = S.events.length;
+  setText($("evcount"), `${full(tot)} eventi`);
+}
+$("evtb").addEventListener("click", e => { const tr = e.target.closest("tr"); if (tr) tr.classList.toggle("x"); });
+function applyConvFilter() { for (const tr of $("evtb").children) setCls(tr, "othconv", S.conv && tr.dataset.c && tr.dataset.c !== S.conv); }
+
+// ---------- prompt: nodi aggiornati solo se il messaggio cambia ----------
+const PH = /(\[gestore del contesto:[^\]]*?strata_recall id=[a-z0-9]+[^\]]*\]|\(nota del gestore del contesto:[^)]*\)|\[(?:uscita strumento omessa|ragionamento omesso)[^\]]*?recall:[a-z0-9]+\]|argomenti omessi \([^)]*\) \u2014 recall:[a-z0-9]+|\[[^\]\n]{0,80}omess[ao][^\]\n]{0,120}recall:[a-z0-9]+\])/g;
+const SG = /(\[strata-context:[^\]]*\])/g;
+function hl(s) { return esc(s).replace(PH, '<mark class="ph">$1</mark>').replace(SG, '<mark class="sg">$1</mark>'); }
+function msgText(m) {
+  let out = "";
+  if (typeof m.reasoning_content === "string" && m.reasoning_content) out += "‹ragionamento› " + m.reasoning_content + "\n\n";
+  const c = m.content;
+  if (typeof c === "string") out += c; else if (Array.isArray(c)) out += c.map(p => p.type === "text" ? p.text : `[${p.type}]`).join("\n");
+  for (const tc of m.tool_calls || []) { const fn = tc.function || {}; out += `\n→ ${fn.name}(${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments)})`; }
+  return out;
+}
+$("expand").onclick = () => document.querySelectorAll("#prompt .msg").forEach(m => m.classList.remove("c"));
+$("collapse").onclick = () => document.querySelectorAll("#prompt .msg").forEach(m => m.classList.add("c"));
+$("onlyPh").addEventListener("change", () => { for (const m of document.querySelectorAll("#prompt .msg")) m.style.display = $("onlyPh").checked && !m._ph ? "none" : ""; });
+function renderPrompt(lr) {
+  const msgs = lr.messages || [], box = $("prompt");
+  if (box.querySelector(".empty")) box.textContent = "";
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  let nph = 0;
+  msgs.forEach((m, j) => {
+    const t = msgText(m), key = m.role + "|" + t.length + "|" + t.slice(0, 80) + "|" + t.slice(-80);
+    let el = box.children[j];
+    if (el && el._key === key) { nph += el._nph; return; }
+    const ph = (t.match(PH) || []).length; nph += ph;
+    const n = document.createElement("div");
+    n.className = "msg" + (j >= msgs.length - 3 || (ph && t.length < 400) ? "" : " c");
+    n._key = key; n._nph = ph; n._ph = ph > 0;
+    n.innerHTML = `<div class="hd"><span class="num dim" style="width:34px">#${j}</span><span class="role">${esc(m.role)}</span><span class="num" style="width:78px">${full(t.length)} car.</span>${ph ? `<mark class="ph">${ph} segnaposto</mark>` : ""}<span class="pv">${esc(t.slice(0, 120).replace(/\s+/g, " "))}</span></div><pre>${hl(t)}</pre>`;
+    n.firstChild.addEventListener("click", () => n.classList.toggle("c"));
+    if ($("onlyPh").checked && !ph) n.style.display = "none";
+    if (el) box.replaceChild(n, el); else box.appendChild(n);
+  });
+  while (box.children.length > msgs.length) box.lastChild.remove();
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  setText($("lrinfo"), `${hhmmss(lr.ts)} · conv ${lr.conv || "—"} · seg ${lr.seg ?? "—"} · round ${lr.round ?? 0}`);
+  setText($("phcount"), `${full(msgs.length)} msg · ${full(nph)} segnaposto · stima ${kfmt(lr.est_tokens)}${lr.prompt_tokens ? " · reali " + kfmt(lr.prompt_tokens) : ""}`);
+}
+function renderResponse(d) {
+  const lr = S.lastLive, st = d.status || {};
+  let txt = null, info = "";
+  if (lr && lr.response && (lr.response.content || lr.response.reasoning_content || lr.response.tool_calls)) {
+    const r = lr.response;
+    txt = (r.reasoning_content ? "‹ragionamento› " + r.reasoning_content + "\n\n" : "") + (r.content || "") +
+          (r.tool_calls || []).map(tc => `\n→ ${(tc.function || {}).name}(${(tc.function || {}).arguments})`).join("");
+    info = `proxy · ${r.done ? "completa" : "in corso"}${r.finish_reason ? " · " + r.finish_reason : ""}${r.completion_tokens != null ? " · " + r.completion_tokens + " tok" : ""}`;
+  }
+  if (st.busy && st.tail && (!lr || !lr.response || lr.response.done)) { txt = "… " + st.tail; info = `coda live da Strata · ${phaseName(st.phase)}`; }
+  if (txt == null) return;
+  const el = $("resp"), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
+  setHTML(el, hl(txt)); setText($("respinfo"), info);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+// ---------- 📌 / 🗑 (scrittura tramite il proxy) ----------
+const MK = {conv: null, at: 0, data: null};
+async function loadMarks(force) {
+  if (!S.conv || (!force && MK.conv === S.conv && Date.now() - MK.at < 5000)) return;
+  MK.conv = S.conv; MK.at = Date.now();
+  try { const r = await fetch(`/api/marks?conv=${encodeURIComponent(S.conv)}`, {cache: "no-store"}); MK.data = await r.json(); }
+  catch (e) { MK.data = {error: String(e)}; }
+  renderMarks();
+}
+async function markAction(body) {
+  const r = await fetch("/api/marks", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({conv: S.conv, ...body})});
+  MK.data = await r.json(); MK.at = Date.now(); renderMarks();
+}
+function renderMarks() {
+  const d = MK.data || {}, box = $("marks");
+  if (d.error) { setHTML(box, `<div class="empty">${esc(typeof d.error === "string" ? d.error : d.error.message)}</div>`); return; }
+  const pinned = new Map(), dropped = new Set((d.drops || []).map(x => x.index));
+  for (const p of d.pins || []) if (p.active) { if (!pinned.has(p.index)) pinned.set(p.index, []); pinned.get(p.index).push(p); }
+  setText($("mkinfo"), `${(d.pins || []).filter(p => p.active).length} punti fermi · ${kfmt(d.pins_tokens)} / ${kfmt(d.pins_max_tokens)} token${d.over_limit ? " · OLTRE IL TETTO" : ""} · ${dropped.size} usa e getta`);
+  let h = "";
+  for (const u of (d.users || []).slice().reverse()) {
+    const ps = pinned.get(u.index) || [];
+    h += `<div class="msg"><div class="hd"><span class="num dim" style="width:44px">#${u.index}</span>` +
+         `<button data-a="pin" data-i="${u.index}" title="fissa il messaggio come punto fermo">📌</button>` +
+         `<button data-a="${dropped.has(u.index) ? "undrop" : "drop"}" data-i="${u.index}" title="scambio usa e getta">${dropped.has(u.index) ? "↩︎🗑" : "🗑"}</button>` +
+         `<span class="pv">${esc(u.text.replace(/\s+/g, " ").slice(0, 160))}</span></div>` +
+         ps.map(p => `<div class="mu" style="padding-left:50px">📌 ${esc(p.text.slice(0, 200))} <button data-a="unpin" data-id="${p.id}">togli</button> <button data-a="update_pin" data-id="${p.id}">modifica</button></div>`).join("") +
+         `</div>`;
+  }
+  setHTML(box, h || `<div class="empty">nessun messaggio utente archiviato</div>`);
+}
+$("marks").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  const a = b.dataset.a;
+  if (a === "update_pin") { const t = prompt("nuovo testo del punto fermo"); if (t) markAction({action: a, id: +b.dataset.id, text: t}); return; }
+  if (a === "unpin") return markAction({action: a, id: +b.dataset.id});
+  return markAction({action: a, index: +b.dataset.i});
+});
+setInterval(() => loadMarks(false), 2000);
+tick();
+</script>
+</body>
+</html>
