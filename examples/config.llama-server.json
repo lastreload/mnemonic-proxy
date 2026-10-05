@@ -1,0 +1,15 @@
+{
+  "mask_reasoning": true,
+  "mask_tool_args": true,
+  "mask_anchor": true,
+  "slot_dir": "./slots",
+  "slot_save": true,
+  "seal_experimental": true,
+  "recall_struct": true,
+  "recall_flex": true,
+  "recall_multi": true,
+  "auto_recall_hint": true,
+  "tools_paging": true,
+  "autosave": true,
+  "autosave_idle_s": 60
+}

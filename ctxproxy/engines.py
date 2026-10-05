@@ -39,6 +39,9 @@ SCALED = ("mask_trigger", "mask_target", "keep_recent_tokens", "min_batch_tokens
           "default_response", "notes_max_tokens", "anchor_min_tokens", "autosave_min_tokens", "autorestore_min_gain",
           "pins_max_tokens", "recall_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens")
 BASE_WINDOW = 131072
+# floors when scaling down (8K windows): below these a recall result or a handoff note is too short to be useful
+SCALED_MIN = {"recall_max_tokens": 1024, "recall_struct_max_tokens": 1024, "notes_max_tokens": 1024,
+              "default_response": 1024, "auto_recall_max_tokens": 512, "pins_max_tokens": 512}
 
 
 @dataclasses.dataclass
@@ -177,7 +180,8 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
                 continue
             v = getattr(cfg, f)
             if isinstance(v, int) and v > 0:
-                nv = max(64, int(v * ratio))
+                nv = max(64, SCALED_MIN.get(f, 0) if ratio < 1 else 0, int(v * ratio))
+                nv = min(nv, v) if ratio < 1 else nv
                 if nv != v:
                     setattr(cfg, f, nv)
                     scaled[f] = nv

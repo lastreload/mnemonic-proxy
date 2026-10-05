@@ -567,12 +567,38 @@ def make_handler(proxy: Proxy):
                 return self._send(200, {"conversation_id": c, **proxy.store.stats(c), "segment_list": segs})
             if parts[:3] == ["v1", "strata", "journal"]:
                 return self._send(200, {"events": proxy.journal.mem[-200:]})
-            if parts[:3] == ["v1", "strata", "engine"]:
+            if parts[:3] == ["v1", "strata", "engine"] or parts[:2] == ["v1", "engine"] and len(parts) == 2:
                 eng = getattr(proxy, "engine", None) or getattr(proxy.up, "engine", None)
                 return self._send(200, eng.summary() if eng else {"kind": "strata", "detected": False})
+            if parts == ["health"]:
+                return self._health()
             if parts[:3] == ["v1", "strata", "marks"] and len(parts) == 4:
                 return self._send(200, proxy.marks(parts[3]))
             return self._passthrough("GET")
+
+        def _health(self):
+            """Proxy health + the engine's /health (llama-server: 503 while loading the model). 200 only when the
+            engine answers 200 (or has no /health but serves /v1/models)."""
+            from . import __version__
+            eng = getattr(proxy, "engine", None) or getattr(proxy.up, "engine", None)
+            up = {}
+            try:
+                st, _, data = proxy.up.raw("GET", "/health")
+                if st == 404:
+                    st, _, _ = proxy.up.raw("GET", "/v1/models")
+                    data = b""
+                try:
+                    up = json.loads(data) if data else {}
+                except ValueError:
+                    up = {"raw": data[:200].decode("utf-8", "replace")}
+                up = up if isinstance(up, dict) else {"raw": up}
+                up["http_status"] = st
+            except Exception as e:  # noqa: BLE001
+                st, up = 0, {"error": repr(e)[:200]}
+            status = "ok" if st == 200 else "loading" if st == 503 else "engine_unreachable" if st == 0 else "error"
+            return self._send(200 if status == "ok" else 503, {
+                "status": status, "service": "mnemonic-proxy", "version": __version__,
+                "engine": eng.kind if eng else "strata", "upstream": up})
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
@@ -653,13 +679,21 @@ def make_handler(proxy: Proxy):
     return H
 
 
-def main(argv=None):
+SUBCOMMANDS = """subcommands:
+  mnemonic-proxy demo     offline demo (no model, no GPU): archive, masking, recall -> PASS/FAIL
+  mnemonic-proxy check    is this setup ready? same options as the server, plus --json and --live
+"""
+
+
+def build_parser(prog="mnemonic-proxy", description=None):
+    """Server options; `check` uses the same ones, so it reads the configuration the server would run with."""
     from . import __version__
     ap = argparse.ArgumentParser(
-        prog="mnemonic-proxy",
-        description="Mnemonic Proxy %s: transparent proxy that lets local coding agents work for hours "
-                    "(verbatim archive, structured recall, segments with handoff notes, saved engine state)."
-                    % __version__)
+        prog=prog, epilog=SUBCOMMANDS if prog == "mnemonic-proxy" else None,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=description or (
+            "Mnemonic Proxy %s: transparent proxy that lets local coding agents work for hours "
+            "(verbatim archive, structured recall, segments with handoff notes, saved engine state)." % __version__))
     ap.add_argument("--upstream", default="http://127.0.0.1:8095",
                     help="base URL of the inference engine (Strata, llama-server, any OpenAI-compatible server)")
     ap.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, local only)")
@@ -673,11 +707,38 @@ def main(argv=None):
     ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "openai"], default=None,
                     help="engine type (default: from the config file, otherwise auto-detected)")
     ap.add_argument("--version", action="version", version="mnemonic-proxy " + __version__)
-    a = ap.parse_args(argv)
-    raw_cfg = json.load(open(a.config)) if a.config else {}
+    return ap
+
+
+def load_config(a) -> tuple[dict, Config]:
+    """-> (fields written in the config file / on the command line, Config). Relative `slot_dir` and
+    `kv_archive_dir` are resolved against the current directory, like `--data`."""
+    raw_cfg = {}
+    if a.config:
+        with open(a.config, encoding="utf-8") as f:
+            raw_cfg = json.load(f)
+        if not isinstance(raw_cfg, dict):
+            raise ValueError("%s: expected a JSON object" % a.config)
     if a.engine:
         raw_cfg["engine"] = a.engine
     cfg = Config.from_dict(raw_cfg)
+    for k in ("slot_dir", "kv_archive_dir"):
+        if getattr(cfg, k):
+            setattr(cfg, k, os.path.abspath(os.path.expanduser(getattr(cfg, k))))
+    return raw_cfg, cfg
+
+
+def main(argv=None):
+    from . import __version__
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "demo":
+        from .demo import main as demo_main
+        return demo_main(argv[1:])
+    if argv and argv[0] == "check":
+        from .check import main as check_main
+        return check_main(argv[1:])
+    a = build_parser().parse_args(argv)
+    raw_cfg, cfg = load_config(a)
     os.makedirs(a.data, exist_ok=True)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)

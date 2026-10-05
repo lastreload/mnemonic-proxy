@@ -357,8 +357,13 @@ class TestJournalAndHTTP(Base):
             self.assertIn("strata_context", chunks[-1])
             with urllib.request.urlopen(base + "/v1/strata/journal") as r:
                 self.assertTrue(json.loads(r.read())["events"])
-            with urllib.request.urlopen(base + "/health") as r:   # passthrough
-                self.assertTrue(json.loads(r.read())["fake"])
+            with urllib.request.urlopen(base + "/health") as r:   # proxy health + engine's /health
+                hb = json.loads(r.read())
+                self.assertEqual((hb["status"], hb["service"]), ("ok", "mnemonic-proxy"))
+                self.assertTrue(hb["upstream"]["fake"])
+            for p in ("/v1/engine", "/v1/strata/engine"):
+                with urllib.request.urlopen(base + p) as r:
+                    self.assertIn("kind", json.loads(r.read()))
         finally:
             srv.shutdown()
             srv.server_close()
