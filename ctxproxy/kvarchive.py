@@ -678,9 +678,10 @@ class Archiver:
 
     # ---------- politica ----------
     def _status(self):
+        from .engines import normalize_status
         try:
-            st, _, data = self.proxy.up.raw("GET", "/v1/status")
-            return json.loads(data) if st == 200 else None
+            up = self.proxy.up
+            return normalize_status(getattr(up, "engine", None), up)
         except Exception:  # noqa: BLE001
             return None
 

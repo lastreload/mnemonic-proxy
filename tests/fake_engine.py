@@ -28,7 +28,13 @@ def render(body: dict) -> str:
 
 
 class FakeEngine:
-    def __init__(self, policy=None, cpt: float = 3.5):
+    def __init__(self, policy=None, cpt: float = 3.5, flavor: str = "strata", slot_save: bool = True,
+                 n_slots: int = 1, n_ctx: int = 131072):
+        """flavor: strata (/v1/status) | llama (llama-server: /props, /slots, /tokenize, 400 per file mancante,
+        id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | openai
+        (solo /v1/chat/completions)."""
+        self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
+        self.id_task = 0
         self.policy = policy or (lambda body: {"role": "assistant", "content": "ok"})
         self.requests: list[dict] = []
         self.prompts: list[str] = []
@@ -47,6 +53,12 @@ class FakeEngine:
         self.live = ""
         self.started += 1
         self.n_requests = 0
+        self.id_task = 0
+
+    def slots_list(self) -> list:
+        return [{"id": i, "n_ctx": self.n_ctx // self.n_slots, "is_processing": bool(self.busy) and i == 0,
+                 "id_task": self.id_task if i == 0 else -1, "n_prompt_tokens": int(len(self.live) / self.cpt)}
+                for i in range(self.n_slots)]
 
     def status(self) -> dict:
         return {"service": "strata", "loaded": True, "started": self.started,
@@ -62,6 +74,7 @@ class FakeEngine:
         self.requests.append(body)
         self.prompts.append(p)
         self.n_requests += 1
+        self.id_task += 3
         msg = self.policy(body)
         self.live = p
         pt = int(len(p) / self.cpt)
@@ -92,6 +105,19 @@ class FakeEngine:
                 self.wfile.write(d)
 
             def do_GET(self):
+                if eng.flavor == "llama":
+                    if self.path.startswith("/props"):
+                        return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
+                                                "total_slots": eng.n_slots, "model_path": "/m/fake-0.6B.gguf"})
+                    if self.path.startswith("/slots"):
+                        return self._send(200, eng.slots_list())
+                    if self.path.startswith("/health"):
+                        return self._send(200, {"status": "ok"})
+                    return self._send(404, {"error": {"code": 404, "message": "File Not Found"}})
+                if eng.flavor == "openai":
+                    if self.path.startswith("/v1/models"):
+                        return self._send(200, {"data": [{"id": "fake"}]})
+                    return self._send(404, {"error": {"message": "not found"}})
                 if self.path.startswith("/v1/status"):
                     return self._send(200, eng.status())
                 self._send(200, {"status": "ok", "fake": True})
@@ -99,6 +125,36 @@ class FakeEngine:
             def do_POST(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
+                if eng.flavor == "openai" and not self.path.startswith("/v1/chat"):
+                    return self._send(404, {"error": {"message": "not found"}})
+                if eng.flavor == "llama" and self.path.startswith("/tokenize"):
+                    return self._send(200, {"tokens": list(range(int(len(body.get("content") or "") / eng.cpt)))})
+                if eng.flavor == "llama" and self.path.startswith("/slots/"):
+                    sid = int(self.path.split("/")[2].split("?")[0])
+                    action = self.path.split("action=")[-1]
+                    if not eng.slot_save:
+                        return self._send(501, {"error": {"code": 501, "message": "This server does not support "
+                                                          "slots action. Start it with `--slot-save-path`"}})
+                    if action not in ("save", "restore", "erase"):
+                        return self._send(400, {"error": {"code": 400, "message": "Invalid action"}})
+                    if sid != 0:
+                        return self._send(400, {"error": {"code": 400, "message": "Invalid slot ID"}})
+                    fn = body.get("filename")
+                    eng.slots.append((action, fn, len(eng.live)))
+                    if action == "save":
+                        eng.files[fn] = eng.live
+                        return self._send(200, {"id_slot": sid, "filename": fn, "n_saved": int(len(eng.live) / eng.cpt),
+                                                "n_written": len(eng.live) * 10, "timings": {"save_ms": 1.0}})
+                    if action == "restore":
+                        if fn not in eng.files:
+                            return self._send(400, {"error": {"code": 400, "message": "Unable to restore slot: No "
+                                                              "available space in KV cache or invalid slot save file"}})
+                        eng.live = eng.files[fn]
+                        return self._send(200, {"id_slot": sid, "filename": fn,
+                                                "n_restored": int(len(eng.live) / eng.cpt),
+                                                "n_read": len(eng.live) * 10, "timings": {"restore_ms": 1.0}})
+                    eng.live = ""
+                    return self._send(200, {"id_slot": sid, "n_erased": 1})
                 if self.path.startswith("/slots/0"):
                     action = self.path.split("action=")[-1]
                     eng.slots.append((action, body.get("filename"), len(eng.live)))

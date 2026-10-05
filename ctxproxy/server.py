@@ -42,6 +42,7 @@ class Proxy:
         self.mgr = Manager(cfg, store, counter, journal)
         self.lock = threading.Lock()
         self.autosaver = None
+        self.engine = None          # engines.Engine | None (impostato da main; None = Strata)
 
     def enable_autosave(self, start: bool = True):
         """Avvolge l'upstream nel Tracker (ripristino automatico) e avvia il thread di autosalvataggio."""
@@ -563,6 +564,9 @@ def make_handler(proxy: Proxy):
                 return self._send(200, {"conversation_id": c, **proxy.store.stats(c), "segment_list": segs})
             if parts[:3] == ["v1", "strata", "journal"]:
                 return self._send(200, {"events": proxy.journal.mem[-200:]})
+            if parts[:3] == ["v1", "strata", "engine"]:
+                eng = getattr(proxy, "engine", None) or getattr(proxy.up, "engine", None)
+                return self._send(200, eng.summary() if eng else {"kind": "strata", "detected": False})
             if parts[:3] == ["v1", "strata", "marks"] and len(parts) == 4:
                 return self._send(200, proxy.marks(parts[3]))
             return self._passthrough("GET")
@@ -656,14 +660,24 @@ def main(argv=None):
     ap.add_argument("--config", help="JSON con i campi di Config (soglie, finestra, flag)")
     ap.add_argument("--tokenizer", help="tokenizer.json HF (facoltativo; altrimenti caratteri/3.5)")
     ap.add_argument("--api-key", default="")
+    ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "openai"], default=None,
+                    help="tipo di motore (di serie: dalla configurazione, altrimenti rilevato)")
     a = ap.parse_args(argv)
-    cfg = Config.from_dict(json.load(open(a.config)) if a.config else {})
+    raw_cfg = json.load(open(a.config)) if a.config else {}
+    if a.engine:
+        raw_cfg["engine"] = a.engine
+    cfg = Config.from_dict(raw_cfg)
     os.makedirs(a.data, exist_ok=True)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
-    proxy = Proxy(cfg, Upstream(a.upstream, a.api_key), Store(os.path.join(a.data, "archive.sqlite")),
-                  Journal(os.path.join(a.data, "journal.jsonl")), TokenCounter(cfg.chars_per_token, a.tokenizer),
-                  mode=a.mode)
+    up = Upstream(a.upstream, a.api_key)
+    journal = Journal(os.path.join(a.data, "journal.jsonl"))
+    counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
+    from .engines import setup as setup_engine
+    engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
+                          log=lambda m: print(m, flush=True))
+    proxy = Proxy(cfg, up, Store(os.path.join(a.data, "archive.sqlite")), journal, counter, mode=a.mode)
+    proxy.engine = engine
     if cfg.autosave:
         proxy.enable_autosave()
     if cfg.kv_archive:
@@ -671,8 +685,9 @@ def main(argv=None):
         enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
     srv.daemon_threads = True
-    print("[strata-context] %s:%d -> %s mode=%s window=%d token=%s anchor=%s" % (
-        a.host, a.port, a.upstream, a.mode, cfg.window, proxy.tc.kind, cfg.mask_anchor), flush=True)
+    print("[strata-context] %s:%d -> %s (%s, salvataggi %s) mode=%s window=%d token=%s anchor=%s" % (
+        a.host, a.port, a.upstream, engine.kind, "sì" if engine.slot_save else "no", a.mode, cfg.window,
+        proxy.tc.kind, cfg.mask_anchor), flush=True)
     srv.serve_forever()
 
 

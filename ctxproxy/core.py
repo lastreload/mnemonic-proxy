@@ -181,6 +181,10 @@ class Config:
     kv_archive_threads: int = 4
     # osservabilità
     live_dump: bool = False         # scrive data_dir/live/last_request.json (prompt fisico + risposta) per la dashboard
+    # motore (engines.py): auto = rilevato all'avvio; strata | llama.cpp | openai lo forzano
+    engine: str = "auto"
+    slot_id: int = 0                # slot del motore (llama-server con --parallel N)
+    engine_tokenize: bool = False   # conteggio token esatto via /tokenize del motore (llama.cpp), se non c'è --tokenizer
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
