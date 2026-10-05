@@ -122,6 +122,11 @@ class Config:
     recall_max_chars: int = 24000
     recall_max_tokens: int = 6000   # tetto in TOKEN per risultato recall (il limite in caratteri non basta)
     max_recall_rounds: int = 4
+    # recall strutturato (recall2.py, RECALL-RESULT.md): tutto spento di serie
+    recall_struct: bool = False     # passaggi, intestazioni con collegamenti, mode timeline/first/tree..., filtri
+    recall_multi: bool = False      # queries: [...] in una sola chiamata (fusione per rango)
+    recall_flex: bool = False       # indice normalizzato (identificatori spezzati, radice leggera it/en)
+    recall_struct_max_tokens: int = 3500  # tetto in token del risultato strutturato
     # definizioni strumenti accorciate (tooldefs.py, TOOLDEFS-RESULT.md): 0 = spento (default). Testi deterministici
     # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (strata_recall è del proxy: già corto)
     tooldefs_desc_max: int = 0      # caratteri massimi della description di uno strumento
@@ -145,6 +150,8 @@ class Config:
     auto_recall_min_terms: int = 2       # termini distinti della query presenti nel pezzo (esclusi i comuni)
     auto_recall_common_frac: float = 0.4 # termine comune se compare in più di questa quota dei pezzi trovati
     auto_recall_max_args: int = 1        # argomenti di chiamata al massimo per iniezione
+    auto_recall_hint: bool = False       # indizio (una riga con id/messaggi) al posto dei pezzi inseriti
+    auto_recall_hint_k: int = 5          # candidati citati nell'indizio
     # punti fermi / usa e getta (NEXT.md 11-12)
     pins_max_tokens: int = 8192     # tetto del blocco "Punti fermi" copiato al cambio di segmento
     # stima token
@@ -1050,7 +1057,8 @@ class Manager:
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == RECALL_NAME for t in tools):
-            tools.append(RECALL_TOOL)
+            from .recall2 import recall_tool
+            tools.append(recall_tool(cfg, RECALL_TOOL))
         if catalog:
             tools.append(self.pager.tools_tool(catalog))
 
@@ -1209,6 +1217,59 @@ class Manager:
         terms = query_terms(user, files[-4:][::-1], errors[-2:], last_cmd)
         return user, terms
 
+    def auto_candidates(self, conv, terms, hidden, already, max_idx) -> list:
+        """Candidati del richiamo automatico: pezzi NASCOSTI con score = -bm25 (più alto = migliore) sopra
+        auto_recall_min_score e almeno auto_recall_min_terms termini non comuni. -> [(rid, idx, role, name,
+        content, tokens, score, matched)] in ordine di score."""
+        cfg = self.cfg
+        hits = self.store.search_fts_scored(conv, terms, limit=80, max_idx=max_idx) if hidden and terms else []
+        pre = []
+        for rid, idx, role, name, content, tokens, score in hits:
+            if rid not in hidden or rid in already or not content:
+                continue
+            low = content.lower()
+            pre.append((rid, idx, role, name, content, tokens, score, [t for t in terms if t in low]))
+        # termini comuni (presenti in gran parte dei pezzi trovati: percorso del progetto, 'node', 'game', 'ogni'…)
+        # non distinguono un pezzo dall'altro: non contano per la soglia dei termini
+        df = {}
+        for c in pre:
+            for t in c[7]:
+                df[t] = df.get(t, 0) + 1
+        common = {t for t, n in df.items() if len(pre) >= 8 and n > cfg.auto_recall_common_frac * len(pre)}
+        cands, seen_txt = [], set()
+        for rid, idx, role, name, content, tokens, score, matched in pre:
+            distinct = [t for t in matched if t not in common]
+            if score < cfg.auto_recall_min_score or len(distinct) < cfg.auto_recall_min_terms:
+                continue
+            h = hashlib.sha1(content.strip().encode("utf-8", "replace")).hexdigest()
+            if h in seen_txt:                       # stesso testo già scelto (comandi ripetuti identici)
+                continue
+            seen_txt.add(h)
+            cands.append((rid, idx, role, name, content, tokens, score, distinct + [t for t in matched if t in common]))
+        return cands
+
+    def auto_hint(self, cands, terms) -> tuple[str, list]:
+        """Indizio al posto dei pezzi: una riga con i termini trovati e id/messaggi dei candidati migliori (nessun
+        testo dell'archivio). -> (testo, scelti)."""
+        cfg = self.cfg
+        what = {"tool": "uscita", "assistant-reasoning": "ragionamento", "assistant-tool-args": "argomenti",
+                "user": "utente", "assistant": "risposta"}
+        chosen = [{"rid": c[0], "idx": c[1], "role": c[2], "score": round(c[6], 2), "matched": c[7][:6]}
+                  for c in cands[:cfg.auto_recall_hint_k]]
+        if not chosen:
+            return "", []
+        words = []
+        for c in chosen:
+            for t in c["matched"]:
+                if t not in words:
+                    words.append(t)
+        text = (AUTO_HEAD + " Nell'archivio NASCOSTO di questa conversazione ci sono pezzi su: %s (%s). Se servono "
+                "per la richiesta, usa strata_recall id=<id> (testo intero) o query=...; non ricostruirli a memoria."
+                % (", ".join(words[:8]), "; ".join("id=%s msg %d %s" % (c["rid"], c["idx"] + 1, what.get(c["role"],
+                                                                                                    c["role"]))
+                                                  for c in chosen)))
+        return text, chosen
+
     def _auto_recall(self, conv, msgs, hs, start, phys, est, resp) -> dict | None:
         cfg = self.cfg
         i = len(msgs) - 1
@@ -1237,32 +1298,18 @@ class Manager:
             if c.startswith(AUTO_HEAD) or c.startswith("[recall:"):
                 already.update(re.findall(r"id=([rta][0-9a-f]{12})", c))
         t0 = time.time()
-        hits = self.store.search_fts_scored(conv, terms, limit=80, max_idx=i) if hidden and terms else []
-        pre = []
-        for rid, idx, role, name, content, tokens, score in hits:
-            if rid not in hidden or rid in already or not content:
-                continue
-            low = content.lower()
-            pre.append((rid, idx, role, name, content, tokens, score, [t for t in terms if t in low]))
-        # termini comuni (presenti in gran parte dei pezzi trovati: percorso del progetto, 'node', 'game', 'ogni'…)
-        # non distinguono un pezzo dall'altro: non contano per la soglia dei termini
-        df = {}
-        for c in pre:
-            for t in c[7]:
-                df[t] = df.get(t, 0) + 1
-        common = {t for t, n in df.items() if len(pre) >= 8 and n > cfg.auto_recall_common_frac * len(pre)}
-        cands, seen_txt, n_args = [], set(), 0
-        for rid, idx, role, name, content, tokens, score, matched in pre:
-            distinct = [t for t in matched if t not in common]
-            if score < cfg.auto_recall_min_score or len(distinct) < cfg.auto_recall_min_terms:
-                continue
-            h = hashlib.sha1(content.strip().encode("utf-8", "replace")).hexdigest()
-            if h in seen_txt:                       # stesso testo già scelto (comandi ripetuti identici)
-                continue
-            seen_txt.add(h)
-            cands.append((rid, idx, role, name, content, tokens, score, distinct + [t for t in matched if t in common]))
+        cands = self.auto_candidates(conv, terms, hidden, already, i)
         room = cfg.window - cfg.reserve - resp - est - 64
         budget = min(cfg.auto_recall_max_tokens, max(0, room))
+        if cfg.auto_recall_hint:
+            text, chosen = self.auto_hint(cands, terms)
+            used = self.tc.count(text) if chosen else 0
+            self.store.add_insert(key, conv, [{"role": "user", "content": text}] if chosen else [])
+            return self.journal.log("auto_recall", conv=conv, trigger=trig, index=i, terms=terms, mode="hint",
+                                    candidates=len(cands), hidden=len(hidden), injected=len(chosen), tokens=used,
+                                    pieces=chosen, budget=budget, ms=round((time.time() - t0) * 1000, 1),
+                                    last_user=user[:300])
+        n_args = 0
         head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
                 "richiesta qui sopra (trovati dal gestore del contesto, non scritti dall'utente). Testo vero, "
                 "eventualmente estratto; testo intero con strata_recall id=<id>. Lo stato attuale dei file può "
@@ -1660,6 +1707,16 @@ class Manager:
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
+        if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
+            if getattr(self, "_recall2", None) is None:
+                from .recall2 import Recall2
+                self._recall2 = Recall2(self)
+            return self._recall2.recall(conv, args, max_idx, meta)
+        return self.recall_legacy(conv, args, max_idx, meta)
+
+    def recall_legacy(self, conv: str, args: dict, max_idx: int | None = None, meta: list | None = None,
+                      head_fn=None) -> str:
+        """strata_recall di serie (id / path / query). head_fn: intestazione alternativa per id (recall2)."""
         rid = str(args.get("id") or "").strip().removeprefix("recall:").removeprefix("id=")
         try:
             off = max(0, int(args.get("offset") or 0))
@@ -1680,6 +1737,8 @@ class Manager:
                 meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": off, "chars": len(chunk)})
             head = "[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n" % (
                 rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", r[6], off, off + len(chunk), len(text))
+            if head_fn is not None:
+                head = head_fn(r, off, len(chunk), len(text))
             tail = "" if off + len(chunk) >= len(text) else \
                 "\n[continua: strata_recall id=%s offset=%d]" % (rid, off + len(chunk))
             return head + chunk + tail

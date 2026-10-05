@@ -1,0 +1,3273 @@
+[
+ {
+  "id": "pp-q1",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 365,
+  "kind": "esito",
+  "q": "Nella primissima simulazione da riga di comando, quante vite erano rimaste alla fine e quanti nemici erano passati nell'ultima ondata?",
+  "answer": "10/20 vite; nell'ondata 10 è passato 1 nemico (il boss, leak 10)",
+  "queries": [
+   "prima simulazione vite rimaste ultima ondata",
+   "node sim/run.js --waves=10 --report",
+   "ESITO vite superstiti"
+  ],
+  "calls": [
+   {
+    "query": "ESITO vite superstiti",
+    "order": "tempo"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "VITTORIA — vite superstiti 10/20",
+     "role": "tool",
+     "hi": 40
+    },
+    "rids": [
+     "ra6c7588be00d"
+    ],
+    "msgs": [
+     39
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-q2",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 367,
+  "kind": "esito",
+  "q": "Su quale porta avevi avviato il server di sviluppo la prima volta, e quale indirizzo avevi usato per controllare che rispondesse?",
+  "answer": "porta 5173 (PORT=5173 node server.js); controllo su http://127.0.0.1:5173/__health (fallito)",
+  "queries": [
+   "PORT=5173 node server.js",
+   "server di sviluppo porta",
+   "curl __health"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "PORT=5173 node server\\.js",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "a3f6a06eda0e6",
+     "a6af3005e3957"
+    ],
+    "msgs": [
+     54,
+     56
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "127\\.0\\.0\\.1:5173/__health",
+     "hi": 70
+    },
+    "rids": [
+     "a306f40c65ac7",
+     "ta02ab494b4b3",
+     "ab538c411f755",
+     "ac89fd0a58643"
+    ],
+    "msgs": [
+     58,
+     62,
+     68
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-q3",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 369,
+  "kind": "cronologia",
+  "q": "Quando hai scritto render.js la prima volta c'era un errore di sintassi segnalato dal controllo: in che punto era e come l'hai corretto?",
+  "answer": "la prima scrittura era pulita; l'errore (L748 Declaration or statement expected) è nell'edit successivo che aveva cancellato l'intestazione di roundRect",
+  "queries": [
+   "render.js errore di sintassi",
+   "drawOverlays",
+   "Declaration or statement expected"
+  ],
+  "calls": [
+   {
+    "path": "src/render.js",
+    "mode": "timeline"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "L748: Declaration or statement expected",
+     "role": "tool"
+    },
+    "rids": [
+     "rd2d82e98b84b"
+    ],
+    "msgs": [
+     84
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-q4",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 847,
+  "kind": "prima-versione",
+  "q": "Quando hai scritto la primissima versione della configurazione, che oro iniziale avevi messo? Nel ragionamento avevi considerato un valore diverso prima di decidere?",
+  "answer": "startGold 265 scritto (msg 20); nel ragionamento della stessa scrittura 'Player starts 240 gold'",
+  "queries": [
+   "startGold",
+   "startGold: 300",
+   "ECONOMIA E VITE",
+   "startGold 300",
+   "oro iniziale prima configurazione"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "first",
+    "query": "startGold"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "startGold:\\s*265",
+     "role": "assistant-tool-args",
+     "hi": 21
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "Player starts 240 gold|startGold 240",
+     "role": "assistant-reasoning",
+     "hi": 21
+    },
+    "rids": [
+     "t42d3ee9ac871"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-q5",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 849,
+  "kind": "cronologia",
+  "q": "Che valori aveva il boss (vita, armatura, vite tolte) nella prima versione, prima che lo correggessi dopo la prima simulazione? E come sono cambiati?",
+  "answer": "1600/16/10 (msg 20); poi 1450/16/10 (151), 1250/14/10 (155), 1150/14/10 speed 28 (165), ... 1050/14/8 speed 27 (223)",
+  "queries": [
+   "hp: 1600",
+   "boss Colosso hp armor leak",
+   "boss hp",
+   "hp: 1450",
+   "hp: 1050"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "timeline",
+    "query": "boss hp"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "hp: 1600, speed: 30, armor: 16, bounty: 150, leak: 10",
+     "role": "assistant-tool-args",
+     "hi": 21
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"\\s*hp: 1450",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "aaae10c0284c1"
+    ],
+    "msgs": [
+     152
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"\\s*hp: 1250",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "a15b8e0e55ef9"
+    ],
+    "msgs": [
+     156
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"\\s*hp: 1150",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "ae76571917101"
+    ],
+    "msgs": [
+     166
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"\\s*hp: 1050",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "ac56f2be712be"
+    ],
+    "msgs": [
+     224
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-q6",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 853,
+  "kind": "valore",
+  "q": "L'oro iniziale della modalità difficile è uguale a quello che avevi messo all'inizio nella modalità normale?",
+  "answer": "no: difficile 250, normale 265",
+  "queries": [
+   "modalità difficile startGold",
+   "startGold 250",
+   "startGold 265"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "first",
+    "query": "startGold"
+   },
+   {
+    "query": "hard startGold"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "startGold:\\s*250",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "ac7187a9bcd73",
+     "ae0b5c12fa3db",
+     "a2d856a970245"
+    ],
+    "msgs": [
+     413,
+     660,
+     821
+    ],
+    "segs": [
+     1,
+     2
+    ]
+   },
+   {
+    "rule": {
+     "re": "startGold:\\s*265",
+     "role": "assistant-tool-args",
+     "hi": 21
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-n1",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "Perché il gate dello smoke test segnalava FALLITA anche quando il test riusciva?",
+  "answer": "il DOM escapea le virgolette come &quot; e il pattern \"ok\":true non poteva mai combaciare",
+  "queries": [
+   "gate smoke test FALLITA",
+   "bug nel gate virgolette",
+   "&quot;"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "&quot;",
+     "role": "assistant|assistant-reasoning",
+     "lo": 320,
+     "hi": 330
+    },
+    "rids": [
+     "r1f1c63a10bc8",
+     "t66ad0850a3c5",
+     "t628958a0ae10"
+    ],
+    "msgs": [
+     327,
+     329
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n2",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "Perché il server di sviluppo avviato in background non rispondeva al curl?",
+  "answer": "il task in background gira in un namespace di rete isolato",
+  "queries": [
+   "server background curl non risponde",
+   "namespace di rete isolato",
+   "connessione rifiutata 5173"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "namespace",
+     "role": "assistant|assistant-reasoning",
+     "hi": 75
+    },
+    "rids": [
+     "ta02ab494b4b3",
+     "tfd96ef25f8d7",
+     "ta42f5a90c3f4",
+     "tef56e55bc46b",
+     "r9a19e06d42be",
+     "t6e986c1e1d71"
+    ],
+    "msgs": [
+     62,
+     64,
+     68,
+     70,
+     74
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n3",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Nella prima simulazione quale torre risultava quasi inutile, e con che numeri?",
+  "answer": "la Tesla: 60 danni, 0 uccisioni",
+  "queries": [
+   "Tesla quasi inutile",
+   "torre inutile simulazione",
+   "Tesla dmg kill"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "60 dmg",
+     "lo": 39,
+     "hi": 39
+    },
+    "rids": [
+     "r5ed0100b31e8",
+     "t581e8320ecd1"
+    ],
+    "msgs": [
+     40
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n4",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Quale errore JavaScript ha trovato il primo smoke test nell'harness, prima di 'view is not defined'?",
+  "answer": "Uncaught TypeError: game.update is not a function",
+  "queries": [
+   "errore harness smoke test",
+   "is not a function",
+   "Uncaught TypeError"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "game\\.update is not a function",
+     "role": "tool"
+    },
+    "rids": [
+     "r45bd12884d10",
+     "r45e3c61d451e",
+     "rf59c28cf23b9"
+    ],
+    "msgs": [
+     243,
+     676,
+     830
+    ],
+    "segs": [
+     0,
+     1,
+     2
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n5",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Il test post-fix risultava exit 1: quale errore c'era davvero?",
+  "answer": "Uncaught ReferenceError: view is not defined (bug dell'harness)",
+  "queries": [
+   "smoke test post-fix exit 1",
+   "ReferenceError",
+   "errore test post-fix"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "view is not defined",
+     "role": "tool"
+    },
+    "rids": [
+     "ra1be77a2c46a",
+     "r45e3c61d451e",
+     "rf59c28cf23b9"
+    ],
+    "msgs": [
+     274,
+     676,
+     830
+    ],
+    "segs": [
+     0,
+     1,
+     2
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n6",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Quale seed usava la simulazione CLI di default?",
+  "answer": "20260101",
+  "queries": [
+   "seed simulazione",
+   "seed default CLI",
+   "sim seed"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "20260101"
+    },
+    "rids": [
+     "a4875f109c44e",
+     "tf8bbcc90a2e4",
+     "ra6c7588be00d",
+     "r0d513afea1b6",
+     "r67c1beef7884",
+     "r475bdde9e49a",
+     "a15b8e0e55ef9",
+     "a89b679ed54db",
+     "ref51ffce2ce7",
+     "rb3484b58bc72",
+     "r387c2e506cb4",
+     "r8022011fd7ea",
+     "r466c876293ed",
+     "rd18a86382af5",
+     "r8158402f5a66",
+     "r1e1c870d7178",
+     "r068a5bf5d4cc",
+     "r9ea36644b437",
+     "r9ba2014939b9",
+     "r2658ac81e305",
+     "rbb465206bd06",
+     "r431507cb7040",
+     "a2c63d2ff863b",
+     "rbfee243ad79b",
+     "a3ae5a55624bb",
+     "r5e4f14f1a58a",
+     "rb10ff40356ab",
+     "rf8c2e8edd066"
+    ],
+    "msgs": [
+     21,
+     31,
+     39,
+     104,
+     126,
+     155,
+     156,
+     161,
+     179,
+     198,
+     204,
+     210,
+     217,
+     219,
+     223,
+     227,
+     231,
+     239,
+     367,
+     392,
+     449,
+     453,
+     470,
+     639,
+     640,
+     649,
+     663,
+     846
+    ],
+    "segs": [
+     0,
+     1,
+     2
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n7",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "Perché a un certo punto è stata aggiunta variabilità casuale alla simulazione?",
+  "answer": "tutti i seed davano risultati identici (simulazione completamente deterministica)",
+  "queries": [
+   "variabilità simulazione",
+   "seed identici deterministico",
+   "speedJitter"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "seed identici|All seeds identical",
+     "lo": 179,
+     "hi": 179
+    },
+    "rids": [
+     "r82f3599bd34e",
+     "t67dcc5b6845f"
+    ],
+    "msgs": [
+     180
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n8",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Quale valore sbagliato di startGold era finito nella modalità difficile (regressione trovata alla fine)?",
+  "answer": "startGold: 32000 (doveva essere 250)",
+  "queries": [
+   "regressione oro modalità difficile",
+   "startGold difficile sbagliato",
+   "32000"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "startGold:\\s*32000"
+    },
+    "rids": [
+     "r13245ffef9d2",
+     "t1a991a882458",
+     "t3a2b7a7b2bca",
+     "r25431462cf32",
+     "t688007fdaab3",
+     "a2d856a970245",
+     "re42331ae4e08",
+     "rbc8ac4224c52"
+    ],
+    "msgs": [
+     810,
+     811,
+     813,
+     814,
+     817,
+     821,
+     843,
+     847
+    ],
+    "segs": [
+     2
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n9",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "cronologia",
+  "q": "Qual è stata la prima modifica fallita (o applicata solo in parte) a src/config.js?",
+  "answer": "msg 413: PARTIAL APPLY, edits[1] non trovato",
+  "queries": [
+   "config.js edit fallito",
+   "PARTIAL APPLY config.js",
+   "modifica fallita config"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "timeline"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "PARTIAL APPLY",
+     "role": "tool",
+     "lo": 413,
+     "hi": 414
+    },
+    "rids": [
+     "reaaf5a1b56fe"
+    ],
+    "msgs": [
+     414
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-n10",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "prima-versione",
+  "q": "Nella prima stesura di config.js quanto valeva slowResist del boss, e a quanto è stato portato nella prima correzione?",
+  "answer": "0.75, poi 0.65 (msg 151)",
+  "queries": [
+   "slowResist boss",
+   "slowResist: 0.75",
+   "slowResist 0.65"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "timeline",
+    "query": "slowResist"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "slowResist: 0\\.75",
+     "role": "assistant-tool-args",
+     "hi": 21
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"\\s*hp: 1450.{0,80}slowResist: 0\\.65",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "aaae10c0284c1"
+    ],
+    "msgs": [
+     152
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "pp-n11",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "prima-versione",
+  "para": true,
+  "q": "Quanto denaro aveva il giocatore all'inizio della partita nella prima stesura del bilanciamento?",
+  "answer": "265",
+  "queries": [
+   "denaro iniziale del giocatore",
+   "soldi a inizio partita bilanciamento",
+   "money at start"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "startGold:\\s*265",
+     "role": "assistant-tool-args",
+     "hi": 21
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n12",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "para": true,
+  "q": "In the very first engine test, how much gold did the player have after the first wave with no towers?",
+  "answer": "299 (300 minus 1 early-call penalty)",
+  "queries": [
+   "gold after first wave no towers",
+   "first engine test gold",
+   "early call penalty gold"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "gold was 299",
+     "role": "assistant-reasoning"
+    },
+    "rids": [
+     "t260735cbec24",
+     "t8c82792611fa"
+    ],
+    "msgs": [
+     123,
+     849
+    ],
+    "segs": [
+     0,
+     2
+    ]
+   }
+  ],
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "pp-n13",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Come si chiama il gioco e chi è indicato come autore nell'intestazione di config.js?",
+  "answer": "Cristalli di Guardia; Maurizio LastReload",
+  "queries": [
+   "nome del gioco autore intestazione",
+   "config.js intestazione autore",
+   "Autore"
+  ],
+  "calls": [
+   {
+    "path": "src/config.js",
+    "mode": "first"
+   }
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [
+   {
+    "rule": {
+     "re": "CRISTALLI DI GUARDIA.{0,400}LastReload|LastReload.{0,400}CRISTALLI",
+     "hi": 25
+    },
+    "rids": [
+     "a4875f109c44e"
+    ],
+    "msgs": [
+     21
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "g3-q01",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "prima-versione",
+  "q": "Nella PRIMA versione di game.js (scritta verso le 05:20, prima di ogni ritocco di velocità), quanto valeva CFG.snakeBase (celle al secondo)?",
+  "answer": "6.1",
+  "queries": [
+   "CFG.snakeBase",
+   "snakeBase prima versione game.js",
+   "snakeBase"
+  ],
+  "calls": [
+   {
+    "path": "game.js",
+    "mode": "first",
+    "query": "snakeBase"
+   }
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "snakeBase:\\s+6\\.1",
+     "hi": 300
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a4878c2c8f810",
+     "r9d226776e2a0"
+    ],
+    "msgs": [
+     22,
+     27,
+     277
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "g3-q02",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanto vale CFG.comboWindow in game.js (secondi per mantenere la combo)?",
+  "answer": "2.6",
+  "queries": [
+   "CFG.comboWindow",
+   "comboWindow"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "comboWindow:\\s+2\\.6"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a4878c2c8f810",
+     "r9d226776e2a0",
+     "r0c0164ee0122",
+     "rfea122339f18",
+     "ra9627ba04649"
+    ],
+    "msgs": [
+     22,
+     27,
+     277,
+     459,
+     520,
+     626
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q03",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanto vale CFG.powerDuration in game.js?",
+  "answer": "8.5",
+  "queries": [
+   "CFG.powerDuration",
+   "powerDuration"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "powerDuration:\\s+8\\.5"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a4878c2c8f810",
+     "r9d226776e2a0",
+     "r0c0164ee0122",
+     "rfea122339f18",
+     "ra9627ba04649"
+    ],
+    "msgs": [
+     22,
+     27,
+     277,
+     459,
+     520,
+     626
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q04",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanto vale CFG.shockRadius in game.js, e in che unità?",
+  "answer": "4.6 celle",
+  "queries": [
+   "CFG.shockRadius",
+   "shockRadius unità"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "shockRadius:\\s+4\\.6"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a4878c2c8f810",
+     "r9d226776e2a0",
+     "r0c0164ee0122",
+     "rfea122339f18",
+     "ra9627ba04649"
+    ],
+    "msgs": [
+     22,
+     27,
+     277,
+     459,
+     520,
+     626
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q05",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "prima-versione",
+  "q": "Qual era il valore iniziale di CFG.ghostBase (velocità base dei fantasmi) nella prima versione di game.js?",
+  "answer": "4.9",
+  "queries": [
+   "CFG.ghostBase",
+   "ghostBase prima versione"
+  ],
+  "calls": [
+   {
+    "path": "game.js",
+    "mode": "first",
+    "query": "ghostBase"
+   }
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "ghostBase:\\s+4\\.9"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a4878c2c8f810",
+     "r9d226776e2a0",
+     "r0c0164ee0122",
+     "rfea122339f18",
+     "aba809c25a3db"
+    ],
+    "msgs": [
+     22,
+     27,
+     277,
+     459,
+     520,
+     523
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "g3-q06",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "esito",
+  "q": "Nella prima validazione dei labirinti in Node (verso le 06:17), quale seed aveva il LIVELLO 1? Dammi il numero esatto.",
+  "answer": "27013482",
+  "queries": [
+   "LIV 1 seed",
+   "validazione labirinti LIVELLO 1 seed",
+   "LIVELLO 1 seed"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "LIVELLO 1 seed 27013482",
+     "role": "tool"
+    },
+    "rids": [
+     "r3ea8cf65d040"
+    ],
+    "msgs": [
+     48
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q07",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "esito",
+  "q": "Quale stringa di colore esatta veniva rifiutata da canvas (addColorStop) e faceva morire il loop di animazione?",
+  "answer": "hsla(205 90% 40% 0.30)",
+  "queries": [
+   "addColorStop could not be parsed as a color",
+   "90% 40%",
+   "colore rifiutato addColorStop"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "hsla\\(205 90% 40% 0\\.30?\\)"
+    },
+    "rids": [
+     "r4e0556ac50bf",
+     "t705a0f15d032",
+     "rc32946d8fb66",
+     "ra81fb2b0c5ea",
+     "tcdfc98cae10f"
+    ],
+    "msgs": [
+     82,
+     83,
+     84,
+     85
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q08",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "esito",
+  "q": "Quando Playwright non trovava il browser headless, quale eseguibile è stato usato al suo posto (percorso)?",
+  "answer": "/usr/bin/google-chrome",
+  "queries": [
+   "Playwright executablePath",
+   "headless browser non trovato chromium",
+   "executablePath"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "executablePath.{0,40}/usr/bin/google-chrome"
+    },
+    "rids": [
+     "t627ccc3e386a",
+     "a6ef4cdf14ad1",
+     "r4e0556ac50bf",
+     "a865111837538",
+     "ab6229bb1319e",
+     "aa350c87a53f2",
+     "a7541bed33c2c",
+     "a93b039e8c55e",
+     "abc83645e9e9d",
+     "a78d8e3694639",
+     "a78a73d731db3",
+     "a699ba13f39d8",
+     "a8fd3e72e4073",
+     "a396933ff1f82",
+     "r3f8282329e66",
+     "aec803084fa0a",
+     "rc5786d879740",
+     "a91f6bb29019e",
+     "a841aea45f0cf",
+     "a3834a19fbb2b",
+     "a129e29d95dc5",
+     "acae755b00f66",
+     "r1fdddefd8d06",
+     "a0ef49f828c3b",
+     "r968ef0d7cbe5",
+     "a262c5dc95613",
+     "a6aa2015c5332",
+     "a6eb9d3247a2b",
+     "ad9e210a57600",
+     "a70d9670d54ec",
+     "ra6a35eaf70d8",
+     "a69e105ae19e9",
+     "a5cfb4cd4c478",
+     "aefd361d15ee6",
+     "a55fec9cf0de7",
+     "r213ef1581731"
+    ],
+    "msgs": [
+     81,
+     82,
+     83,
+     98,
+     110,
+     150,
+     168,
+     180,
+     202,
+     224,
+     244,
+     292,
+     294,
+     301,
+     302,
+     309,
+     328,
+     358,
+     364,
+     380,
+     436,
+     447,
+     507,
+     540,
+     551,
+     567,
+     569,
+     575,
+     585,
+     588,
+     637,
+     641,
+     645,
+     665,
+     668
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q09",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "esito",
+  "q": "Quali versioni di Node e di Python sono state trovate nel primo controllo dell'ambiente?",
+  "answer": "v24.18.0, Python 3.14.4",
+  "queries": [
+   "node -v python3 -V",
+   "versione node python",
+   "Python 3"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "v24\\.18\\.0\\s+Python 3\\.14\\.4",
+     "role": "tool"
+    },
+    "rids": [
+     "r2a4ce802234e"
+    ],
+    "msgs": [
+     7
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q10",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "esito",
+  "q": "Qual era il titolo del task #6 creato nella todo list iniziale?",
+  "answer": "Test headless with Playwright + screenshots",
+  "queries": [
+   "todo task #6",
+   "Created #6",
+   "todo create"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "Created #6:",
+     "role": "tool"
+    },
+    "rids": [
+     "raaad8803062e"
+    ],
+    "msgs": [
+     18
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q11",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "prima-versione",
+  "q": "Nella primissima versione di game.js, come si chiamavano i fantasmi (nomi delle skin)? Elencali.",
+  "answer": "ROSSO, ARANCIO, CIANO, MAGENTA",
+  "queries": [
+   "nomi fantasmi skins",
+   "skins name fantasmi prima versione",
+   "ghost skins"
+  ],
+  "calls": [
+   {
+    "path": "game.js",
+    "mode": "first",
+    "query": "skins name"
+   }
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "name: 'ROSSO'",
+     "hi": 22
+    },
+    "rids": [
+     "adc5b4c0ebc7d"
+    ],
+    "msgs": [
+     22
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "g3-q12",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Che tonalità (valore h) ha il fantasma FULGO?",
+  "answer": "348",
+  "queries": [
+   "FULGO",
+   "FULGO h"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "h: 348, name: 'FULGO'"
+    },
+    "rids": [
+     "a467a6c33ff77",
+     "rfe2264532178",
+     "ab57487fb1359",
+     "rf79530ef9494",
+     "r8835efe4ef34"
+    ],
+    "msgs": [
+     31,
+     163,
+     164,
+     249,
+     526
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q13",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quali sono le coordinate delle POWER_CELLS definite in game.js?",
+  "answer": "[2,2],[GRID-3,2],[2,GRID-3],[GRID-3,GRID-3]",
+  "queries": [
+   "POWER_CELLS",
+   "POWER_CELLS coordinate"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "POWER_CELLS = \\[\\[2,2\\]"
+    },
+    "rids": [
+     "a50ff4180394f",
+     "ra71f363a4abe",
+     "rf84f837bafd1"
+    ],
+    "msgs": [
+     67,
+     353,
+     512
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q14",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanto vale la costante GS (scala del canvas di glow/bloom) in game.js?",
+  "answer": "0.42",
+  "queries": [
+   "const GS",
+   "GS scala bloom glow",
+   "GS ="
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "GS = 0\\.42"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a467a6c33ff77",
+     "rb4a516130d72"
+    ],
+    "msgs": [
+     22,
+     31,
+     644
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q15",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "cronologia",
+  "q": "Quanti fps misurava tools/fps.js a 1280x800 subito prima e subito dopo l'ottimizzazione di buildLight (luce calcolata una volta per frame)?",
+  "answer": "35 prima, 41 dopo",
+  "queries": [
+   "tools/fps.js 1280x800",
+   "fps buildLight",
+   "1280x800 fps"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "1280x800 -> 35 fps|35 → 41|35→41|\\(era 35\\)"
+    },
+    "rids": [
+     "rea752037a308",
+     "t60d80c3ca510",
+     "r5b7d1bdbbda8",
+     "t71cc35dcc230"
+    ],
+    "msgs": [
+     437,
+     444,
+     503
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "1280x800 -> 41 fps|35 → 41|35→41|41 fps\\s+\\(era 35\\)"
+    },
+    "rids": [
+     "r105630c615b0",
+     "t60d80c3ca510",
+     "r5b7d1bdbbda8",
+     "t71cc35dcc230"
+    ],
+    "msgs": [
+     443,
+     444,
+     503
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q16",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Nel resoconto delle 08:17, quali percentuali over80 e over150 aveva lo screenshot 02-play?",
+  "answer": "over80 7.53%, over150 2.53%",
+  "queries": [
+   "over80 over150 02-play",
+   "02-play over80",
+   "over150"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "7\\.53"
+    },
+    "rids": [
+     "r8212e81797fe",
+     "r5b7d1bdbbda8"
+    ],
+    "msgs": [
+     480,
+     503
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q17",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanti fantasmi ci sono al livello 1 (formula usata in loadLevel)?",
+  "answer": "min(3+level,6) = 4",
+  "queries": [
+   "loadLevel ghosts Math.min ghostCount",
+   "numero fantasmi livello",
+   "loadLevel fantasmi"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "Math\\.min\\(3 \\+ level, 6\\)"
+    },
+    "rids": [
+     "adc5b4c0ebc7d",
+     "a467a6c33ff77",
+     "rf79530ef9494",
+     "r8835efe4ef34"
+    ],
+    "msgs": [
+     22,
+     31,
+     249,
+     526
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q18",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Perché all'inizio (verso le 05:20) la scrittura di game.js con lo strumento write falliva, e come è stato aggirato il problema?",
+  "answer": "limite dei token di uscita -> scrittura a blocchi (write + append con heredoc)",
+  "queries": [
+   "write game.js fallita",
+   "output token limit",
+   "CHUNK_A",
+   "heredoc append chunk"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "hit the output token limit",
+     "role": "tool",
+     "hi": 30
+    },
+    "rids": [
+     "r1ad1bf62ffd3",
+     "r1377c08d5be5"
+    ],
+    "msgs": [
+     23,
+     25
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "heredoc",
+     "role": "assistant-reasoning",
+     "hi": 30
+    },
+    "rids": [
+     "tbd8d578ada47",
+     "tbb0d2cb54af6",
+     "t2b7d652b2707"
+    ],
+    "msgs": [
+     24,
+     27,
+     29
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q19",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Perché tutti i colori hsla di game.js sono stati convertiti alla sintassi con le virgole?",
+  "answer": "canvas rifiutava la sintassi senza virgole -> eccezione -> loop rAF morto",
+  "queries": [
+   "colori hsla virgole",
+   "hsla sintassi canvas",
+   "comma syntax hsla"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "could not be parsed as a color"
+    },
+    "rids": [
+     "r4e0556ac50bf",
+     "rc32946d8fb66"
+    ],
+    "msgs": [
+     82,
+     84
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "sintassi con (le )?virgole|comma syntax"
+    },
+    "rids": [
+     "t705a0f15d032",
+     "ra81fb2b0c5ea",
+     "tcdfc98cae10f",
+     "td7ca98347cce"
+    ],
+    "msgs": [
+     83,
+     85,
+     87
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q20",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Perché game.js viene caricato come script classico e non come modulo ES?",
+  "answer": "i moduli ES su file:// falliscono per CORS",
+  "queries": [
+   "file://",
+   "script classico modulo ES",
+   "CORS moduli file"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "CORS issues with file://|fail on file:// .{0,30}CORS",
+     "role": "assistant-reasoning"
+    },
+    "rids": [
+     "t463dc7ae08e4"
+    ],
+    "msgs": [
+     6
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q21",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Perché verso le 06:18 è stato rifatto il generatore di labirinti (prototipo 'a reticolo')?",
+  "answer": "labirinti troppo aperti (piazze, pochi corridoi)",
+  "queries": [
+   "lattice maze corridors open plazas",
+   "generatore labirinti reticolo",
+   "labirinti troppo aperti"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "troppo \"aperti\"|too open",
+     "lo": 45,
+     "hi": 55
+    },
+    "rids": [
+     "r75d4a565c243"
+    ],
+    "msgs": [
+     51
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q22",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Perché è stato scritto tools/analyze.js?",
+  "answer": "il modello non può vedere le immagini -> anteprima ASCII/statistiche dei pixel",
+  "queries": [
+   "tools/analyze.js",
+   "analyze.js perché",
+   "anteprima ASCII screenshot"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "Non posso vedere le immagini",
+     "role": "assistant",
+     "hi": 100
+    },
+    "rids": [
+     "rbf432631c981",
+     "r790382cbdfcd"
+    ],
+    "msgs": [
+     97,
+     98
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q23",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Qual era il bug vero che faceva morire il serpente appena partiva (\"appena parte sbatto\") e perché accadeva?",
+  "answer": "in resetSerpent !grid[nj][ni] era vero sulle celle libere perché OPEN vale 0",
+  "queries": [
+   "resetSerpent bug",
+   "appena parte sbatto",
+   "!grid[nj][ni] OPEN"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "OPEN vale|is OPEN \\(value 0\\)|cell is OPEN \\(0\\)"
+    },
+    "rids": [
+     "t4f5ebdb55406",
+     "t9c95218abd3d",
+     "rf771562fee98"
+    ],
+    "msgs": [
+     505,
+     507,
+     509
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q24",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "ragionamento",
+  "q": "Come è stata cambiata la regola della sterzata contro un muro, e perché?",
+  "answer": "la svolta verso un muro resta in coda e si applica alla prima cella legale (scade ~1,1 s)",
+  "queries": [
+   "sterzata contro muro regola",
+   "svolta muro coda intento",
+   "MURO turn wall"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "intento resta in attesa|resta in coda e si esegue|pending-intent"
+    },
+    "rids": [
+     "rbcd9551f2bc3",
+     "teea635d82690",
+     "tbd4651d88528",
+     "t23d6880dbefa",
+     "t36503ae140ee",
+     "r38821e29f308"
+    ],
+    "msgs": [
+     597,
+     599,
+     601,
+     605,
+     611,
+     723
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q25",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "cronologia",
+  "q": "Quali sono le velocità finali del serpente (min e max, celle/s) e dei fantasmi?",
+  "answer": "serpente 4.8 -> 9.2 celle/s, fantasmi 4.0",
+  "queries": [
+   "velocità finali serpente fantasmi",
+   "snakeBase snakeMax ghostBase",
+   "celle/s velocità"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "4[.,]8 → 9[.,]2|4\\.8→9\\.2|snakeMax 11\\.5 → 9\\.2"
+    },
+    "rids": [
+     "t598b22598414",
+     "t71ded9434112",
+     "a8204ed200b5a",
+     "r38821e29f308",
+     "t0d7b5df71c2d"
+    ],
+    "msgs": [
+     519,
+     627,
+     723
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "g3-q26",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "valore",
+  "q": "Quanto durano la pausa 'pronto' all'avvio e la 'grazia' iniziale?",
+  "answer": "pronto 1,1 s; grazia 1,8 s",
+  "queries": [
+   "pausa pronto grazia",
+   "grazia iniziale secondi",
+   "ready grace"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [
+   {
+    "rule": {
+     "re": "grazia\\*?\\*?:? 1,8 s|grace 1\\.8s|Grace: 1\\.8s"
+    },
+    "rids": [
+     "t71ded9434112",
+     "a5a00063fb958",
+     "r38821e29f308",
+     "t0d7b5df71c2d"
+    ],
+    "msgs": [
+     627,
+     717,
+     723
+    ],
+    "segs": [
+     1
+    ]
+   },
+   {
+    "rule": {
+     "re": "pronto\\*?\\*?:?.{0,60}1,1 s|ready is 1\\.1s|pause 1\\.1s|1\\.1s at level start"
+    },
+    "rids": [
+     "t22d8aac06492",
+     "t6f3a6bfaa9a9",
+     "a5a00063fb958",
+     "r38821e29f308",
+     "t0d7b5df71c2d"
+    ],
+    "msgs": [
+     697,
+     717,
+     723
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-01",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Che versione di Node c'era nell'ambiente di lavoro?",
+  "answer": "v24.18.0",
+  "queries": [
+   "node -v",
+   "versione Node ambiente"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "v24\\.18\\.0",
+     "role": "tool"
+    },
+    "rids": [
+     "r3c8429953756",
+     "r72aaea040d9e",
+     "r94959e96600d",
+     "r9bb8846e4114",
+     "re35b6c5c0c3a",
+     "r53067a1c6c5d",
+     "rf2e09ac8f1ff",
+     "r76c203316f1a"
+    ],
+    "msgs": [
+     7,
+     22,
+     67,
+     73,
+     132,
+     161,
+     307,
+     385
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-02",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "prima-versione",
+  "q": "Quanto valeva LATTICE_STEP nella prima versione di maze.js, e a quanto è stato portato?",
+  "answer": "3, poi 2 (msg 26)",
+  "queries": [
+   "LATTICE_STEP",
+   "LATTICE_STEP maze.js prima versione"
+  ],
+  "calls": [
+   {
+    "path": "src/maze.js",
+    "mode": "timeline",
+    "query": "LATTICE_STEP"
+   }
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "const LATTICE_STEP = 3;",
+     "role": "assistant-tool-args",
+     "hi": 20
+    },
+    "rids": [
+     "af0314b03047d"
+    ],
+    "msgs": [
+     19
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "\"newText\":\"const LATTICE_STEP = 2;\"",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "a1ba7d001e493"
+    ],
+    "msgs": [
+     27
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false
+ },
+ {
+  "id": "n2-03",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "cronologia",
+  "q": "Qual era il valore iniziale di SELF_IGNORE_ARC e quale valore ha risolto le morti sul proprio corpo?",
+  "answer": "1.7, poi 2.05",
+  "queries": [
+   "SELF_IGNORE_ARC",
+   "self-collision soglia arco"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "SELF_IGNORE_ARC = 1\\.7",
+     "role": "assistant-tool-args",
+     "hi": 35
+    },
+    "rids": [
+     "ac4b45b671da2"
+    ],
+    "msgs": [
+     34
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "SELF_IGNORE_ARC = 2\\.05",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "af8a9991a0fec",
+     "a79212e71678d"
+    ],
+    "msgs": [
+     74,
+     645
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-04",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Quanti pallini medi aveva il labirinto nella prima validazione con lo script di test?",
+  "answer": "232.6 (zero vicoli ciechi)",
+  "queries": [
+   "mazetest pallini medi",
+   "avg dots",
+   "validazione labirinto dots"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "avg dots 232\\.6",
+     "role": "tool"
+    },
+    "rids": [
+     "r7d1999844bf5"
+    ],
+    "msgs": [
+     30
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-05",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "cronologia",
+  "q": "Che intensità aveva fx.shock quando si mangia un fantasma nella prima versione di main.js, e a quanto è stata ridotta?",
+  "answer": "12, poi 9",
+  "queries": [
+   "fx.shock fantasma mangiato",
+   "fx.shock(12",
+   "shock ridotto"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "fx\\.shock\\(12, \\[124, 249, 255\\]\\)",
+     "role": "assistant-tool-args",
+     "hi": 103
+    },
+    "rids": [
+     "a351f7569570b"
+    ],
+    "msgs": [
+     103
+    ],
+    "segs": [
+     0
+    ]
+   },
+   {
+    "rule": {
+     "re": "fx\\.shock\\(9, \\[124, 249, 255\\]\\)",
+     "role": "assistant-tool-args"
+    },
+    "rids": [
+     "a52783890cefa"
+    ],
+    "msgs": [
+     228
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-06",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Su che porta girava il server statico usato per i test nel browser?",
+  "answer": "8123",
+  "queries": [
+   "server statico porta",
+   "serve.mjs porta",
+   "tools/serve.mjs"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "8123"
+    },
+    "rids": [
+     "t85d511415174",
+     "ab4cf593dac79",
+     "a6ed9ed78707f",
+     "a0a31f3253c97",
+     "a561e33ae6699",
+     "a983770c4c7fc",
+     "r702f777a73da",
+     "a4dadd15ef302",
+     "a0c7bcf08ee7d",
+     "acda12dcfe536",
+     "ac1607c048055",
+     "r51c1655c803f",
+     "aa25cc6548409",
+     "ra1fe8cf1b093",
+     "a38d85ca1c974",
+     "r3e729bba0ef8",
+     "a6e2107770dfb",
+     "r8504cc7bf27e",
+     "a9dbd11fe6e3a",
+     "ae01dfd92a4e7",
+     "a5e6e9d3029ff",
+     "acf0511b12aae",
+     "a9a78b36d1fe2",
+     "a8ad198221223",
+     "a350052843c3f",
+     "a7f7c96edc68f",
+     "ac41719b21fd2",
+     "r25e63fd80049",
+     "adc2659c412d0",
+     "r9c10e02b5b8b",
+     "adc2f783fffc8",
+     "ab0729a1c5b35",
+     "a617344569872",
+     "ab3e7d77031fe",
+     "a61e13b9e862c",
+     "ac90a69b06ba4",
+     "a80402ae6c40d",
+     "a688217664816",
+     "a81b489707537",
+     "aab50f167fd86",
+     "a4a6eb7f56ea4",
+     "a51f3f59ffcae",
+     "a881c7f9e8f38",
+     "a1d04bb7a2beb",
+     "ad70a011ce584",
+     "aa6459f2dd123",
+     "aa06ac25a17ba",
+     "a2fd61c14ac92",
+     "ab4ff85aaade3",
+     "a26ecbeac59e7",
+     "a53027c8695bd",
+     "a4e16998ec984",
+     "ab7b35fdd4e40",
+     "afa52ee1dce31",
+     "af24eff20ed60",
+     "ad5351ec64326",
+     "ad77320ab34fb",
+     "abf2e02a2849f",
+     "ae2cfbbd62b79",
+     "aa374bb2c7685",
+     "a35d03d1dbfa3",
+     "a574cb81de1ca",
+     "a8ff02b3021df",
+     "a1b046d3adb7f",
+     "a85c6254a4bc7",
+     "a7ac4b7eff93e",
+     "ad8dce77bdf25",
+     "ac7604d2febf9",
+     "a78e13a911f24",
+     "acb277c7db9fc",
+     "acc8f988439e5",
+     "a8f8a0136b12f",
+     "a9e64fb128036",
+     "af2818021db58",
+     "ta476c3bed874",
+     "adafa667b2051",
+     "acb2e0dbdd19b",
+     "t8ab865b6bbfd",
+     "a6dbcc910591d",
+     "r1e75671dfdfe",
+     "tbf2c465837fa",
+     "rbf8290d23a18",
+     "ad0ae4db712ef",
+     "ra5555580463a",
+     "tee6c743d407d",
+     "a54bba35ed71b",
+     "r2e382b272c42",
+     "a95d563e040da",
+     "ab85bc304d668",
+     "r1bd2a63b07c2",
+     "rf75795cb3f9a",
+     "t3340dbb88fe6",
+     "af76c63526d75",
+     "r2d6e9f123265",
+     "tda6f66263e29",
+     "a6e705e7b2e9b",
+     "r075fdaad2616",
+     "t2b4579e67308",
+     "aaef21c0d068f",
+     "r9ad2e14d98c6",
+     "t9af5d905fc73",
+     "t4a4c77f6b772",
+     "ae84ffc5c0ff4",
+     "tc58e1a940c0a",
+     "a222e4c03a04c",
+     "td15a36601728",
+     "a66ff26f427c1",
+     "r21837cd41fa3",
+     "a0ca3cb140dd5",
+     "a417ecb2201e9",
+     "rbeacac161000",
+     "abc3b35bbeff7",
+     "a6e43a8f79fa0",
+     "a986525ac0dc1",
+     "r5b56f4bbbdfa",
+     "a10bbd3714ac4",
+     "aa6bbfd785d4b",
+     "a90516d79b74a",
+     "a1b316391d326",
+     "ab3345d313027",
+     "a608a838374f9",
+     "a87261878874d",
+     "ad327c3bd40e1",
+     "a68059ec76fbb",
+     "a1ba3d4e12a0e",
+     "rd380bc7a324a",
+     "ae4feedce88ba",
+     "r1fce8701a0d7",
+     "r069d362e3254"
+    ],
+    "msgs": [
+     113,
+     115,
+     117,
+     127,
+     133,
+     136,
+     143,
+     156,
+     160,
+     164,
+     165,
+     171,
+     172,
+     210,
+     211,
+     212,
+     213,
+     222,
+     230,
+     241,
+     251,
+     259,
+     261,
+     263,
+     265,
+     271,
+     272,
+     275,
+     276,
+     277,
+     288,
+     292,
+     304,
+     306,
+     310,
+     316,
+     328,
+     334,
+     338,
+     342,
+     350,
+     354,
+     392,
+     396,
+     400,
+     404,
+     408,
+     410,
+     412,
+     436,
+     442,
+     446,
+     448,
+     450,
+     452,
+     454,
+     458,
+     470,
+     472,
+     474,
+     476,
+     478,
+     480,
+     482,
+     522,
+     524,
+     526,
+     536,
+     538,
+     542,
+     544,
+     546,
+     550,
+     559,
+     565,
+     567,
+     569,
+     571,
+     572,
+     573,
+     574,
+     575,
+     577,
+     579,
+     580,
+     581,
+     583,
+     584,
+     586,
+     587,
+     588,
+     589,
+     591,
+     592,
+     593,
+     594,
+     595,
+     597,
+     599,
+     603,
+     615,
+     616,
+     617,
+     619,
+     620,
+     686,
+     692,
+     694,
+     695,
+     712,
+     718,
+     724,
+     744,
+     760,
+     762,
+     766,
+     768,
+     774,
+     778,
+     799,
+     805,
+     807,
+     809
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-07",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Che punteggio e che lunghezza ha raggiunto l'autopilota dopo la correzione della collisione con sé stesso?",
+  "answer": "score 35880, len 59",
+  "queries": [
+   "autopilot score len",
+   "sim score lunghezza autopilota",
+   "score len 59"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "score: 35880|score 35880|35880"
+    },
+    "rids": [
+     "rd77af51dbc7f",
+     "t1e117653c1c9"
+    ],
+    "msgs": [
+     77,
+     78
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-08",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Dove si trovava l'immagine di riferimento che l'utente voleva far vedere?",
+  "answer": "su AI395, /home/mverde/Immagini/nibbles.jpeg",
+  "queries": [
+   "immagine riferimento utente",
+   "nibbles.jpeg",
+   "AI395 Immagini"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "/home/mverde/Immagini/nibbles\\.jpeg",
+     "role": "user"
+    },
+    "rids": [
+     "r027f1e9949fa"
+    ],
+    "msgs": [
+     810
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-09",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "Perché l'assistente credeva che un'altra sessione avesse riscritto game.js?",
+  "answer": "trovava costanti che non ricordava di aver scritto (TURN_ASSIST, SELF_IGNORE_ARC...): i suoi messaggi vecchi erano nascosti",
+  "queries": [
+   "altra sessione game.js riscritto",
+   "I did not write these",
+   "game.js riscritto"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "I did NOT write|I did not write",
+     "role": "assistant-reasoning"
+    },
+    "rids": [
+     "t44e35f8a7483",
+     "t45da45704660"
+    ],
+    "msgs": [
+     57,
+     60
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-10",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Che errore c'era nel colore wallTop del tema NEON GRID?",
+  "answer": "'#2c4straight' (non è un colore)",
+  "queries": [
+   "wallTop NEON GRID",
+   "wallTop colore tema"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "#2c4straight"
+    },
+    "rids": [
+     "a41f90e76edb1",
+     "ta870efe3433a",
+     "a126fc8b9f213",
+     "a0fbb08603bdc"
+    ],
+    "msgs": [
+     186,
+     188,
+     190
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-11",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Qual è la formula della velocità dei fantasmi per livello?",
+  "answer": "4.3 + (level-1)*0.28",
+  "queries": [
+   "ghostSpeed",
+   "velocità fantasmi livello",
+   "ghostSpeed formula"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "ghostSpeed = 4\\.3 \\+ \\(level - 1\\) \\* 0\\.28"
+    },
+    "rids": [
+     "ac4b45b671da2",
+     "r5b33415630b1",
+     "rd7b21db63e23",
+     "r699e53ac880f",
+     "rf0bd2c5188a3",
+     "r8f70ba23ed5b"
+    ],
+    "msgs": [
+     34,
+     61,
+     154,
+     323,
+     511,
+     639
+    ],
+    "segs": [
+     0,
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-12",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "Perché è stato aggiunto un probe che misura i pixel del canvas?",
+  "answer": "il modello non può vedere le immagini",
+  "queries": [
+   "probe pixel canvas",
+   "verifica render immagini",
+   "probe automatico"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "Non posso vedere le immagini|I can't see images",
+     "lo": 118,
+     "hi": 122
+    },
+    "rids": [
+     "r9bf8913a1bda",
+     "te6de03a85b8d"
+    ],
+    "msgs": [
+     121
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-13",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "para": true,
+  "q": "Quante cariche speciali per vita ha il giocatore per rispedire indietro i nemici?",
+  "answer": "tre soffi per vita",
+  "queries": [
+   "cariche speciali per vita",
+   "rispedire indietro nemici potere",
+   "abilità rimanda fantasmi"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "Tre soffi per vita|3 charges|tre soffi"
+    },
+    "rids": [
+     "r19bae999c52e",
+     "t7b0060aea616",
+     "tcc5c0883a7fb",
+     "r1fce8701a0d7"
+    ],
+    "msgs": [
+     621,
+     622,
+     632,
+     807
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-14",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "valore",
+  "q": "Quale tasto attiva il soffio?",
+  "answer": "F o Shift (pulsante SOFFIO su touch)",
+  "queries": [
+   "tasto soffio",
+   "soffio tasto F Shift",
+   "SOFFIO"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "\\*\\*`F`\\*\\* o \\*\\*`Shift`\\*\\*|KeyF",
+     "role": "assistant|assistant-tool-args"
+    },
+    "rids": [
+     "ac3d5020c40b9",
+     "a227a7106d065",
+     "a53fd4561b455",
+     "ab3345d313027",
+     "a608a838374f9",
+     "a87261878874d",
+     "a6652645ea449",
+     "a68059ec76fbb",
+     "a1ba3d4e12a0e",
+     "a12abbcd2c905",
+     "r1fce8701a0d7"
+    ],
+    "msgs": [
+     670,
+     756,
+     758,
+     760,
+     762,
+     766,
+     772,
+     774,
+     778,
+     786,
+     807
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-15",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Che errore ha dato tools/death.mjs la prima volta?",
+  "answer": "TypeError: g.maze.row is not a function",
+  "queries": [
+   "tools/death.mjs errore",
+   "death.mjs TypeError",
+   "is not a function"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "g\\.maze\\.row is not a function",
+     "role": "tool"
+    },
+    "rids": [
+     "r9bb8846e4114"
+    ],
+    "msgs": [
+     73
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-16",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "q": "Che errore dava Chrome headless al primo tentativo di screenshot?",
+  "answer": "Failed to create a unique user data directory for headless",
+  "queries": [
+   "chrome headless errore screenshot",
+   "google-chrome headless errore",
+   "user data directory"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "unique user data directory",
+     "role": "tool"
+    },
+    "rids": [
+     "r50e637650457"
+    ],
+    "msgs": [
+     116
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-17",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "esito",
+  "para": true,
+  "q": "When the user asked whether he could try the game himself, what frame rate did the assistant report?",
+  "answer": "60 fps (server http://127.0.0.1:8123)",
+  "queries": [
+   "user try game frame rate",
+   "posso provarlo anche io",
+   "fps server attivo"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "60 fps",
+     "role": "assistant",
+     "lo": 570,
+     "hi": 580
+    },
+    "rids": [
+     "ra5555580463a"
+    ],
+    "msgs": [
+     577
+    ],
+    "segs": [
+     1
+    ]
+   }
+  ],
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "n2-18",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "ragionamento",
+  "q": "All'inizio il serpente moriva su sé stesso: che problema aveva la trail?",
+  "answer": "non teneva conto della posizione continua della testa: la coda si estendeva nella direzione sbagliata",
+  "queries": [
+   "trail serpente muore su sé stesso",
+   "trail posizione testa",
+   "bug trail coda"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [
+   {
+    "rule": {
+     "re": "trail non teneva conto",
+     "role": "assistant"
+    },
+    "rids": [
+     "r33d944930e19"
+    ],
+    "msgs": [
+     40
+    ],
+    "segs": [
+     0
+    ]
+   }
+  ],
+  "para": false,
+  "neg": false,
+  "calls": []
+ },
+ {
+  "id": "neg-01",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Su che porta girava il server WebSocket del multiplayer?",
+  "answer": null,
+  "queries": [
+   "WebSocket multiplayer porta",
+   "server multiplayer"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-02",
+  "db": "prova-paging",
+  "split": "dev",
+  "ask": 1000,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Quale versione di Phaser è stata installata?",
+  "answer": null,
+  "queries": [
+   "Phaser versione",
+   "npm install phaser"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-03",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Qual era il punteggio record salvato nel database PostgreSQL?",
+  "answer": null,
+  "queries": [
+   "PostgreSQL record punteggio",
+   "database highscore"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-04",
+  "db": "g3",
+  "split": "dev",
+  "ask": 723,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Con quale comando è stato fatto il deploy su Vercel?",
+  "answer": null,
+  "queries": [
+   "deploy Vercel",
+   "vercel deploy comando"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-05",
+  "db": "prova-paging",
+  "split": "test",
+  "ask": 1000,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Quale libreria audio (Howler.js) è stata usata per i suoni delle torri?",
+  "answer": null,
+  "queries": [
+   "Howler.js suoni torri",
+   "libreria audio howler"
+  ],
+  "conv": "caeaa81de2522",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-06",
+  "db": "g3",
+  "split": "test",
+  "ask": 723,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Quante stelle aveva il repository GitHub del progetto?",
+  "answer": null,
+  "queries": [
+   "GitHub stelle repository",
+   "github stars"
+  ],
+  "conv": "c628344a78cc2",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-07",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "negativo",
+  "neg": true,
+  "q": "Qual era l'indirizzo della classifica online dei punteggi (leaderboard)?",
+  "answer": null,
+  "queries": [
+   "leaderboard classifica online",
+   "classifica punteggi indirizzo"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ },
+ {
+  "id": "neg-08",
+  "db": "nibble2",
+  "split": "test",
+  "ask": 1000,
+  "kind": "negativo",
+  "neg": true,
+  "q": "In che formato WebP sono state convertite le texture dei muri?",
+  "answer": null,
+  "queries": [
+   "WebP texture muri",
+   "conversione webp"
+  ],
+  "conv": "cfbb3f8ae1bc8",
+  "evidence": [],
+  "para": false,
+  "calls": []
+ }
+]
