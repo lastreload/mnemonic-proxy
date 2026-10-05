@@ -38,3 +38,4 @@ dist/
 *.tar.*
 *.zip
 *.gz
+uv.lock
