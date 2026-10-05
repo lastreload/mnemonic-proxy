@@ -13,7 +13,14 @@ Il proxy è nato davanti a Strata; qui si descrive il motore e lo si riconosce a
   tokenize      conteggio token esatto lato motore (POST /tokenize di llama-server)
   n_ctx         finestra di contesto (da /props o /slots; Strata: dalla configurazione)
 
-Rilevamento (`detect`): /v1/status con `activity` -> Strata; /props con `default_generation_settings` ->
+ds4-server (https://github.com/antirez/ds4): niente /v1/status, /props, /slots, /tokenize; si riconosce da
+`GET /v1/models`, i cui modelli hanno `owned_by: "ds4.c"` e `context_length` (= --ctx). Salva da solo lo stato su
+disco (`--kv-disk-dir`, checkpoint per prefisso di testo) e ricorda il testo esatto delle tool call per id
+(«exact DSML tool replay»): il proxy quindi non salva né archivia stato (slot_save spento) e non accorcia gli
+argomenti delle chiamate (`mask_tool_args`), perché ds4 rimetterebbe nel prompt il testo originale preso per id.
+
+Rilevamento (`detect`): /v1/status con `activity` -> Strata; /v1/models con `owned_by` "ds4.c" -> ds4;
+/props con `default_generation_settings` ->
 llama.cpp (salvataggi attivi se il server è partito con --slot-save-path: lo si prova con un'azione non valida,
 che risponde 400 "Invalid action" se i salvataggi ci sono e 501 se mancano, senza toccare lo slot); altrimenti
 OpenAI generico. `engine` in configurazione forza il tipo (auto = rileva).
@@ -28,8 +35,9 @@ import dataclasses
 import json
 import os
 
-KINDS = ("strata", "llama.cpp", "openai")
+KINDS = ("strata", "llama.cpp", "ds4", "openai")
 ALIASES = {"llama": "llama.cpp", "llamacpp": "llama.cpp", "llama-server": "llama.cpp", "llama_cpp": "llama.cpp",
+           "ds4-server": "ds4", "ds4.c": "ds4", "dwarfstar": "ds4",
            "generic": "openai", "generic-openai": "openai", "openai-compatible": "openai", "online": "openai"}
 # funzioni che vivono di file di sessione del motore
 NEEDS_SLOTS = ("slot_save", "mask_anchor", "autosave", "autorestore", "seal_experimental", "kv_archive")
@@ -109,6 +117,18 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         if s is None:
             e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
         return e
+    models = _get_json(up, "/v1/models") if kind in ("auto", "ds4") else None
+    ds4_models = [m for m in (models or {}).get("data") or [] if isinstance(m, dict)
+                  and m.get("owned_by") == "ds4.c"] if isinstance(models, dict) else []
+    if kind == "ds4" or (kind == "auto" and ds4_models):
+        e = Engine("ds4", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
+        if ds4_models:
+            m0 = ds4_models[0]
+            e.model = m0.get("name") or m0.get("id")
+            e.n_ctx = int(m0.get("context_length") or 0) or None
+        else:
+            e.notes.append("/v1/models non risponde come ds4-server (motore spento o non raggiungibile)")
+        return e
     props = _get_json(up, "/props") if kind in ("auto", "llama.cpp") else None
     if kind == "llama.cpp" or (kind == "auto" and isinstance(props, dict) and "default_generation_settings" in props):
         e = Engine("llama.cpp", slot_save=False, slot_id=slot_id, status_kind="llama.cpp", tokenize=True,
@@ -167,7 +187,14 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
                 setattr(cfg, f, False)
         if off:
             warn.append("engine %s has no saved-state support: disabled %s" % (engine.kind, ", ".join(off)))
-    if engine.n_ctx and "window" not in explicit and engine.kind == "llama.cpp" and engine.n_ctx != cfg.window:
+    if engine.kind == "ds4" and getattr(cfg, "mask_tool_args", False) and getattr(cfg, "ds4_exact_tool_replay", True):
+        # ds4 rimette nel prompt il testo campionato della chiamata, preso per id: gli argomenti accorciati dal
+        # proxy non arriverebbero al modello (nessun risparmio) ma il proxy li conterebbe come risparmiati
+        cfg.mask_tool_args = False
+        warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
+                    "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
+    if engine.n_ctx and "window" not in explicit and engine.kind in ("llama.cpp", "ds4") \
+            and engine.n_ctx != cfg.window:
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window
         cfg.window = engine.n_ctx

@@ -134,7 +134,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
 ```
 
 The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
-(`--engine auto|strata|llama.cpp|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
+(`--engine auto|strata|llama.cpp|ds4|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
 Saved-state features are off by default; to use them, pass a config file (see [Configuration](#configuration)):
 
 ```sh
@@ -260,6 +260,34 @@ sessions.
   `examples/config.official-strata.json` the one for official Strata.
 - **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
   handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
+- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — experimental, see below.
+
+### ds4-server
+
+ds4-server keeps its own state: with `--kv-disk-dir DIR` it checkpoints the KV cache to disk by text prefix and
+resumes a conversation after a tool call by recognising the tool-call id (exact replay of the sampled call). So the
+proxy does less than with other engines:
+
+```sh
+./ds4-server -m MODEL.gguf --ctx 65536 --port 8110 --kv-disk-dir ./kv
+mnemonic-proxy --upstream http://127.0.0.1:8110 --port 8096 --data ./data --config examples/config.ds4.json
+```
+
+- Detection: `GET /v1/models` with `owned_by: "ds4.c"`; the window is taken from `context_length` (= `--ctx`).
+  `engine: "ds4"` forces it.
+- The proxy does not save, restore or archive engine state (`slot_save`, `mask_anchor`, `autosave`, `kv_archive`
+  are turned off): ds4 does it itself.
+- `mask_tool_args` is turned off: ds4 re-inserts the sampled call text by id, so shortened arguments would not
+  reach the model. Set `ds4_exact_tool_replay: false` only if ds4-server runs with
+  `--disable-exact-dsml-tool-replay`.
+- Tool-call ids pass through unchanged in all three protocols (the id the engine generated reaches the client and
+  comes back identical); internal `recall` calls keep the engine's id and are re-inserted identically next turn.
+- Old reasoning is masked as usual; the last turn with tool calls keeps its reasoning.
+- `checkpoint_align_tokens` (off by default): when set to ds4's checkpoint interval (by default 10240 tokens,
+  `--kv-cache-continued-interval-tokens` rounded to `--kv-cache-boundary-align-tokens`), a masking block starts just
+  after a multiple of it, so fewer tokens are re-read after the last disk checkpoint. Needs an exact `--tokenizer`
+  to be meaningful. Not measured yet.
+- Not proven: long real sessions; parallel sessions (`--batched-session N`) — the proxy still serialises requests.
 
 `GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](docs/dev-notes/ENGINES-RESULT.md) (Italian).
 

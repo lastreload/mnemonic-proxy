@@ -221,6 +221,15 @@ class Config:
     engine: str = "auto"
     slot_id: int = 0                # slot del motore (llama-server con --parallel N)
     engine_tokenize: bool = False   # conteggio token esatto via /tokenize del motore (llama.cpp), se non c'è --tokenizer
+    # ds4-server: ds4 rimette nel prompt le tool call campionate prese per id (exact DSML replay), quindi
+    # mask_tool_args non serve e viene spento; false solo se ds4-server gira con --disable-exact-dsml-tool-replay
+    ds4_exact_tool_replay: bool = True
+    # allineamento dei pacchetti di masking ai checkpoint su disco del motore (ds4: --kv-cache-continued-interval-
+    # tokens arrotondato a --kv-cache-boundary-align-tokens, di serie 10240). 0 = spento. Con N > 0 il primo
+    # messaggio cambiato da un pacchetto viene scelto, fra i primi candidati, in modo da cadere poco dopo un
+    # multiplo di N token (meno token da rileggere dopo l'ultimo checkpoint). Ha senso solo con --tokenizer esatto.
+    checkpoint_align_tokens: int = 0
+    checkpoint_align_slack: float = 0.25   # spreco accettato: frazione di N dopo il multiplo
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
@@ -1613,6 +1622,23 @@ class Manager:
                                      {"tipo": "argomenti", "strumento": ",".join(c["name"] for c in ci),
                                       "path": next((c["path"] for c in ci if c["path"]), None), "eta": age}))
         rows, saved, now, pieces = [], 0, time.time(), []
+        align = int(cfg.checkpoint_align_tokens or 0)
+        offs, acc = [], max(0, est - sum(per))   # testa fissa (strumenti, template) prima del primo messaggio
+        for x in per:
+            offs.append(acc)
+            acc += x
+        skipped = 0
+        all_cand = cand
+        if align > 0 and cand:
+            # primo cambiamento poco dopo un multiplo di `align` (checkpoint del motore): si saltano i primi candidati
+            # finché uno cade entro lo spreco accettato, purché i restanti bastino per un pacchetto
+            for s, c in enumerate(cand):
+                if sum(x[5] for x in cand[s:]) < cfg.min_batch_tokens:
+                    break
+                if offs[c[1]] % align <= cfg.checkpoint_align_slack * align:
+                    skipped = s
+                    break
+            cand = cand[skipped:]
         for i, j, key, rid, n, sv, meta in cand:  # dal più vecchio
             if est - saved <= cfg.mask_target:
                 break
@@ -1623,13 +1649,14 @@ class Manager:
             return None
         self.store.add_masks(rows)
         first = rows[0][2]
-        rest = cand[len(rows):]
+        rest = all_cand[:skipped] + cand[len(rows):]
         frontier = min([c[0] for c in rest] + ([young] if young is not None else []), default=len(msgs))
         reread = sum(per[j] for j, i in enumerate(origin) if i is not None and i >= first)
+        extra = {"align": align, "align_skipped": skipped, "first_offset_est": offs[cand[0][1]]} if align else {}
         return self.journal.log("mask", conv=conv, seg=seg, count=len(rows), tokens_masked=sum(r[4] for r in rows),
                                 tokens_saved=saved, est_before=est, est_after=est - saved,
                                 first_index=first, frontier_index=frontier, floor_index=floor, reread_est=reread,
-                                ids=[r[3] for r in rows][:50], pieces=pieces)
+                                ids=[r[3] for r in rows][:50], pieces=pieces, **extra)
 
     # ---------- segmenti ----------
     def choose_cut(self, msgs, origin, per, start):
