@@ -125,6 +125,7 @@ footer b{color:var(--cy)}
 <section id="numbers">
   <h2>One session, measured</h2>
   <p class="sub">A real coding session — a canvas tower-defense game built from scratch by a 35B-A3B MoE model on a single 12&nbsp;GB RTX&nbsp;4070&nbsp;Ti — with the proxy in between. Nothing was summarized away: every message, tool call and output stays on disk, verbatim, and the model can pull any of it back.</p>
+  <p class="sub">Developed and benchmarked primarily with <a href="https://github.com/Niko1221/Strata">Strata</a>, by Niko1221 and contributors. mnemonic-proxy is an independently maintained project that also supports llama-server and other OpenAI-compatible backends; saved engine state depends on what the backend supports.</p>
   <div class="stats">
     <div class="stat m"><div class="n">448<small>K</small></div><div class="l">tokens of history archived and recallable</div></div>
     <div class="stat"><div class="n">105<small>K</small></div><div class="l">peak tokens actually in the prompt (window: 128K)</div></div>
@@ -177,10 +178,12 @@ footer b{color:var(--cy)}
       <p class="sub">Resuming a conversation instead of re-reading it:</p>
       <table>
         <tr><th>case</th><th>saved</th><th>re-read</th></tr>
-        <tr><td>Strata, 110K tokens, RTX 4070 Ti</td><td class="y">1.4 s</td><td>≈50 s</td></tr>
-        <tr><td>Strata, 69K tokens, after restart</td><td class="y">2.9 s</td><td>33 s</td></tr>
+        <tr><td>Strata (session-files branch), 110K tokens, RTX 4070 Ti</td><td class="y">1.4 s</td><td>≈50 s</td></tr>
+        <tr><td>Strata (session-files branch), 69K tokens, after restart</td><td class="y">2.9 s</td><td>33 s</td></tr>
         <tr><td>llama-server, 8.2K tokens, CPU, Qwen3-0.6B</td><td class="y">1.9 s</td><td>28.6 s</td></tr>
       </table>
+      <p class="cap">Context restore only; loading the model is separate.</p>
+      <p class="sub" style="margin-top:18px"><b>Why it matters.</b> Without saved state, the whole prefill of a long conversation is paid again every time the engine loses it — after a restart, when another client used the engine in between, when the proxy returns to a sealed segment. On a 12&nbsp;GB GPU that is close to a minute for 100K tokens; restoring takes a second or two, from disk, not VRAM. Any client of a local engine benefits, not just this proxy. llama-server has it (<code>--slot-save-path</code>); for Strata it is proposed in <a href="https://github.com/Niko1221/Strata/pull/668">PR&nbsp;#668</a>, not yet merged.</p>
     </div>
   </div>
 </section>
@@ -215,7 +218,7 @@ footer b{color:var(--cy)}
     <li><b>Long-range quality is not free.</b> Of six questions about the first hour of a 3-hour session, four were answered exactly, two partially (one value missed, one timeline mixed up). None were invented.</li>
     <li><b>The model does not attend to 448K tokens.</b> It sees at most one window; the rest is recallable, not "in context".</li>
     <li><b>Segment switches cost ≈2 minutes</b> of note-writing on a 12 GB GPU.</li>
-    <li><b>Saved state on Strata</b> needs our session-files patch (upstream PR pending).</li>
+    <li><b>Saved state on Strata</b> needs our session-files branch until <a href="https://github.com/Niko1221/Strata/pull/668">PR #668</a> is reviewed; official Strata runs in base mode.</li>
     <li><b>Claude Code and Codex adapters</b> are tested against a mock engine, not yet on long real sessions.</li>
     <li><b>The archive is plaintext.</b> It holds everything the agent saw, secrets included. The proxy binds to 127.0.0.1; protect the data folder.</li>
   </ul>
@@ -223,6 +226,7 @@ footer b{color:var(--cy)}
 
 <footer>
   <b>MNEMONIC PROXY</b> · MIT · built by Maurizio Verde — <b>LastReload</b><br>
+  thanks to Niko1221 and the <a href="https://github.com/Niko1221/Strata">Strata</a> contributors for the inference engine behind our measurements, to the <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> contributors for llama-server and its slot API, and to the authors of pi.<br>
   a nod to William Gibson's courier, not affiliated with the story or the film.
 </footer>
 </body>

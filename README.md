@@ -23,6 +23,10 @@ summarized away: every message, tool call and output stays on disk, verbatim, an
 
 It speaks OpenAI Chat Completions, Anthropic Messages and OpenAI Responses. Python ≥ 3.10, standard library only.
 
+Developed and benchmarked primarily with [Strata](https://github.com/Niko1221/Strata), by Niko1221 and contributors.
+mnemonic-proxy is an independently maintained project that also supports llama-server and other OpenAI-compatible
+backends; saved engine state depends on what the backend supports (see [Engines](#engines)).
+
 Project page: <https://lastreload.github.io/mnemonic-proxy/>
 
 ## One session, measured
@@ -98,9 +102,25 @@ Resuming a conversation instead of re-reading it:
 
 | case | saved | re-read |
 |---|---|---|
-| Strata, 110K tokens, RTX 4070 Ti | 1.4 s | ≈50 s |
-| Strata, 69K tokens, after restart | 2.9 s | 33 s |
+| Strata (session-files branch), 110K tokens, RTX 4070 Ti | 1.4 s | ≈50 s |
+| Strata (session-files branch), 69K tokens, after restart | 2.9 s | 33 s |
 | llama-server, 8.2K tokens, CPU, Qwen3-0.6B | 1.9 s | 28.6 s |
+
+Times are for restoring the conversation's context; loading the model is separate.
+
+### Why saved state matters
+
+A long agent conversation is expensive to rebuild: every token of it has to be processed again (prefill) before the
+model can answer. Without saved state that cost is paid again each time the engine loses the conversation — after a
+restart, when another client or conversation used the engine in between, and when the proxy returns to a sealed
+segment. On a single 12 GB GPU that is close to a minute for 100K tokens; restoring the saved state takes a second or
+two, and the state lives on disk, not in VRAM.
+
+This is not specific to the proxy: any client that keeps long conversations on a local engine benefits.
+llama-server already offers it through `--slot-save-path`. For Strata it is proposed in
+[PR #668](https://github.com/Niko1221/Strata/pull/668), which has not been merged; until then it requires building
+Strata from the `session-files` branch (see [Engines](#engines)). This note will be updated when upstream support
+lands.
 
 ## Quick start
 
@@ -356,8 +376,10 @@ definitions for new conversations, the MCP tools, the CLI, startup logs and this
 
 MIT — see [LICENSE](LICENSE). Built by Maurizio Verde — LastReload.
 
-Thanks to [Strata](https://github.com/Niko1221/Strata) by Niko1221 and contributors, which makes a large model usable
-on a single 12 GB GPU and did the actual work in the measurements above, to llama.cpp, and to the authors of pi.
+Thanks to Niko1221 and the [Strata](https://github.com/Niko1221/Strata) contributors for the inference engine that
+made our large-model measurements possible on a single 12 GB GPU; to the [llama.cpp](https://github.com/ggml-org/llama.cpp)
+contributors for llama-server and its slot save/restore API; and to the authors of pi for the coding agent used in our
+experiments.
 
 The name is a nod to William Gibson's courier, not affiliated with the story or the film.
 
