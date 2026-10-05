@@ -57,9 +57,16 @@ def run(session, pi_req, cfg: Config, tc: TokenCounter, label: str, out_dir: str
                     k += 1
             reread = p.est_tokens if prev is None else sum(per[k:])
             mk = [e for e in evs if e["event"] == "mask"]
+            ar = [e for e in evs if e["event"] == "auto_recall"]
+            inv = p.invalidated or {}
             series.append({"i": len(series), "ts": r["timestamp"], "virtual": p.virtual_tokens,
                            "physical": p.est_tokens, "reread": reread, "seg": p.seg, "masked": p.masked,
                            "masked_saved": p.masked_saved,
+                           "invalidated": inv.get("tokens", 0), "invalidated_cause": inv.get("cause"),
+                           "fixed": mgr.estimate(p.messages[:1], p.tools)[0],
+                           "auto_recall": [{k2: e.get(k2) for k2 in ("trigger", "injected", "tokens", "pieces",
+                                                                      "candidates", "terms")} for e in ar],
+                           "s_over_delta": [e.get("s_over_delta") for e in mk],
                            "events": sorted({e["event"] for e in evs} - {"new_conversation", "request"}),
                            "mask": [{k2: e.get(k2) for k2 in ("count", "tokens_saved", "tokens_saved_measured",
                                                              "est_before", "est_after_measured", "by_kind")}
@@ -81,6 +88,21 @@ def run(session, pi_req, cfg: Config, tc: TokenCounter, label: str, out_dir: str
     for x in series:
         for e in x["events"]:
             s["events"][e] = s["events"].get(e, 0) + 1
+    by_cause: dict = {}
+    for x in series:
+        if x["invalidated"]:
+            c = x["invalidated_cause"] or "?"
+            by_cause[c] = by_cause.get(c, 0) + x["invalidated"]
+    ars = [a for x in series for a in x["auto_recall"]]
+    sd = [v for x in series for v in x["s_over_delta"] if v is not None]
+    s.update({"fixed_tokens": series[0]["fixed"], "invalidated_total": sum(x["invalidated"] for x in series),
+              "invalidated_by_cause": by_cause,
+              "switch_at": [x["i"] for x in series if "switch" in x["events"]],
+              "auto_recall": {"triggers": len(ars), "injections": sum(1 for a in ars if a["injected"]),
+                              "pieces": sum(a["injected"] or 0 for a in ars),
+                              "tokens": sum(a["tokens"] or 0 for a in ars)},
+              "s_over_delta": {"n": len(sd), "min": min(sd, default=None), "max": max(sd, default=None),
+                               "mean": round(sum(sd) / len(sd), 3) if sd else None}})
     md = [(b["tokens_saved"], b["tokens_saved_measured"]) for x in series for b in x["mask"]
           if b.get("tokens_saved_measured") is not None]
     if md:

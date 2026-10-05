@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -158,7 +159,8 @@ class State:
                         "virtual": v if v is not None else est, "virtual_src": "proxy" if v is not None else "stima",
                         "reused": e.get("reused"), "read": e.get("prompt_read"), "prompt_ms": e.get("prompt_ms"),
                         "out": e.get("completion_tokens"), "ms": e.get("ms"), "finish": e.get("finish"),
-                        "messages": e.get("messages")})
+                        "messages": e.get("messages"),
+                        "inval": e.get("invalidated_suffix_tokens"), "inval_cause": e.get("invalidated_cause")})
             self.done = start + len(evs)
             if len(self.series) > MAX_EVENTS:
                 del self.series[:len(self.series) - MAX_EVENTS]
@@ -210,6 +212,48 @@ class State:
         return out
 
 
+def export_history(db_path: str, conv: str) -> list[dict]:
+    """Storia virtuale completa di una conversazione dall'archivio del proxy (anche le parti nascoste al modello).
+
+    Per ogni indice di messaggio l'ultima versione vista di ciascuna parte (testo, ragionamento, argomenti delle
+    chiamate): con i rami la storia è quella dell'ultimo ramo, come la vede il client. Solo lettura."""
+    db = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=2.0)
+    try:
+        rows = db.execute("SELECT idx, role, name, content, tokens, created FROM archive WHERE conv = ? "
+                          "ORDER BY idx, created", (conv,)).fetchall()
+    finally:
+        db.close()
+    last: dict[int, dict] = {}
+    for idx, role, name, content, tokens, created in rows:
+        part = {"assistant-reasoning": "reasoning", "assistant-tool-args": "tool_args"}.get(role, "content")
+        m = last.setdefault(idx, {"idx": idx, "role": "assistant" if role.startswith("assistant") else role})
+        if part == "content":
+            m["role"] = role
+            if name:
+                m["name"] = name
+        m[part] = content or ""
+        m.setdefault("tokens", {})[part] = tokens
+        m["ts"] = max(m.get("ts", 0), created or 0)
+    return [last[k] for k in sorted(last)]
+
+
+def history_markdown(conv: str, msgs: list[dict]) -> str:
+    tot = sum(sum((m.get("tokens") or {}).values()) for m in msgs)
+    out = ["# Storia virtuale — conv %s\n" % conv,
+           "- esportata: %s" % time.strftime("%Y-%m-%d %H:%M:%S"),
+           "- messaggi: %d · token (stima dell'archivio): %d" % (len(msgs), tot),
+           "- fonte: archivio del proxy (comprende le parti nascoste al modello)\n"]
+    for m in msgs:
+        when = time.strftime("%H:%M:%S", time.localtime(m["ts"])) if m.get("ts") else ""
+        out.append("## #%d %s%s %s\n" % (m["idx"], m["role"], " (%s)" % m["name"] if m.get("name") else "", when))
+        for part, title in (("reasoning", "ragionamento"), ("content", None), ("tool_args", "chiamate")):
+            if m.get(part):
+                if title:
+                    out.append("*%s*\n" % title)
+                out.append("~~~~text\n%s\n~~~~\n" % m[part])
+    return "\n".join(out)
+
+
 def make_handler(state: State):
     page = os.path.join(HERE, "index.html")
 
@@ -247,6 +291,27 @@ def make_handler(state: State):
             if path == "/api/marks" and args.get("conv"):
                 st, data = proxy_call(state.proxy + "/v1/strata/marks/" + args["conv"])
                 return self._send(st, data, "application/json")
+            if path == "/api/export" and args.get("conv"):
+                conv = urllib.parse.unquote(args["conv"])
+                fmt = args.get("fmt", "md")
+                try:
+                    rows = export_history(os.path.join(state.data, "archive.sqlite"), conv)
+                except sqlite3.Error as e:
+                    return self._send(500, json.dumps({"error": str(e)}).encode(), "application/json")
+                name = "storia-%s-%s.%s" % (conv, time.strftime("%Y%m%d-%H%M%S"), "json" if fmt == "json" else "md")
+                if fmt == "json":
+                    data, ctype = json.dumps({"conv": conv, "messages": rows}, ensure_ascii=False, indent=1), \
+                        "application/json; charset=utf-8"
+                else:
+                    data, ctype = history_markdown(conv, rows), "text/markdown; charset=utf-8"
+                self.send_response(200)
+                body = data.encode("utf-8")
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Disposition", 'attachment; filename="%s"' % name)
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return self.wfile.write(body)
             self._send(404, b'{"error": "not found"}', "application/json")
 
         def do_POST(self):

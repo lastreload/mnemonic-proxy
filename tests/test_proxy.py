@@ -11,7 +11,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ctxproxy.core import (NOTES_MARK, OUT_PREFIX, RECALL_NAME, Config, Journal, Manager, Store,  # noqa: E402
+from ctxproxy.core import (NOTES_MARK, OUT_PREFIX, RECEIPT_OPEN, RECALL_NAME, Config, Journal, Manager, Store,  # noqa: E402
                            TokenCounter, chain, is_human_user)
 from ctxproxy.server import Proxy, make_handler  # noqa: E402
 from ctxproxy.upstream import Upstream  # noqa: E402
@@ -153,11 +153,11 @@ class TestMasking(Base):
         self.assertEqual(big, len(masks), read)
         # segnaposto presenti, coda recente intatta, coppie tool integre
         last = self.eng.requests[-1]["messages"]
-        ph = [m for m in last if m.get("role") == "tool" and m["content"].startswith(OUT_PREFIX)]
+        ph = [m for m in last if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
         self.assertGreater(len(ph), 5)
         # provenienza: comando di origine + inizio vero dell'uscita + istruzione
         self.assertIn("bash `", ph[0]["content"])
-        self.assertIn("Inizio:", ph[0]["content"])
+        self.assertRegex(ph[0]["content"], r"Inizio:|Ricevuta:")
         self.assertIn("strata_recall id=", ph[0]["content"])
         self.assertFalse(last[-1]["content"].startswith("[uscita"))
         assert_tool_pairs(self, last)

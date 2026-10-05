@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ctxproxy.core import (DROP_SUFFIX, OUT_PREFIX, PIN_HEAD, Config, Journal, Manager, Store,  # noqa: E402
+from ctxproxy.core import (DROP_SUFFIX, OUT_PREFIX, RECEIPT_OPEN, PIN_HEAD, Config, Journal, Manager, Store,  # noqa: E402
                            TokenCounter, call_note_text, chain, is_disposable, outcome, pin_texts)
 from ctxproxy.render import render_pieces  # noqa: E402
 
@@ -87,11 +87,11 @@ class TestManager(unittest.TestCase):
         msgs = session()
         p = self.prep(mgr, msgs)
         self.assertGreater(p.masked, 0)
-        ph = [m for m in p.messages if m.get("role") == "tool" and m["content"].startswith(OUT_PREFIX)]
+        ph = [m for m in p.messages if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
         self.assertTrue(ph)
         for m in ph:
             self.assertRegex(m["content"], r"uscita di (read src/f\d\.js|bash `node test\.js)")
-            self.assertIn("Inizio: «", m["content"])
+            self.assertRegex(m["content"], r"Inizio: «|Ricevuta: ")
         for m in p.messages:
             if m.get("role") == "assistant":
                 # mai segnaposti dove scrive il modello

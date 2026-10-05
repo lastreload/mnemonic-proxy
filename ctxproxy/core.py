@@ -22,7 +22,9 @@ import threading
 import time
 import uuid
 
+from .paging import AUTO_HEAD, TOOLS_NAME, ToolPager, query_terms, typed_receipt
 from .render import message_piece, render_pieces, template_kwargs
+from .tooldefs import ToolShortener
 
 RECALL_NAME = "strata_recall"
 PLACEHOLDER = "[uscita strumento omessa: {n} token \u2014 recall:{rid}]"   # formato vecchio (solo riconoscimento)
@@ -32,6 +34,14 @@ THINK_PLACEHOLDER = "[ragionamento omesso: {n} token \u2014 recall:{rid}]"
 OUT_PLACEHOLDER = ("[gestore del contesto: uscita di {origin} nascosta per spazio ({n} token). Inizio: \u00ab{head}\u00bb. "
                    "Testo esatto: strata_recall id={rid}. Per lo stato ATTUALE rileggi il file o riesegui il comando.]")
 OUT_PREFIX = "[gestore del contesto: uscita di "
+# Ricevuta tipizzata (card t_00c5aef6, ricerca §5 e §19; delimitatore fuori vocabolario come da RICERCA-3): al posto
+# dell'«Inizio» una ricevuta secondo il tipo (scrittura/modifica, shell ok/errore, test, lettura). Solo nel RISULTATO
+# dello strumento. Il delimitatore ⟪ctx-archive …⟫ non compare nel codice vero: la guardia in uscita (server.py) blocca
+# le chiamate con effetti che lo contengono.
+RECEIPT_OPEN = "\u27eactx-archive"
+OUT_RECEIPT = ("\u27eactx-archive id={rid} \u00b7 uscita di {origin} \u00b7 questo agente \u00b7 nascosta per spazio "
+               "({n} token)\u27eb Ricevuta: {receipt}. Testo esatto: strata_recall id={rid}. Per lo stato ATTUALE "
+               "rileggi il file o riesegui il comando.")
 DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb concluso e nascosto ({n} token). Effetti: {fx}. "
              "Testo completo: strata_recall id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
@@ -112,7 +122,28 @@ class Config:
     recall_max_chars: int = 24000
     recall_max_tokens: int = 6000   # tetto in TOKEN per risultato recall (il limite in caratteri non basta)
     max_recall_rounds: int = 4
-    # punti fermi / usa e getta
+    # definizioni strumenti accorciate (tooldefs.py, TOOLDEFS-RESULT.md): 0 = spento (default). Testi deterministici
+    # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (strata_recall è del proxy: già corto)
+    tooldefs_desc_max: int = 0      # caratteri massimi della description di uno strumento
+    tooldefs_param_max: int = 0     # caratteri massimi della description di ogni parametro (anche annidati)
+    tooldefs_keep: tuple = (RECALL_NAME, "read", "bash", "edit", "write", "grep", "find", "ls")  # usati sempre, corti
+    # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + strata_recall + strata_tools;
+    # gli altri si caricano con strata_tools (definizione nel risultato, in coda: il prefisso non cambia)
+    tools_paging: bool = False
+    tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
+    tools_load_max: int = 5
+    # ricevute tipizzate al posto dell'«Inizio» nei segnaposti delle uscite nascoste
+    typed_receipts: bool = True
+    receipt_guard: bool = True           # blocca write/edit/bash che contengono ricevute/segnaposti copiati
+    # richiamo automatico bm25 (ricerca §6-8): a ogni nuova richiesta dell'utente, pezzi NASCOSTI pertinenti in coda
+    auto_recall: bool = False
+    auto_recall_on_error: bool = False   # anche dopo un risultato di strumento fallito
+    auto_recall_k: int = 4               # pezzi massimi
+    auto_recall_max_tokens: int = 4000   # tetto del messaggio iniettato
+    auto_recall_piece_tokens: int = 1200 # tetto per pezzo
+    auto_recall_min_score: float = 8.0   # soglia su -bm25 (FTS5)
+    auto_recall_min_terms: int = 2       # termini distinti della query presenti nel pezzo
+    # punti fermi / usa e getta (NEXT.md 11-12)
     pins_max_tokens: int = 8192     # tetto del blocco "Punti fermi" copiato al cambio di segmento
     # stima token
     chars_per_token: float = 3.5
@@ -218,6 +249,7 @@ def tid_for(idx: int, m: dict) -> str:
 THINK_SUFFIX = ":think"
 ARGS_SUFFIX = ":args"
 DROP_SUFFIX = ":drop"
+AUTO_SUFFIX = ":auto"
 
 
 def aid_for(idx: int, m: dict) -> str:
@@ -586,6 +618,23 @@ class Store:
             except sqlite3.OperationalError:
                 return []
 
+    def search_fts_scored(self, conv: str, terms: list[str], limit: int = 50, max_idx: int | None = None):
+        """FTS5 OR dei termini dati -> righe (rid, idx, role, name, content, tokens, score) con score = -bm25 (più
+        alto = più pertinente), ordinate per score e poi per idx (deterministico)."""
+        if not self.fts or not terms:
+            return []
+        q = " OR ".join('"%s"' % t.replace('"', "") for t in terms if t)
+        with self.lock:
+            try:
+                rows = self.db.execute(
+                    "SELECT a.rid, a.idx, a.role, a.name, a.content, a.tokens, -bm25(archive_fts) AS s "
+                    "FROM archive_fts f JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? "
+                    "AND a.idx < ? ORDER BY s DESC, a.idx DESC LIMIT ?",
+                    (q, conv, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
+            except sqlite3.OperationalError:
+                return []
+        return rows
+
     # ---------- punti fermi / usa e getta ----------
     def pins(self, conv: str, active_only: bool = True):
         with self.lock:
@@ -769,6 +818,8 @@ class Prepared:
     masked: int
     masked_tokens: int            # token ARCHIVIATI dei pezzi nascosti (testo originale)
     masked_saved: int = 0         # riduzione fisica misurata (somma dei Δ dei pacchetti)
+    catalog: dict = dataclasses.field(default_factory=dict)      # strumenti caricabili con strata_tools
+    invalidated: dict = dataclasses.field(default_factory=dict)  # token di cache invalidati e causa
 
 
 class Manager:
@@ -779,6 +830,9 @@ class Manager:
         self.cfg, self.store, self.tc, self.journal = cfg, store, counter, journal
         self.kw: dict = {}        # kwargs del template della richiesta corrente (reasoning_effort, ...)
         self._fileops_seen: dict[str, int] = {}
+        self.shorten_tools = ToolShortener(cfg.tooldefs_desc_max, cfg.tooldefs_param_max, cfg.tooldefs_keep)
+        self.pager = ToolPager(tuple(cfg.tools_core) + (RECALL_NAME, TOOLS_NAME))
+        self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -824,6 +878,16 @@ class Manager:
         return self.tools_tokens(tools) + sum(per) + 3, per
 
     # ---------- costruzione del prompt fisico ----------
+    def out_placeholder(self, info: dict | None, orig: str, n: int, rid: str, rid_args: str | None = None) -> str:
+        """Segnaposto di un'uscita nascosta: ricevuta tipizzata (paging.typed_receipt) o, se il tipo non è
+        riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
+        if self.cfg.typed_receipts:
+            failed = outcome((info or {}).get("name") or "", orig) == "fallito"
+            kind, rec = typed_receipt(info, orig, failed, rid_args)
+            if rec:
+                return OUT_RECEIPT.format(origin=origin_text(info), n=n, rid=rid, receipt=rec)
+        return OUT_PLACEHOLDER.format(origin=origin_text(info), n=n, rid=rid,
+                                      head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
     def _segment_for(self, conv: str, hs: list[str]):
         segs = self.store.segments(conv) if conv else []
         for seg, cut_idx, cut_h, notes_msg, kind in segs:
@@ -835,7 +899,7 @@ class Manager:
         """-> (fisico, origine) dove origine[j] = indice client del messaggio fisico j, o None (testa/interni)."""
         masks = self.store.masks_for(hs[start:] + [h + THINK_SUFFIX for h in hs[start:]]
                                      + [h + ARGS_SUFFIX for h in hs[start:]] + [h + DROP_SUFFIX for h in hs[start:]])
-        inserts = self.store.inserts_for(hs[start:])
+        inserts = self.store.inserts_for(hs[start:] + [h + AUTO_SUFFIX for h in hs[start:]])
         phys, origin = [], []
         if notes_msg is not None:
             if msgs and msgs[0].get("role") in ("system", "developer"):
@@ -846,6 +910,7 @@ class Manager:
         strip = None
         pend_notes = {}
         calls: dict = {}          # tool_call_id -> call_info (provenienza delle uscite)
+        call_aid: dict = {}       # tool_call_id -> id d'archivio degli argomenti
         hidden_to = -1            # scambio usa e getta nascosto: messaggi client fino a questo indice esclusi
         for i in range(start, len(msgs)):
             m = msgs[i]
@@ -853,6 +918,9 @@ class Manager:
                 continue
             if m.get("role") == "assistant":
                 calls.update(call_info(m))
+                if m.get("tool_calls"):
+                    a_id = aid_for(i, m)
+                    call_aid.update({c.get("id"): a_id for c in m["tool_calls"]})
             dk = masks.get(hs[i] + DROP_SUFFIX)
             if dk and is_human_user(m):
                 end = self.exchange_end(msgs, i)
@@ -868,9 +936,8 @@ class Manager:
             if mk and m.get("role") == "tool":
                 info = calls.get(m.get("tool_call_id"))
                 orig = content_text(msgs[i].get("content"))
-                m = {**m, "content": OUT_PLACEHOLDER.format(origin=origin_text(info), n=mk[1], rid=mk[0],
-                                                            head=head_text(orig).replace("\u00bb", "\"")
-                                                            .replace("\u00ab", "\""))}
+                m = {**m, "content": self.out_placeholder(info, orig, mk[1], mk[0],
+                                                          call_aid.get(m.get("tool_call_id")))}
             if m.get("role") == "tool" and m.get("tool_call_id") in pend_notes:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
@@ -904,6 +971,10 @@ class Manager:
                     m["reasoning_content"] = r[len(strip["strip_reasoning"]):]
             strip = None
             phys.append(m); origin.append(i)
+            ains = inserts.get(hs[i] + AUTO_SUFFIX)
+            if ains:                   # richiamo automatico deciso a quel turno: reinserito identico
+                for x in ains["msgs"]:
+                    phys.append(x); origin.append(None)
             ins = inserts.get(hs[i])
             if ins:
                 for x in ins["msgs"]:
@@ -962,9 +1033,14 @@ class Manager:
         events.extend(self._scan_marks(conv, msgs, hs))
         events.extend(self._scan_fileops(conv, msgs))
 
-        tools = list(client_tools or [])
+        tools = list(self.shorten_tools(client_tools) or [])
+        catalog: dict = {}
+        if cfg.tools_paging:
+            tools, catalog = self.pager.split(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == RECALL_NAME for t in tools):
             tools.append(RECALL_TOOL)
+        if catalog:
+            tools.append(self.pager.tools_tool(catalog))
 
         seg, start, notes_msg, _, had_segments = self._segment_for(conv, hs)
         if upstream is not None and hasattr(upstream, "ctx"):
@@ -1006,12 +1082,192 @@ class Manager:
             phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
             est, per = self.estimate(phys, tools)
 
+        # ---- richiamo automatico (spento di serie): pezzi nascosti pertinenti in coda, deciso una volta ----
+        if cfg.auto_recall and msgs and len(hs) == len(msgs):
+            ev = self._auto_recall(conv, msgs, hs, start, phys, est, resp)
+            if ev is not None:
+                events.append(ev)
+                if ev.get("injected"):
+                    phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                    est, per = self.estimate(phys, tools)
+
         masks = self.store.masks_for(hs + [h + THINK_SUFFIX for h in hs] + [h + ARGS_SUFFIX for h in hs]
                                      + [h + DROP_SUFFIX for h in hs])
+        inv = self._invalidation(conv, phys, tools, per, est, events)
+        for ev in events:
+            if ev.get("event") == "mask":
+                # regola di convenienza (ricerca §2): S = token da rileggere, Δ = token tolti; conviene se il
+                # risparmio dura più di S/Δ turni. Solo misura.
+                d = ev.get("tokens_saved_measured") or ev.get("tokens_saved") or 0
+                s_meas = inv.get("tokens") if inv.get("cause") == "blocco" else None
+                rec = {"conv": conv, "seg": seg or 0, "S_planned": ev.get("reread_est"), "S_measured": s_meas,
+                       "delta": d, "ratio_planned": round(ev.get("reread_est", 0) / d, 3) if d else None,
+                       "ratio_measured": round(s_meas / d, 3) if d and s_meas is not None else None,
+                       "first_index": ev.get("first_index"), "count": ev.get("count")}
+                ev["s_over_delta"] = rec["ratio_measured"] if rec["ratio_measured"] is not None \
+                    else rec["ratio_planned"]
+                self.journal.log("mask_cost", **rec)
         return Prepared(conv=conv, messages=phys, tools=tools, hs=hs, seg=seg or 0, est_tokens=est,
                         virtual_tokens=virtual, events=events, masked=len(masks),
                         masked_tokens=sum(n for _, n in masks.values()),
-                        masked_saved=self.store.masks_saved(list(masks)))
+                        masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
+                        invalidated=inv)
+
+    # ---------- misura: token di cache invalidati (ricerca §21) ----------
+    def _invalidation(self, conv, phys, tools, per, est, events) -> dict:
+        """Confronto col prompt fisico precedente della stessa conversazione: token del prompt precedente che stanno
+        dopo la prima differenza (quindi persi dalla cache a prefisso e da rileggere). Causa: tipo del primo
+        messaggio diverso / eventi di questa richiesta."""
+        cur = [canon(m) + "\x00" + (m.get("reasoning_content") or "") for m in phys]
+        th = H(json.dumps(tools or [], sort_keys=True, ensure_ascii=False), json.dumps(self.kw, sort_keys=True))
+        prev = self._last_phys.get(conv)
+        self._last_phys[conv] = (cur, list(per), est, th, phys)
+        if len(self._last_phys) > 64:
+            self._last_phys.pop(next(iter(self._last_phys)))
+        if prev is None:
+            return {"tokens": 0, "cause": "prima", "first_diff": None}
+        pcur, pper, pest, pth, pphys = prev
+        if pth != th:
+            cause = "strumenti" if self.cfg.tools_paging else "testa"
+            return {"tokens": pest, "cause": cause, "first_diff": 0}
+        k = 0
+        for a, b in zip(pcur, cur):
+            if a != b:
+                break
+            k += 1
+        if k >= len(pcur):
+            return {"tokens": 0, "cause": None, "first_diff": None}
+        lost = sum(pper[k:])
+        names = {e.get("event") for e in events}
+
+        def kind(m):
+            c = content_text((m or {}).get("content"))
+            if c.startswith(AUTO_HEAD):
+                return "richiamo_automatico"
+            if m and m.get("role") == "tool" and c.startswith("[strata_tools"):
+                return "strumenti"
+            return None
+        cause = kind(pphys[k] if k < len(pphys) else None) or kind(phys[k] if k < len(phys) else None)
+        if cause is None:
+            cause = "segmento" if "switch" in names else "blocco" if "mask" in names else \
+                "client" if names & {"branch", "new_conversation"} else "altro"
+        return {"tokens": lost, "cause": cause, "first_diff": k}
+
+    # ---------- richiamo automatico (ricerca §6-8) ----------
+    def _hidden_rids(self, msgs, hs, start) -> set:
+        """id d'archivio dei pezzi della storia corrente che NON sono nel prompt fisico: uscite/ragionamenti/argomenti
+        nascosti (tabella masks per questa catena) e messaggi prima del taglio di segmento."""
+        masks = self.store.masks_for(hs + [h + THINK_SUFFIX for h in hs] + [h + ARGS_SUFFIX for h in hs])
+        out = {rid for rid, _ in masks.values()}
+        for i in range(1, min(start, len(msgs))):
+            m = msgs[i]
+            out.add(rid_for(i, m))
+            if m.get("role") == "assistant":
+                if m.get("reasoning_content"):
+                    out.add(tid_for(i, m))
+                if m.get("tool_calls"):
+                    out.add(aid_for(i, m))
+        return out
+
+    def _auto_query(self, msgs, trigger_idx) -> tuple[str, list[str]]:
+        """Query deterministica: richiesta corrente, file toccati di recente, errori recenti, ultimo comando."""
+        user = ""
+        for k in range(trigger_idx, -1, -1):
+            if is_human_user(msgs[k]):
+                user = content_text(msgs[k].get("content"))
+                break
+        files, errors, last_cmd, calls = [], [], "", {}
+        lo = max(0, trigger_idx - 40)
+        for m in msgs[lo:trigger_idx + 1]:
+            if m.get("role") == "assistant":
+                ci = call_info(m)
+                calls.update(ci)
+                for c in ci.values():
+                    if c["path"] and c["path"] not in files:
+                        files.append(c["path"])
+                    if c["cmd"]:
+                        last_cmd = c["cmd"]
+            elif m.get("role") == "tool":
+                info = calls.get(m.get("tool_call_id"))
+                txt = content_text(m.get("content"))
+                if outcome((info or {}).get("name") or "", txt) == "fallito":
+                    errors.append(next((l for l in txt.splitlines() if _FAIL.search(l)), txt[:200])[:200])
+        if is_human_user(msgs[trigger_idx]):
+            errors = errors[-1:]
+        terms = query_terms(user, files[-4:][::-1], errors[-2:], last_cmd)
+        return user, terms
+
+    def _auto_recall(self, conv, msgs, hs, start, phys, est, resp) -> dict | None:
+        cfg = self.cfg
+        i = len(msgs) - 1
+        last = msgs[i]
+        trig = None
+        if is_human_user(last):
+            trig = "utente"
+        elif cfg.auto_recall_on_error and last.get("role") == "tool":
+            ci = {}
+            for m in msgs[max(0, i - 8):i]:
+                if m.get("role") == "assistant":
+                    ci.update(call_info(m))
+            info = ci.get(last.get("tool_call_id"))
+            if outcome((info or {}).get("name") or "", content_text(last.get("content"))) == "fallito":
+                trig = "errore"
+        if trig is None:
+            return None
+        key = hs[i] + AUTO_SUFFIX
+        if self.store.inserts_for([key]):
+            return None                     # già deciso a una richiesta precedente: build() lo reinserisce
+        user, terms = self._auto_query(msgs, i)
+        hidden = self._hidden_rids(msgs, hs, start)
+        already = set()
+        for m in phys:
+            c = content_text(m.get("content"))
+            if c.startswith(AUTO_HEAD) or c.startswith("[recall:"):
+                already.update(re.findall(r"id=([rta][0-9a-f]{12})", c))
+        t0 = time.time()
+        hits = self.store.search_fts_scored(conv, terms, limit=80, max_idx=i) if hidden and terms else []
+        cands = []
+        for rid, idx, role, name, content, tokens, score in hits:
+            if rid not in hidden or rid in already or not content:
+                continue
+            low = content.lower()
+            matched = [t for t in terms if t in low]
+            if score < cfg.auto_recall_min_score or len(matched) < cfg.auto_recall_min_terms:
+                continue
+            cands.append((rid, idx, role, name, content, tokens, score, matched))
+        room = cfg.window - cfg.reserve - resp - est - 64
+        budget = min(cfg.auto_recall_max_tokens, max(0, room))
+        head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
+                "richiesta qui sopra (trovati dal gestore del contesto, non scritti dall'utente). Testo vero, "
+                "eventualmente estratto; testo intero con strata_recall id=<id>. Lo stato attuale dei file può "
+                "essere diverso: se serve, rileggili.")
+        blocks, used, chosen = [], self.tc.count(head), []
+        for rid, idx, role, name, content, tokens, score, matched in cands[:cfg.auto_recall_k * 3]:
+            if len(chosen) >= cfg.auto_recall_k:
+                break
+            low = content.lower()
+            p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
+            s = content[max(0, p - 300):p + 2400]
+            what = {"tool": "uscita di strumento", "assistant-reasoning": "ragionamento",
+                    "assistant-tool-args": "argomenti di chiamata", "user": "messaggio dell'utente",
+                    "assistant": "risposta dell'assistente"}.get(role, role)
+            b = "\n--- id=%s · messaggio %d (%s) · %d token%s\n" % (
+                rid, idx + 1, what, tokens, "" if len(s) >= len(content) else " · estratto")
+            b += self.fit_tokens(s, cfg.auto_recall_piece_tokens) if self.tc.count(s) > cfg.auto_recall_piece_tokens \
+                else s
+            t = self.tc.count(b)
+            if used + t > budget:
+                continue
+            blocks.append(b)
+            used += t
+            chosen.append({"rid": rid, "idx": idx, "role": role, "score": round(score, 2), "tokens": t,
+                           "matched": matched[:8]})
+        msgs_ins = [{"role": "user", "content": head + "".join(blocks)}] if chosen else []
+        self.store.add_insert(key, conv, msgs_ins)
+        return self.journal.log("auto_recall", conv=conv, trigger=trig, index=i, terms=terms,
+                                candidates=len(cands), hidden=len(hidden), injected=len(chosen),
+                                tokens=used if chosen else 0, pieces=chosen, budget=budget,
+                                ms=round((time.time() - t0) * 1000, 1), last_user=user[:300])
 
     # ---------- registro delle operazioni sui file ----------
     def _scan_fileops(self, conv: str, msgs: list) -> list:
@@ -1094,9 +1350,13 @@ class Manager:
         drops = self.store.drops(conv)
         exact = self.tc.exact
         calls: dict = {}
-        for mm in msgs:
+        call_aid: dict = {}
+        for k, mm in enumerate(msgs):
             if mm.get("role") == "assistant":
                 calls.update(call_info(mm))
+                if mm.get("tool_calls"):
+                    a_id = aid_for(k, mm)
+                    call_aid.update({c.get("id"): a_id for c in mm["tool_calls"]})
         phys_of = {i: j for j, i in enumerate(origin) if i is not None}
         cand = []  # (indice client, indice fisico, chiave, id, token archiviati, risparmio, meta)
         young = None  # primo messaggio ancora non mascherabile per età/coda: un pacchetto futuro potrà toccarlo
@@ -1129,7 +1389,7 @@ class Manager:
                         continue
             if m.get("role") == "tool":
                 txt = content_text(m.get("content"))
-                if txt.startswith("[uscita strumento omessa:") or OUT_PREFIX in txt:
+                if txt.startswith("[uscita strumento omessa:") or OUT_PREFIX in txt or RECEIPT_OPEN in txt:
                     continue
                 n = self.msg_tokens(m, False)
                 if n >= cfg.min_mask_tokens:
@@ -1138,9 +1398,8 @@ class Manager:
                     # build() antepone la nota della chiamata anche al segnaposto: va contata in entrambi i lati
                     note = txt[:len(txt) - len(orig)] if txt.endswith(orig) and txt != orig else ""
                     n_orig = self.msg_tokens(msgs[i], False)
-                    ph = {**m, "content": note + OUT_PLACEHOLDER.format(
-                        origin=origin_text(info), n=n_orig, rid=rid_for(i, msgs[i]),
-                        head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))}
+                    ph = {**m, "content": note + self.out_placeholder(info, orig, n_orig, rid_for(i, msgs[i]),
+                                                                      call_aid.get(m.get("tool_call_id")))}
                     sv = n - self.msg_tokens(ph, False)
                     cand.append((i, j, hs[i], rid_for(i, msgs[i]), n_orig, sv,
                                  {"tipo": "uscita", "strumento": (info or {}).get("name"),

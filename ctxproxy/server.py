@@ -22,6 +22,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text, is_human_user
+from .paging import GUARD_MSG, GUARD_NAMES, TOOLS_NAME, receipt_contaminated
 from .upstream import Upstream, UpstreamError
 
 LIMIT_MSG = ("strata_recall: limite di ricerche raggiunto per questa risposta. Non chiamare più "
@@ -112,6 +113,8 @@ class Proxy:
         stream_state = {"sent_role": False, "client_calls": 0} if emit else None
         for rnd in range(self.cfg.max_recall_rounds + 2):
             self._live(p, phys, rnd, body)
+            if stream_state is not None:
+                stream_state["internal"] = self._internal_names(p, phys)
             try:
                 if emit:
                     resp = self._round({**body, "messages": phys, "tools": p.tools}, emit, stream_state)
@@ -128,7 +131,10 @@ class Proxy:
             self._live(p, phys, rnd, body, resp)
             msg = resp["choices"][0]["message"]
             calls = msg.get("tool_calls") or []
-            mine = [c for c in calls if (c.get("function") or {}).get("name") == RECALL_NAME]
+            internal_names = self._internal_names(p, phys)
+            blocked = [c for c in calls if self.cfg.receipt_guard and receipt_contaminated(
+                (c.get("function") or {}).get("name"), (c.get("function") or {}).get("arguments"))]
+            mine = [c for c in calls if (c.get("function") or {}).get("name") in internal_names or c in blocked]
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
@@ -138,7 +144,8 @@ class Proxy:
                 if not others:
                     msg.pop("tool_calls", None)
                     resp["choices"][0]["finish_reason"] = "stop"
-                self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd)
+                self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
+                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}))
                 break
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
             amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
@@ -152,7 +159,25 @@ class Proxy:
             for c in mine:
                 ts = time.time()
                 a = (c.get("function") or {}).get("arguments")
+                cname = (c.get("function") or {}).get("name")
                 meta: list = []
+                if c in blocked:
+                    out = GUARD_MSG
+                    new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
+                    self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500])
+                    if emit:
+                        info = "\n[gestore del contesto: chiamata %s bloccata (copia di una ricevuta)]\n" % cname
+                        self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
+                        strip_r[-1] += info
+                    continue
+                if cname != RECALL_NAME:
+                    out = self._tools_call(p, phys + new, cname, a, rnd)
+                    new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
+                    if emit:
+                        info = "\n[%s: definizioni caricate]\n" % (TOOLS_NAME if cname == TOOLS_NAME else cname)
+                        self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
+                        strip_r[-1] += info
+                    continue
                 if rnd == self.cfg.max_recall_rounds:
                     # ultimo giro: niente nuova ricerca, il modello deve rispondere con ciò che ha (G3)
                     out = LIMIT_MSG
@@ -190,6 +215,11 @@ class Proxy:
                "archived": st["archived"], "recalls": recalls,
                "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens"),
                "prompt_read": (resp.get("timings") or {}).get("prompt_n"),
+               "invalidated_suffix_tokens": (p.invalidated or {}).get("tokens", 0),
+               "invalidated_cause": (p.invalidated or {}).get("cause"),
+               "auto_recall": next(({"injected": e.get("injected"), "tokens": e.get("tokens"),
+                                     "ids": [x["rid"] for x in e.get("pieces") or []]}
+                                    for e in p.events if e.get("event") == "auto_recall"), None),
                "events": [e["event"] for e in p.events]}
         resp["strata_context"] = ctx
         for k in ("_sent_content", "_sent_reasoning"):
@@ -257,13 +287,14 @@ class Proxy:
                     c = calls.get(i)
                     if c is None:
                         name = f.get("name") or ""
-                        c = calls[i] = {"id": tc.get("id"), "name": name, "args": "", "mine": name == RECALL_NAME,
-                                        "cidx": None}
-                        if not c["mine"]:
+                        c = calls[i] = {"id": tc.get("id"), "name": name,
+                                        "args": "", "mine": name in state.get("internal", (RECALL_NAME,)),
+                                        "cidx": None, "held": self.cfg.receipt_guard and name in GUARD_NAMES}
+                        if not c["mine"] and not c["held"]:
                             c["cidx"] = state["client_calls"]
                             state["client_calls"] += 1
                     c["args"] += f.get("arguments") or ""
-                    if not c["mine"]:
+                    if not c["mine"] and not c["held"]:
                         x = {"index": c["cidx"], "function": {"arguments": f.get("arguments") or ""}}
                         if tc.get("id"):
                             x["id"] = tc["id"]
@@ -286,6 +317,14 @@ class Proxy:
             raise ClientGone()
         finally:
             call.close()
+        # chiamate con effetti trattenute dalla guardia: inoltrate intere solo se pulite
+        for _, c in sorted(calls.items()):
+            if c.get("held") and not receipt_contaminated(c["name"], c["args"]):
+                c["cidx"] = state["client_calls"]
+                state["client_calls"] += 1
+                self._emit_delta(emit, state, meta, {"tool_calls": [
+                    {"index": c["cidx"], "id": c["id"], "type": "function",
+                     "function": {"name": c["name"], "arguments": c["args"]}}]})
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
             msg["reasoning_content"] = "".join(reasoning)
@@ -297,6 +336,41 @@ class Proxy:
                 "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
                 "usage": usage or {}, "timings": timings or {},
                 "_sent_content": "".join(sent_c), "_sent_reasoning": "".join(sent_r)}
+
+    # ---------- strumenti su richiesta (paging.py) ----------
+    def _internal_names(self, p, phys) -> set:
+        """Nomi di chiamata gestiti dal proxy in questo giro: strata_recall, strata_tools e (con tools_paging) gli
+        strumenti del catalogo NON ancora caricati nel prompt fisico (la chiamata non va al client: il proxy
+        risponde con la definizione e chiede di ripetere la chiamata)."""
+        names = {RECALL_NAME}
+        if p.catalog:
+            names.add(TOOLS_NAME)
+            names |= set(p.catalog) - self.mgr.pager.loaded_in(phys)
+        return names
+
+    def _tools_call(self, p, phys, name, args, rnd) -> str:
+        pager = self.mgr.pager
+        loaded = pager.loaded_in(phys)
+        try:
+            a = json.loads(args) if isinstance(args, str) and args.strip() else (args or {})
+        except ValueError:
+            a = {"query": str(args)}
+        a = a if isinstance(a, dict) else {"query": str(a)}
+        if name == TOOLS_NAME:
+            q = str(a.get("query") or "")
+            names = pager.search(p.catalog, q, a.get("names"), limit=self.cfg.tools_load_max)
+            out = pager.result(p.catalog, names, loaded, q)
+            self.journal.log("tools_search", conv=p.conv, round=rnd, query=q, names_asked=a.get("names"),
+                             found=names, loaded_new=[n for n in names if n not in loaded],
+                             tokens=self.tc.count(out))
+            return out
+        # chiamata diretta a uno strumento del catalogo non caricato: definizione + richiesta di ripetere
+        note = ("La chiamata a %s NON è stata eseguita: la sua definizione non era ancora caricata. Eccola: "
+                "ripeti la chiamata con i parametri corretti." % name)
+        out = pager.result(p.catalog, [name], loaded, name, note)
+        self.journal.log("tool_not_loaded", conv=p.conv, round=rnd, name=name, args=str(args)[:500],
+                         tokens=self.tc.count(out))
+        return out
 
     # ---------- giornale recall: uso dei pezzi ----------
     # ---------- pin / usa e getta dalla dashboard ----------
@@ -401,13 +475,16 @@ class Proxy:
         real = u.get("prompt_tokens")
         if p and rnd == 0 and real:
             self.tc.calibrate(p.est_tokens, real)
+        inv = (p.invalidated or {}) if p and rnd == 0 else {}
         self.journal.log("request", mode=kind, conv=p.conv if p else None, round=rnd, messages=nmsg,
                          prompt_tokens=real, est_tokens=est,
                          virtual_tokens=p.virtual_tokens if p else None, seg=p.seg if p else None,
                          reused=(u.get("prompt_tokens_details") or {}).get("cached_tokens"),
                          prompt_read=tm.get("prompt_n"), prompt_ms=tm.get("prompt_ms"),
                          completion_tokens=u.get("completion_tokens"), ms=round((time.time() - t0) * 1000),
-                         finish=resp["choices"][0].get("finish_reason"))
+                         finish=resp["choices"][0].get("finish_reason"),
+                         invalidated_suffix_tokens=inv.get("tokens", 0) if p else None,
+                         invalidated_cause=inv.get("cause") if p else None)
 
 
 def _short(a) -> str:

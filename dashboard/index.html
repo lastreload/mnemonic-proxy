@@ -125,6 +125,9 @@ tr.othconv{display:none}
 .msg{border-bottom:1px solid var(--ln2)}
 .msg .hd{display:flex;gap:10px;padding:0 10px;height:26px;align-items:center;font-size:11.5px;color:var(--mu);cursor:pointer;white-space:nowrap;overflow:hidden}
 .msg .hd:hover{background:#191d24}
+.msg .hd .cpy{margin-left:auto;flex:none;padding:0 7px;height:20px;font-size:11px;opacity:.55}
+.msg .hd:hover .cpy,.msg .hd .cpy:focus-visible{opacity:1}
+button.ok{color:var(--ok,#4caf50)}
 .msg .role{color:var(--tx);width:64px;flex:none}
 .msg .pv{overflow:hidden;text-overflow:ellipsis;color:var(--dim)}
 .msg pre{margin:0;padding:6px 10px 10px 10px;white-space:pre-wrap;word-break:break-word;font:11.5px/1.4 var(--mono);max-height:260px;overflow:auto;color:#c5ccd5}
@@ -187,6 +190,7 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
 <div class="facts" id="facts">
   <span class="g"><span>ultima richiesta</span><span>riusati <b class="num" id="fReu">—</b></span><span>riletti <b class="num" id="fRd">—</b></span><span>decode <b class="num" id="fDec">—</b></span><span>draft <b class="num" id="fDr">—</b></span></span>
   <span class="g"><span>sessione</span><span><b class="num" id="fTot">—</b></span><span>riuso <b class="num" id="fTr">—</b></span></span>
+  <span class="g" title="token di cache invalidati dal proxy (blocchi, segmenti, richiamo automatico, strumenti): ultima richiesta, somma e andamento"><span>invalidati</span><span><b class="num" id="fInv">—</b></span><span>somma <b class="num" id="fInvT">—</b></span><svg id="fInvG" width="90" height="16" style="vertical-align:middle"></svg></span>
   <span class="g"><span>GPU <b class="num" id="fGpu">—</b></span><span>RAM <b class="num" id="fRam">—</b></span></span>
 </div>
 <div class="err" id="errs"></div>
@@ -229,7 +233,8 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
   <div>
     <div class="sh"><h2>Prompt e risposta</h2><span class="mu" id="lrinfo" style="font-size:12px"></span></div>
     <div class="pbox">
-      <div class="pinfo"><span>Risposta</span><span id="respinfo" class="dim"></span></div>
+      <div class="pinfo"><span>Risposta</span><span id="respinfo" class="dim"></span>
+        <span class="opts"><button id="copyResp" title="copia la risposta negli appunti">copia</button></span></div>
       <div class="resp" id="resp"><span class="dim">—</span></div>
       <div class="pinfo"><span>Prompt fisico dell'ultima richiesta</span><span id="phcount" class="num dim"></span>
         <span class="opts"><label class="mu"><input type="checkbox" id="onlyPh"> solo con segnaposto</label><button id="expand">espandi</button><button id="collapse">comprimi</button></span></div>
@@ -384,6 +389,19 @@ function renderStatus(d) {
   const tt = m.totals || {};
   setText($("fTot"), tt.requests != null ? `${full(tt.requests)} richieste` : "—");
   setText($("fTr"), tt.prompt_tokens ? pct(tt.reused, tt.prompt_tokens) : "—");
+  {   // token di cache invalidati dal proxy (card t_00c5aef6): ultima richiesta + somma + mini grafico
+    const iv = S.points.filter(p => (!S.conv || p.conv === S.conv) && !p.round && p.inval != null);
+    const last = iv.length ? iv[iv.length - 1] : null;
+    setText($("fInv"), last ? (last.inval ? `${full(last.inval)} (${last.inval_cause})` : "0") : "—");
+    setText($("fInvT"), iv.length ? full(iv.reduce((a, p) => a + (p.inval || 0), 0)) : "—");
+    const tail = iv.slice(-60), mx = Math.max(1, ...tail.map(p => p.inval || 0));
+    const bars = tail.map((p, k) => {
+      const h = Math.round(14 * (p.inval || 0) / mx);
+      return h ? `<rect x="${k * 1.5}" y="${15 - h}" width="1" height="${h}" fill="#e0a040"/>` : "";
+    }).join("");
+    const g = $("fInvG");
+    if (g._t !== bars) { g._t = bars; g.innerHTML = bars; }
+  }
   setText($("fGpu"), hw.gpu_util != null ? `${String(hw.gpu_util).padStart(3, " ")}% · ${nf1.format(hw.gpu_mem_used / 2 ** 30)}/${nf1.format(hw.gpu_mem_total / 2 ** 30)} GiB · ${hw.gpu_temp}°C` : "—");
   setText($("fRam"), hw.ram_used != null ? `${nf1.format(hw.ram_used / 2 ** 30)}/${nf0.format(hw.ram_total / 2 ** 30)} GiB · CPU ${String(nf0.format(hw.cpu)).padStart(3, " ")}%` : "—");
   const errs = Object.entries(d.errors || {}).filter(([, x]) => x).map(([k, x]) => `${k}: ${x}`).join(" · ");
@@ -616,7 +634,7 @@ function evDetail(e) {
     case "switch": p = [f("seg"), f("cut_index", "taglio"), f("notes_msg_tokens", "note tok")]; break;
     case "branch": p = [f("known", "noti"), f("messages", "messaggi")]; break;
     case "new_conversation": p = [f("messages", "messaggi")]; break;
-    case "request": p = [`fisico ${kfmt(e.prompt_tokens)}`, `riletti ${full(e.prompt_read)}`, `round ${e.round ?? 0}`, f("messages", "msg"), `out ${full(e.completion_tokens)}`, secs(e.ms), e.finish]; break;
+    case "request": p = [`fisico ${kfmt(e.prompt_tokens)}`, `riletti ${full(e.prompt_read)}`, e.invalidated_suffix_tokens ? `invalidati ${full(e.invalidated_suffix_tokens)} (${e.invalidated_cause})` : null, `round ${e.round ?? 0}`, f("messages", "msg"), `out ${full(e.completion_tokens)}`, secs(e.ms), e.finish]; break;
     case "autosave": p = [f("file"), `${kfmt(e.tokens)} tok`, e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null, secs(e.ms), e.idle_s != null ? `fermo da ${full(e.idle_s)} s` : null]; break;
     case "autorestore": p = [f("file"), `${kfmt(e.tokens)} tok ripristinati`, `guadagno ${kfmt(e.gain_tokens)}`, secs(e.ms), e.reason === "strata_restart" ? "dopo riavvio/perdita di Strata" : "Strata aveva un'altra conversazione"]; break;
     case "autosave_prune": p = [f("file"), e.reason === "superseded" ? "superato" : "oltre i limiti", e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null]; break;
@@ -665,6 +683,51 @@ function msgText(m) {
   return out;
 }
 $("expand").onclick = () => document.querySelectorAll("#prompt .msg").forEach(m => m.classList.remove("c"));
+// ---------- copia ed esporta ----------
+async function copyText(s, btn) {
+  let ok = false;
+  try { await navigator.clipboard.writeText(s); ok = true; } catch (e) {
+    const ta = document.createElement("textarea"); ta.value = s; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); try { ok = document.execCommand("copy"); } catch (e2) {} ta.remove();
+  }
+  if (btn) { const o = btn.textContent; btn.textContent = ok ? "copiato ✓" : "errore"; setCls(btn, "ok", ok);
+    setTimeout(() => { btn.textContent = o; setCls(btn, "ok", false); }, 1400); }
+}
+function respText(lr) {
+  const r = (lr || {}).response; if (!r) return "";
+  return (r.reasoning_content ? "‹ragionamento› " + r.reasoning_content + "\n\n" : "") + (r.content || "") +
+    (r.tool_calls || []).map(tc => `\n→ ${(tc.function || {}).name}(${(tc.function || {}).arguments})`).join("");
+}
+function stamp(ts) { const d = ts ? new Date(ts * 1000) : new Date(), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
+function promptMarkdown(lr) {
+  const msgs = lr.messages || [];
+  let md = `# Prompt fisico — conv ${lr.conv || "—"} · seg ${lr.seg ?? "—"} · round ${lr.round ?? 0}\n\n` +
+    `- ora: ${new Date((lr.ts || 0) * 1000).toLocaleString()}\n- messaggi: ${msgs.length}\n` +
+    `- token stimati: ${lr.est_tokens ?? "—"}${lr.prompt_tokens ? ` · reali: ${lr.prompt_tokens}` : ""}\n` +
+    (Array.isArray(lr.tools) ? `- strumenti: ${lr.tools.map(t => typeof t === "string" ? t : ((t.function || t).name)).join(", ")}\n` : "") + "\n";
+  msgs.forEach((m, j) => { md += `## #${j} ${m.role}${m.name ? " (" + m.name + ")" : ""}\n\n~~~~text\n${msgText(m)}\n~~~~\n\n`; });
+  const r = respText(lr);
+  if (r) md += `## Risposta${lr.response && lr.response.done === false ? " (in corso)" : ""}\n\n~~~~text\n${r}\n~~~~\n`;
+  return md;
+}
+function download(name, data, type) {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], {type}));
+  a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function needLive(btn) { if (S.lastLive) return true; if (btn) { const o = btn.textContent; btn.textContent = "nessun prompt"; setTimeout(() => btn.textContent = o, 1400); } return false; }
+$("copyResp").onclick = ev => copyText($("resp").textContent || "", ev.target);
+$("copyAll").onclick = ev => { if (needLive(ev.target)) copyText(promptMarkdown(S.lastLive), ev.target); };
+$("expMd").onclick = ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.md`, promptMarkdown(S.lastLive), "text/markdown;charset=utf-8"); };
+$("expJson").onclick = ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.json`, JSON.stringify(S.lastLive, null, 2), "application/json"); };
+function exportHistory(fmt, btn) {
+  const conv = S.conv || (S.lastLive || {}).conv;
+  if (!conv) { const o = btn.textContent; btn.textContent = "nessuna conversazione"; setTimeout(() => btn.textContent = o, 1400); return; }
+  const a = document.createElement("a"); a.href = `/api/export?conv=${encodeURIComponent(conv)}&fmt=${fmt}`;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+$("expHist").onclick = ev => exportHistory("md", ev.target);
+$("expHistJ").onclick = ev => exportHistory("json", ev.target);
 $("collapse").onclick = () => document.querySelectorAll("#prompt .msg").forEach(m => m.classList.add("c"));
 $("onlyPh").addEventListener("change", () => { for (const m of document.querySelectorAll("#prompt .msg")) m.style.display = $("onlyPh").checked && !m._ph ? "none" : ""; });
 function renderPrompt(lr) {
@@ -680,8 +743,10 @@ function renderPrompt(lr) {
     const n = document.createElement("div");
     n.className = "msg" + (j >= msgs.length - 3 || (ph && t.length < 400) ? "" : " c");
     n._key = key; n._nph = ph; n._ph = ph > 0;
-    n.innerHTML = `<div class="hd"><span class="num dim" style="width:34px">#${j}</span><span class="role">${esc(m.role)}</span><span class="num" style="width:78px">${full(t.length)} car.</span>${ph ? `<mark class="ph">${ph} segnaposto</mark>` : ""}<span class="pv">${esc(t.slice(0, 120).replace(/\s+/g, " "))}</span></div><pre>${hl(t)}</pre>`;
+    n.innerHTML = `<div class="hd"><span class="num dim" style="width:34px">#${j}</span><span class="role">${esc(m.role)}</span><span class="num" style="width:78px">${full(t.length)} car.</span>${ph ? `<mark class="ph">${ph} segnaposto</mark>` : ""}<span class="pv">${esc(t.slice(0, 120).replace(/\s+/g, " "))}</span><button class="cpy" title="copia questo messaggio">copia</button></div><pre>${hl(t)}</pre>`;
+    n._txt = t;
     n.firstChild.addEventListener("click", () => n.classList.toggle("c"));
+    n.querySelector(".cpy").addEventListener("click", ev => { ev.stopPropagation(); copyText(n._txt, ev.target); });
     if ($("onlyPh").checked && !ph) n.style.display = "none";
     if (el) box.replaceChild(n, el); else box.appendChild(n);
   });
