@@ -1,6 +1,6 @@
 # runtime data (archive, journal, live dumps, slot files, cold archive)
-data/
-data-*/
+/data/
+/data-*/
 sessions/
 slots/
 kv-archive/

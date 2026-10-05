@@ -1,0 +1,237 @@
+{
+ "_catalog": [
+  "bg_run",
+  "todo_add",
+  "todo_list",
+  "web_fetch"
+ ],
+ "recall": {
+  "function": {
+   "description": "Recupera il testo ORIGINALE ed esatto di un'uscita di strumento o di un messaggio che il gestore del contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi 'strata_recall id=<id>' o un id nell'indice dell'archivio; usa `query` per cercare (parole, percorso, nome di funzione, messaggio d'errore) fra tutto ciò che è stato archiviato; usa `path` per la storia delle operazioni su un file (letture, scritture, modifiche, con esito e id). Eseguito dal server, costa poco: usalo invece di indovinare o rieseguire comandi.",
+   "name": "strata_recall",
+   "parameters": {
+    "properties": {
+     "id": {
+      "description": "id del blocco archiviato, es. r1a2b3c4d5e6",
+      "type": "string"
+     },
+     "offset": {
+      "description": "per testi lunghi: carattere da cui proseguire",
+      "type": "integer"
+     },
+     "path": {
+      "description": "percorso (o nome) di un file: storia delle operazioni",
+      "type": "string"
+     },
+     "query": {
+      "description": "testo da cercare nell'archivio (parole o sottostringa)",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ "recall_multi": {
+  "function": {
+   "description": "Recupera il testo ORIGINALE ed esatto di un'uscita di strumento o di un messaggio che il gestore del contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi 'strata_recall id=<id>' o un id nell'indice dell'archivio; usa `query` per cercare (parole, percorso, nome di funzione, messaggio d'errore) fra tutto ciò che è stato archiviato; usa `path` per la storia delle operazioni su un file (letture, scritture, modifiche, con esito e id). Eseguito dal server, costa poco: usalo invece di indovinare o rieseguire comandi.",
+   "name": "strata_recall",
+   "parameters": {
+    "properties": {
+     "id": {
+      "description": "id del blocco archiviato, es. r1a2b3c4d5e6",
+      "type": "string"
+     },
+     "offset": {
+      "description": "per testi lunghi: carattere da cui proseguire",
+      "type": "integer"
+     },
+     "path": {
+      "description": "percorso (o nome) di un file: storia delle operazioni",
+      "type": "string"
+     },
+     "queries": {
+      "description": "più varianti della ricerca in UNA chiamata (sinonimi, italiano/inglese, nomi nel codice): risultati fusi e senza doppioni",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "query": {
+      "description": "testo da cercare nell'archivio (parole o sottostringa)",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ "recall_struct": {
+  "function": {
+   "description": "Recupera il testo ORIGINALE ed esatto di un'uscita di strumento o di un messaggio che il gestore del contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi 'strata_recall id=<id>' o un id nell'indice dell'archivio; usa `query` per cercare (parole, percorso, nome di funzione, messaggio d'errore) fra tutto ciò che è stato archiviato; usa `path` per la storia delle operazioni su un file (letture, scritture, modifiche, con esito e id). Eseguito dal server, costa poco: usalo invece di indovinare o rieseguire comandi. Per la PRIMA versione di qualcosa usa path=<file> mode=first (o mode=timeline con query) e cita id e messaggio; distingui i valori SCRITTI (argomenti/uscite) da quelli solo CONSIDERATI nel ragionamento. I risultati 'forte' contengono tutte le parole cercate; 'parziale' no.",
+   "name": "strata_recall",
+   "parameters": {
+    "properties": {
+     "from": {
+      "description": "filtro: dal messaggio numero",
+      "type": "integer"
+     },
+     "id": {
+      "description": "id del blocco archiviato, es. r1a2b3c4d5e6",
+      "type": "string"
+     },
+     "mode": {
+      "description": "con path: timeline (cronologia del file) o first (prima scrittura + ragionamento dello stesso turno); con id: neighbors (messaggi vicini), output (uscita di una chiamata), reasoning (ragionamento dello stesso turno); tree: mappa della sessione per turni",
+      "enum": [
+       "timeline",
+       "first",
+       "neighbors",
+       "output",
+       "reasoning",
+       "tree"
+      ],
+      "type": "string"
+     },
+     "n": {
+      "description": "con mode=neighbors: quanti messaggi prima e dopo",
+      "type": "integer"
+     },
+     "offset": {
+      "description": "per testi lunghi: carattere da cui proseguire",
+      "type": "integer"
+     },
+     "order": {
+      "description": "tempo: le occorrenze più VECCHIE prima (prima versione, primo esito)",
+      "enum": [
+       "pertinenza",
+       "tempo"
+      ],
+      "type": "string"
+     },
+     "path": {
+      "description": "percorso (o nome) di un file: storia delle operazioni",
+      "type": "string"
+     },
+     "query": {
+      "description": "testo da cercare nell'archivio (parole o sottostringa)",
+      "type": "string"
+     },
+     "role": {
+      "description": "filtro: user, assistant, reasoning, args, tool",
+      "type": "string"
+     },
+     "seg": {
+      "description": "filtro: numero di segmento",
+      "type": "integer"
+     },
+     "to": {
+      "description": "filtro: fino al messaggio numero",
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ "recall_struct+multi": {
+  "function": {
+   "description": "Recupera il testo ORIGINALE ed esatto di un'uscita di strumento o di un messaggio che il gestore del contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi 'strata_recall id=<id>' o un id nell'indice dell'archivio; usa `query` per cercare (parole, percorso, nome di funzione, messaggio d'errore) fra tutto ciò che è stato archiviato; usa `path` per la storia delle operazioni su un file (letture, scritture, modifiche, con esito e id). Eseguito dal server, costa poco: usalo invece di indovinare o rieseguire comandi. Per la PRIMA versione di qualcosa usa path=<file> mode=first (o mode=timeline con query) e cita id e messaggio; distingui i valori SCRITTI (argomenti/uscite) da quelli solo CONSIDERATI nel ragionamento. I risultati 'forte' contengono tutte le parole cercate; 'parziale' no.",
+   "name": "strata_recall",
+   "parameters": {
+    "properties": {
+     "from": {
+      "description": "filtro: dal messaggio numero",
+      "type": "integer"
+     },
+     "id": {
+      "description": "id del blocco archiviato, es. r1a2b3c4d5e6",
+      "type": "string"
+     },
+     "mode": {
+      "description": "con path: timeline (cronologia del file) o first (prima scrittura + ragionamento dello stesso turno); con id: neighbors (messaggi vicini), output (uscita di una chiamata), reasoning (ragionamento dello stesso turno); tree: mappa della sessione per turni",
+      "enum": [
+       "timeline",
+       "first",
+       "neighbors",
+       "output",
+       "reasoning",
+       "tree"
+      ],
+      "type": "string"
+     },
+     "n": {
+      "description": "con mode=neighbors: quanti messaggi prima e dopo",
+      "type": "integer"
+     },
+     "offset": {
+      "description": "per testi lunghi: carattere da cui proseguire",
+      "type": "integer"
+     },
+     "order": {
+      "description": "tempo: le occorrenze più VECCHIE prima (prima versione, primo esito)",
+      "enum": [
+       "pertinenza",
+       "tempo"
+      ],
+      "type": "string"
+     },
+     "path": {
+      "description": "percorso (o nome) di un file: storia delle operazioni",
+      "type": "string"
+     },
+     "queries": {
+      "description": "più varianti della ricerca in UNA chiamata (sinonimi, italiano/inglese, nomi nel codice): risultati fusi e senza doppioni",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "query": {
+      "description": "testo da cercare nell'archivio (parole o sottostringa)",
+      "type": "string"
+     },
+     "role": {
+      "description": "filtro: user, assistant, reasoning, args, tool",
+      "type": "string"
+     },
+     "seg": {
+      "description": "filtro: numero di segmento",
+      "type": "integer"
+     },
+     "to": {
+      "description": "filtro: fino al messaggio numero",
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ },
+ "tools": {
+  "function": {
+   "description": "Carica la definizione completa di strumenti che NON sono nell'elenco qui sopra. Per risparmiare spazio il prompt contiene solo gli strumenti di base; gli altri esistono e funzionano normalmente, ma prima di chiamarli devi caricarne la definizione con questo strumento (eseguito dal server, costa poco). Dopo il caricamento chiamali come gli altri. Caricabili: todo: todo_add, todo_list; altri: bg_run, web_fetch.",
+   "name": "strata_tools",
+   "parameters": {
+    "properties": {
+     "names": {
+      "description": "nomi esatti degli strumenti da caricare (1-5)",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "query": {
+      "description": "cosa vuoi fare o parole chiave (es. 'lista todo', 'processo in background')",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "function"
+ }
+}
