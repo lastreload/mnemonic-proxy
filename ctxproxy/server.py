@@ -6,7 +6,7 @@ Solo stdlib. Una richiesta alla volta (Strata ha una sola sequenza: serializzare
 intreccino ciclo recall e note).
 
 Streaming: con `stream: true` il proxy chiede a Strata lo stream e inoltra al client ragionamento,
-testo e tool call delta per delta. Le chiamate `strata_recall` (interne) non arrivano mai al client: il giro si
+testo e tool call delta per delta. Le chiamate `recall` (interne; alias storico `strata_recall`) non arrivano mai al client: il giro si
 chiude lato proxy e il giro successivo continua lo stesso stream. Il ragionamento dei giri di recall arriva al
 client (con una riga informativa) e il proxy lo ricorda per tenere stabile il prompt fisico al turno dopo.
 Disconnessione del client (Esc in pi): il proxy chiude lo stream verso Strata, che annulla la generazione."""
@@ -16,17 +16,19 @@ import argparse
 import json
 import os
 import re
+import sys
 import threading
 import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text, is_human_user
-from .paging import GUARD_MSG, GUARD_NAMES, TOOLS_NAME, receipt_contaminated
+from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
+                   is_human_user)
+from .paging import GUARD_MSG, GUARD_NAMES, receipt_contaminated
 from .upstream import Upstream, UpstreamError
 
-LIMIT_MSG = ("strata_recall: limite di ricerche raggiunto per questa risposta. Non chiamare più "
-             "strata_recall: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
+LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
+             "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_./\-]{4,}|\d[\d.,:]{2,}")
 
 
@@ -163,7 +165,7 @@ class Proxy:
                 cname = (c.get("function") or {}).get("name")
                 meta: list = []
                 if c in blocked:
-                    out = GUARD_MSG
+                    out = GUARD_MSG.replace("{rn}", p.recall_name)
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500])
                     if emit:
@@ -171,17 +173,17 @@ class Proxy:
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_r[-1] += info
                     continue
-                if cname != RECALL_NAME:
+                if cname not in p.recall_aliases:
                     out = self._tools_call(p, phys + new, cname, a, rnd)
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     if emit:
-                        info = "\n[%s: definizioni caricate]\n" % (TOOLS_NAME if cname == TOOLS_NAME else cname)
+                        info = "\n[%s: definizioni caricate]\n" % cname
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_r[-1] += info
                     continue
                 if rnd == self.cfg.max_recall_rounds:
                     # ultimo giro: niente nuova ricerca, il modello deve rispondere con ciò che ha (G3)
-                    out = LIMIT_MSG
+                    out = LIMIT_MSG.replace("{rn}", p.recall_name)
                 else:
                     out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
                     # ricontrollo del budget: il risultato non deve far uscire il prompt dalla finestra
@@ -198,7 +200,7 @@ class Proxy:
                 recalls.append({k: rec[k] for k in ("args", "tokens")})
                 recall_logs.append((rec, out))
                 if emit:
-                    info = "\n[strata_recall %s: %d risultati]\n" % (_short(a), len(meta))
+                    info = "\n[%s %s: %d risultati]\n" % (cname, _short(a), len(meta))
                     self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                     strip_r[-1] += info
             phys += new
@@ -251,7 +253,7 @@ class Proxy:
 
     def _round(self, body, emit, state):
         """Un giro in streaming da Strata. Inoltra subito ragionamento/testo/tool call del client; trattiene le
-        chiamate strata_recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning)."""
+        chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning)."""
         if state is None:
             state = {"sent_role": False, "client_calls": 0, "final": True}
         call = self.up.chat_stream(body)
@@ -289,7 +291,7 @@ class Proxy:
                     if c is None:
                         name = f.get("name") or ""
                         c = calls[i] = {"id": tc.get("id"), "name": name,
-                                        "args": "", "mine": name in state.get("internal", (RECALL_NAME,)),
+                                        "args": "", "mine": name in state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
                                         "cidx": None, "held": self.cfg.receipt_guard and name in GUARD_NAMES}
                         if not c["mine"] and not c["held"]:
                             c["cidx"] = state["client_calls"]
@@ -340,12 +342,12 @@ class Proxy:
 
     # ---------- strumenti su richiesta (paging.py) ----------
     def _internal_names(self, p, phys) -> set:
-        """Nomi di chiamata gestiti dal proxy in questo giro: strata_recall, strata_tools e (con tools_paging) gli
+        """Nomi di chiamata gestiti dal proxy in questo giro: recall, tools (e i loro alias storici) e (con tools_paging) gli
         strumenti del catalogo NON ancora caricati nel prompt fisico (la chiamata non va al client: il proxy
         risponde con la definizione e chiede di ripetere la chiamata)."""
-        names = {RECALL_NAME}
+        names = set(p.recall_aliases)
         if p.catalog:
-            names.add(TOOLS_NAME)
+            names |= set(p.tools_aliases)
             names |= set(p.catalog) - self.mgr.pager.loaded_in(phys)
         return names
 
@@ -357,10 +359,10 @@ class Proxy:
         except ValueError:
             a = {"query": str(args)}
         a = a if isinstance(a, dict) else {"query": str(a)}
-        if name == TOOLS_NAME:
+        if name in p.tools_aliases:
             q = str(a.get("query") or "")
             names = pager.search(p.catalog, q, a.get("names"), limit=self.cfg.tools_load_max)
-            out = pager.result(p.catalog, names, loaded, q)
+            out = pager.result(p.catalog, names, loaded, q, name=p.tools_name)
             self.journal.log("tools_search", conv=p.conv, round=rnd, query=q, names_asked=a.get("names"),
                              found=names, loaded_new=[n for n in names if n not in loaded],
                              tokens=self.tc.count(out))
@@ -368,7 +370,7 @@ class Proxy:
         # chiamata diretta a uno strumento del catalogo non caricato: definizione + richiesta di ripetere
         note = ("La chiamata a %s NON è stata eseguita: la sua definizione non era ancora caricata. Eccola: "
                 "ripeti la chiamata con i parametri corretti." % name)
-        out = pager.result(p.catalog, [name], loaded, name, note)
+        out = pager.result(p.catalog, [name], loaded, name, note, name=p.tools_name)
         self.journal.log("tool_not_loaded", conv=p.conv, round=rnd, name=name, args=str(args)[:500],
                          tokens=self.tc.count(out))
         return out
@@ -651,17 +653,25 @@ def make_handler(proxy: Proxy):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="proxy contesto virtuale davanti a Strata")
-    ap.add_argument("--upstream", default="http://127.0.0.1:8095")
-    ap.add_argument("--host", default="127.0.0.1")
-    ap.add_argument("--port", type=int, default=8096)
-    ap.add_argument("--data", default="./data", help="cartella per archive.sqlite e journal.jsonl")
-    ap.add_argument("--mode", choices=["tools", "off"], default="tools")
-    ap.add_argument("--config", help="JSON con i campi di Config (soglie, finestra, flag)")
-    ap.add_argument("--tokenizer", help="tokenizer.json HF (facoltativo; altrimenti caratteri/3.5)")
-    ap.add_argument("--api-key", default="")
+    from . import __version__
+    ap = argparse.ArgumentParser(
+        prog="mnemonic-proxy",
+        description="Mnemonic Proxy %s: transparent proxy that lets local coding agents work for hours "
+                    "(verbatim archive, structured recall, segments with handoff notes, saved engine state)."
+                    % __version__)
+    ap.add_argument("--upstream", default="http://127.0.0.1:8095",
+                    help="base URL of the inference engine (Strata, llama-server, any OpenAI-compatible server)")
+    ap.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1, local only)")
+    ap.add_argument("--port", type=int, default=8096, help="listen port (default: 8096)")
+    ap.add_argument("--data", default="./data", help="data folder: archive.sqlite, journal.jsonl (default: ./data)")
+    ap.add_argument("--mode", choices=["tools", "off"], default="tools",
+                    help="tools = managed context (default); off = plain pass-through")
+    ap.add_argument("--config", help="JSON file with Config fields (window, thresholds, feature flags)")
+    ap.add_argument("--tokenizer", help="HF tokenizer.json for exact token counts (optional; default chars/3.5)")
+    ap.add_argument("--api-key", default="", help="API key sent to the upstream engine (optional)")
     ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "openai"], default=None,
-                    help="tipo di motore (di serie: dalla configurazione, altrimenti rilevato)")
+                    help="engine type (default: from the config file, otherwise auto-detected)")
+    ap.add_argument("--version", action="version", version="mnemonic-proxy " + __version__)
     a = ap.parse_args(argv)
     raw_cfg = json.load(open(a.config)) if a.config else {}
     if a.engine:
@@ -681,12 +691,16 @@ def main(argv=None):
     if cfg.autosave:
         proxy.enable_autosave()
     if cfg.kv_archive:
-        from .kvarchive import enable as enable_kv_archive
+        from .kvarchive import enable as enable_kv_archive, zstd
+        if zstd is None:
+            raise SystemExit("mnemonic-proxy: kv_archive requires Python >= 3.14 (compression.zstd); "
+                             "running on Python %d.%d. Set \"kv_archive\": false or upgrade Python."
+                             % sys.version_info[:2])
         enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
     srv.daemon_threads = True
-    print("[strata-context] %s:%d -> %s (%s, salvataggi %s) mode=%s window=%d token=%s anchor=%s" % (
-        a.host, a.port, a.upstream, engine.kind, "sì" if engine.slot_save else "no", a.mode, cfg.window,
+    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%d tokens=%s anchor=%s" % (
+        a.host, a.port, a.upstream, engine.kind, "yes" if engine.slot_save else "no", a.mode, cfg.window,
         proxy.tc.kind, cfg.mask_anchor), flush=True)
     srv.serve_forever()
 

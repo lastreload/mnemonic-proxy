@@ -158,7 +158,7 @@ class TestMasking(Base):
         # provenienza: comando di origine + inizio vero dell'uscita + istruzione
         self.assertIn("bash `", ph[0]["content"])
         self.assertRegex(ph[0]["content"], r"Inizio:|Ricevuta:")
-        self.assertIn("strata_recall id=", ph[0]["content"])
+        self.assertIn("recall id=", ph[0]["content"])
         self.assertFalse(last[-1]["content"].startswith("[uscita"))
         assert_tool_pairs(self, last)
         self.assertLess(self.proxy.tc.count(render(self.eng.requests[-1])), 45000)
@@ -175,7 +175,7 @@ class TestRecall(Base):
     def policy(self, body):
         msgs = body["messages"]
         last = msgs[-1]
-        if last.get("role") == "tool" and last["content"].startswith("strata_recall: limite"):
+        if last.get("role") == "tool" and last["content"].startswith("recall: limite"):
             return {"role": "assistant", "content": "rispondo con quello che ho"}
         if any(m.get("role") == "user" and "insistente" in str(m.get("content")) for m in msgs[-12:]):
             return {"role": "assistant", "content": "", "tool_calls": [
@@ -185,8 +185,8 @@ class TestRecall(Base):
             return {"role": "assistant", "content": "trovato: " + last["content"].split("\n", 1)[1][:30]}
         if last.get("role") == "user" and "ricorda" in last["content"]:
             for m in msgs:
-                if m.get("role") == "tool" and "strata_recall id=" in m["content"]:
-                    rid = re.search(r"strata_recall id=(\w+)", m["content"]).group(1)
+                if m.get("role") == "tool" and "recall id=" in m["content"]:
+                    rid = re.search(r"recall id=(\w+)", m["content"]).group(1)
                     return {"role": "assistant", "content": "", "reasoning_content": "devo richiamare",
                             "tool_calls": [{"id": "rc1", "type": "function",
                                             "function": {"name": RECALL_NAME, "arguments": json.dumps({"id": rid})}}]}
@@ -249,7 +249,7 @@ class TestRecall(Base):
         from ctxproxy.core import rid_for
         rid = rid_for(3, h[3])
         out = mgr.recall(p.conv, {"id": rid})
-        self.assertIn("[continua: strata_recall id=%s offset=100]" % rid, out)
+        self.assertIn("[continua: recall id=%s offset=100]" % rid, out)
         self.assertIn("non trovato", mgr.recall(p.conv, {"id": "rnonesiste"}))
         self.assertNotIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
 
@@ -400,7 +400,7 @@ class TestReasoningArgsMasking(Base):
         res = [m for m in last if m.get("role") == "tool" and m.get("tool_call_id") == "w1"][0]
         self.assertIn("nota del gestore del contesto", res["content"])
         # recall esatto degli argomenti originali e del ragionamento (archivio)
-        rid = res["content"].split("strata_recall id=")[1].split(".")[0]
+        rid = res["content"].split("recall id=")[1].split(".")[0]
         conv = self.events("request")[-1]["conv"]
         got = self.proxy.mgr.recall(conv, {"id": rid})
         self.assertIn("linea 1 del sorgente", got)
@@ -433,7 +433,7 @@ class TestLiveDump(Base):
         self.assertIn(RECALL_NAME, d["tools"])
         # il prompt fisico registrato è quello mascherato (segnaposto recall presenti)
         self.assertTrue(r["strata_context"]["masked"] > 0)
-        self.assertTrue(any("strata_recall id=" in (m.get("content") or "") for m in d["messages"]))
+        self.assertTrue(any("recall id=" in (m.get("content") or "") for m in d["messages"]))
         self.assertEqual([x for x in os.listdir(os.path.dirname(path)) if x.endswith(".tmp")], [])
         req = self.events("request")[-1]
         self.assertEqual(req["virtual_tokens"], d["virtual_tokens"])

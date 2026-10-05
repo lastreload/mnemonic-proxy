@@ -1,6 +1,6 @@
 """Rigioco a secco ESATTO di una sessione pi attraverso il Manager.
 
-Differenze rispetto a replay_dry.py: system prompt e strumenti VERI di pi (g3/pi-first-request.json, + strata_recall
+Differenze rispetto a replay_dry.py: system prompt e strumenti VERI di pi (pi-first-request.json, + recall
 iniettato dal proxy), reasoning_effort della richiesta vera, conteggio con template + tokenizer del pack (esatto).
 Per ogni richiesta di pi: storia completa -> Manager.prepare -> token del prompt fisico, riletture (prima differenza
 di prefisso), pacchetti di masking con Δ pianificato vs Δ misurato, switch.

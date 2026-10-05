@@ -3,20 +3,33 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "virtual-context-proxy"
-version = "0.1.0"
-description = "OpenAI-compatible proxy that gives Strata a virtual context: stable-frontier masking, exact recall archive, segments with handoff notes, autosave/autorestore."
+name = "mnemonic-proxy"
+version = "0.2.0"
+description = "Transparent proxy that lets local coding agents work for hours: verbatim archive, structured recall, segments with handoff notes, saved engine state."
 readme = "README.md"
 license = { text = "MIT" }
 authors = [{ name = "Maurizio Verde" }]
 requires-python = ">=3.10"
-dependencies = []   # standard library only (sqlite3 with FTS5)
+dependencies = []   # standard library only (sqlite3 with FTS5); kv_archive needs Python >= 3.14 (compression.zstd)
+keywords = ["llm", "proxy", "context", "coding-agent", "llama.cpp", "openai", "anthropic", "mcp"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/lastreload/mnemonic-proxy"
+Repository = "https://github.com/lastreload/mnemonic-proxy"
+Documentation = "https://lastreload.github.io/mnemonic-proxy/"
 
 [project.optional-dependencies]
-exact = ["tokenizers>=0.15"]   # exact token counting with the Strata pack tokenizer
+exact = ["tokenizers>=0.15"]   # exact token counting with a HF tokenizer.json
 
 [project.scripts]
-ctxproxy = "ctxproxy.server:main"
+mnemonic-proxy = "ctxproxy.server:main"
+ctxproxy = "ctxproxy.server:main"          # 0.1 name, kept as an alias
+mnemonic-mcp = "ctxproxy.mcp_server:main"  # read-only MCP recall server over the archive
 
 [tool.setuptools]
 packages = ["ctxproxy"]

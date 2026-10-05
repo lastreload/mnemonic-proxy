@@ -1,4 +1,4 @@
-"""Banco di prova offline di strata_recall (solo CPU, nessun modello).
+"""Banco di prova offline dello strumento recall (solo CPU, nessun modello).
 
     python3 bench/recall_bench.py --label baseline                       # configurazione di serie
     python3 bench/recall_bench.py --label passo2 --set recall_struct=true

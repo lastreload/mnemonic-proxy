@@ -1,4 +1,4 @@
-"""Domande del banco di prova del recupero (strata_recall), con le evidenze definite da regole sull'archivio.
+"""Domande del banco di prova del recupero (strumento recall), con le evidenze definite da regole sull'archivio.
 
 Ogni domanda:
   id, db (archivio in bench/data/<db>.sqlite), split ('dev' per tarare, 'test' tenuto da parte: tutta la sessione
@@ -8,7 +8,7 @@ Ogni domanda:
       {re: regex, role: ruolo (facoltativo), lo/hi: intervallo di idx (facoltativo)} risolta su TUTTI i pezzi
       dell'archivio che la soddisfano (copie equivalenti valgono tutte),
   queries: ricerche che un modello farebbe (testo libero, nell'ordine: simulano le chiamate, max 5),
-  calls: chiamate strutturate facoltative (dict di argomenti per strata_recall) usate dalle versioni che le supportano,
+  calls: chiamate strutturate facoltative (dict di argomenti per recall) usate dalle versioni che le supportano,
   para: True se la domanda è formulata con parole diverse dagli identificatori (controprova lessicale),
   neg: True se la risposta NON è nell'archivio (controllo negativo).
 build_questions.py risolve le regole in id d'archivio -> questions.json (versionato).

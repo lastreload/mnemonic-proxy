@@ -22,17 +22,25 @@ import threading
 import time
 import uuid
 
-from .paging import AUTO_HEAD, TOOLS_NAME, ToolPager, query_terms, typed_receipt
+from .paging import AUTO_HEAD, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result, query_terms, typed_receipt
 from .render import message_piece, render_pieces, template_kwargs
 from .tooldefs import ToolShortener
 
-RECALL_NAME = "strata_recall"
+# Nomi degli strumenti del proxy (0.2.0: neutri rispetto al motore). Le conversazioni nate prima della 0.2.0 tengono i
+# nomi vecchi (strata_recall / strata_tools): il nome entra nel prefisso stabile del prompt (elenco strumenti e
+# segnaposti) e cambiarlo invaliderebbe cache e salvataggi. Le chiamate con il nome nuovo o con quello vecchio sono
+# sempre risolte dal proxy (alias in ingresso), salvo che il client dichiari lui uno strumento con quel nome.
+RECALL_NAME = "recall"
+LEGACY_RECALL_NAME = "strata_recall"
+RECALL_ALTERNATES = ("history_recall", "archive_recall", "ctx_recall")
+TOOLS_ALTERNATES = ("load_tools", "tool_catalog", "ctx_tools")
+NAMES_KEY = "tool_names:"       # kv: nomi scelti per conversazione (json {"recall": ..., "tools": ...})
 PLACEHOLDER = "[uscita strumento omessa: {n} token \u2014 recall:{rid}]"   # formato vecchio (solo riconoscimento)
 THINK_PLACEHOLDER = "[ragionamento omesso: {n} token \u2014 recall:{rid}]"
 # Segnaposto con provenienza (NEXT.md punto 10, GPT-ANSWER3): solo nei RISULTATI degli strumenti (il modello li legge
 # ma non li scrive), con chiamata/file di origine, inizio vero dell'uscita e istruzione esplicita.
 OUT_PLACEHOLDER = ("[gestore del contesto: uscita di {origin} nascosta per spazio ({n} token). Inizio: \u00ab{head}\u00bb. "
-                   "Testo esatto: strata_recall id={rid}. Per lo stato ATTUALE rileggi il file o riesegui il comando.]")
+                   "Testo esatto: {rn} id={rid}. Per lo stato ATTUALE rileggi il file o riesegui il comando.]")
 OUT_PREFIX = "[gestore del contesto: uscita di "
 # Ricevuta tipizzata (card t_00c5aef6, ricerca §5 e §19; delimitatore fuori vocabolario come da RICERCA-3): al posto
 # dell'«Inizio» una ricevuta secondo il tipo (scrittura/modifica, shell ok/errore, test, lettura). Solo nel RISULTATO
@@ -40,21 +48,23 @@ OUT_PREFIX = "[gestore del contesto: uscita di "
 # le chiamate con effetti che lo contengono.
 RECEIPT_OPEN = "\u27eactx-archive"
 OUT_RECEIPT = ("\u27eactx-archive id={rid} \u00b7 uscita di {origin} \u00b7 questo agente \u00b7 nascosta per spazio "
-               "({n} token)\u27eb Ricevuta: {receipt}. Testo esatto: strata_recall id={rid}. Per lo stato ATTUALE "
+               "({n} token)\u27eb Ricevuta: {receipt}. Testo esatto: {rn} id={rid}. Per lo stato ATTUALE "
                "rileggi il file o riesegui il comando.")
 DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb concluso e nascosto ({n} token). Effetti: {fx}. "
-             "Testo completo: strata_recall id={rid}.]")
+             "Testo completo: {rn} id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
 NOTES_MARK = "[strata-context: richiesta note di passaggio]"
 SEG_MARK = "[strata-context: segmento {seg}]"
 
-RECALL_TOOL = {
+def recall_tool_def(name: str = RECALL_NAME) -> dict:
+    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome)."""
+    return {
     "type": "function",
     "function": {
-        "name": RECALL_NAME,
+        "name": name,
         "description": (
             "Recupera il testo ORIGINALE ed esatto di un'uscita di strumento o di un messaggio che il gestore del "
-            "contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi 'strata_recall id=<id>' o un "
+            "contesto ha tolto dal prompt per fare spazio. Usa `id` quando vedi '" + name + " id=<id>' o un "
             "id nell'indice dell'archivio; usa `query` per cercare (parole, percorso, nome di funzione, messaggio "
             "d'errore) fra tutto ciò che è stato archiviato; usa `path` per la storia delle operazioni su un file "
             "(letture, scritture, modifiche, con esito e id). Eseguito dal server, costa poco: usalo invece di "
@@ -69,10 +79,13 @@ RECALL_TOOL = {
             },
         },
     },
-}
+    }
+
+
+RECALL_TOOL = recall_tool_def(RECALL_NAME)
 
 NOTES_INSTRUCTION = NOTES_MARK + """
-Il contesto sta per essere compattato: i messaggi più vecchi verranno archiviati (recuperabili con strata_recall) e
+Il contesto sta per essere compattato: i messaggi più vecchi verranno archiviati (recuperabili con {rn}) e
 dopo questo punto vedrai solo queste note più la parte recente della conversazione. Scrivi ORA le note di passaggio,
 brevi (al massimo ~2500 token), fattuali, con questa struttura fissa:
 
@@ -122,18 +135,22 @@ class Config:
     recall_max_chars: int = 24000
     recall_max_tokens: int = 6000   # tetto in TOKEN per risultato recall (il limite in caratteri non basta)
     max_recall_rounds: int = 4
+    # nomi degli strumenti del proxy per le conversazioni NUOVE (quelle nate prima della 0.2.0 tengono strata_recall /
+    # strata_tools); se il client dichiara già uno strumento con lo stesso nome se ne usa uno alternativo
+    recall_tool_name: str = RECALL_NAME
+    tools_tool_name: str = TOOLS_NAME
     # recall strutturato (recall2.py, RECALL-RESULT.md): tutto spento di serie
     recall_struct: bool = False     # passaggi, intestazioni con collegamenti, mode timeline/first/tree..., filtri
     recall_multi: bool = False      # queries: [...] in una sola chiamata (fusione per rango)
     recall_flex: bool = False       # indice normalizzato (identificatori spezzati, radice leggera it/en)
     recall_struct_max_tokens: int = 3500  # tetto in token del risultato strutturato
     # definizioni strumenti accorciate (tooldefs.py, TOOLDEFS-RESULT.md): 0 = spento (default). Testi deterministici
-    # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (strata_recall è del proxy: già corto)
+    # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (recall è del proxy: già corto)
     tooldefs_desc_max: int = 0      # caratteri massimi della description di uno strumento
     tooldefs_param_max: int = 0     # caratteri massimi della description di ogni parametro (anche annidati)
-    tooldefs_keep: tuple = (RECALL_NAME, "read", "bash", "edit", "write", "grep", "find", "ls")  # usati sempre, corti
-    # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + strata_recall + strata_tools;
-    # gli altri si caricano con strata_tools (definizione nel risultato, in coda: il prefisso non cambia)
+    tooldefs_keep: tuple = (RECALL_NAME, LEGACY_RECALL_NAME, "read", "bash", "edit", "write", "grep", "find", "ls")  # usati sempre, corti
+    # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + recall + tools;
+    # gli altri si caricano con lo strumento tools (definizione nel risultato, in coda: il prefisso non cambia)
     tools_paging: bool = False
     tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
     tools_load_max: int = 5
@@ -340,7 +357,7 @@ def call_notes(m: dict, rid: str) -> dict:
     return notes
 
 
-def call_note_text(name: str, path: str, rid: str, result: str) -> str:
+def call_note_text(name: str, path: str, rid: str, result: str, rn: str = RECALL_NAME) -> str:
     """GPT-ANSWER3 §game.js: operazione, file, esito accertato o no, accesso allo storico, niente 'modifiche
     esterne' inventate."""
     esito = outcome(name, result)
@@ -352,9 +369,9 @@ def call_note_text(name: str, path: str, rid: str, result: str) -> str:
     else:
         e = "esito non verificato"
     return ("(nota del gestore del contesto: chiamata %s fatta da te in questa sessione, %s. Gli argomenti voluminosi "
-            "sono accorciati nel prompt per spazio; testo originale: strata_recall id=%s. Per lo stato attuale del "
+            "sono accorciati nel prompt per spazio; testo originale: %s id=%s. Per lo stato attuale del "
             "file rileggilo; se differisce da ciò che ricordi, è per tue modifiche successive o per un esito "
-            "fallito: nessuna modifica esterna è stata rilevata.)\n" % (what, e, rid))
+            "fallito: nessuna modifica esterna è stata rilevata.)\n" % (what, e, rn, rid))
 
 
 def is_human_user(m: dict) -> bool:
@@ -819,6 +836,10 @@ class Store:
                             (h, conv, json.dumps(msgs, ensure_ascii=False), strip_content, strip_reasoning,
                              time.time()))
 
+    def has_conv(self, conv: str) -> bool:
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM chains WHERE conv=? LIMIT 1", (conv,)).fetchone() is not None
+
     def stats(self, conv: str) -> dict:
         with self.lock:
             a = self.db.execute("SELECT count(*), coalesce(sum(tokens),0) FROM archive WHERE conv=?", (conv,)).fetchone()
@@ -841,8 +862,12 @@ class Prepared:
     masked: int
     masked_tokens: int            # token ARCHIVIATI dei pezzi nascosti (testo originale)
     masked_saved: int = 0         # riduzione fisica misurata (somma dei Δ dei pacchetti)
-    catalog: dict = dataclasses.field(default_factory=dict)      # strumenti caricabili con strata_tools
+    catalog: dict = dataclasses.field(default_factory=dict)      # strumenti caricabili con lo strumento tools
     invalidated: dict = dataclasses.field(default_factory=dict)  # token di cache invalidati e causa
+    recall_name: str = RECALL_NAME     # nomi degli strumenti del proxy in questa conversazione
+    tools_name: str = TOOLS_NAME
+    recall_aliases: frozenset = frozenset((RECALL_NAME, LEGACY_RECALL_NAME))  # chiamate risolte come recall
+    tools_aliases: frozenset = frozenset((TOOLS_NAME, LEGACY_TOOLS_NAME))
 
 
 class Manager:
@@ -854,7 +879,10 @@ class Manager:
         self.kw: dict = {}        # kwargs del template della richiesta corrente (reasoning_effort, ...)
         self._fileops_seen: dict[str, int] = {}
         self.shorten_tools = ToolShortener(cfg.tooldefs_desc_max, cfg.tooldefs_param_max, cfg.tooldefs_keep)
-        self.pager = ToolPager(tuple(cfg.tools_core) + (RECALL_NAME, TOOLS_NAME))
+        self.pager = ToolPager(tuple(cfg.tools_core) + (RECALL_NAME, LEGACY_RECALL_NAME, TOOLS_NAME, LEGACY_TOOLS_NAME,
+                                                        cfg.recall_tool_name, cfg.tools_tool_name))
+        # nomi degli strumenti del proxy nella conversazione corrente (impostati da prepare)
+        self.rn, self.tn = cfg.recall_tool_name or RECALL_NAME, cfg.tools_tool_name or TOOLS_NAME
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
 
     # ---------- stima ----------
@@ -906,10 +934,10 @@ class Manager:
         riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
-            kind, rec = typed_receipt(info, orig, failed, rid_args)
+            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn)
             if rec:
-                return OUT_RECEIPT.format(origin=origin_text(info), n=n, rid=rid, receipt=rec)
-        return OUT_PLACEHOLDER.format(origin=origin_text(info), n=n, rid=rid,
+                return OUT_RECEIPT.format(origin=origin_text(info), n=n, rid=rid, receipt=rec, rn=self.rn)
+        return OUT_PLACEHOLDER.format(origin=origin_text(info), n=n, rid=rid, rn=self.rn,
                                       head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
     def _segment_for(self, conv: str, hs: list[str]):
         segs = self.store.segments(conv) if conv else []
@@ -950,7 +978,7 @@ class Manager:
                 fx = self.exchange_receipts(msgs, i, end)
                 n_hidden = sum(self.msg_tokens(x, False) for x in msgs[i + 1:end])
                 m = {**m, "content": content_text(m.get("content")) +
-                     DROP_NOTE.format(n=n_hidden, fx=fx or "nessuna chiamata", rid=dk[0])}
+                     DROP_NOTE.format(n=n_hidden, fx=fx or "nessuna chiamata", rid=dk[0], rn=self.rn)}
                 phys.append(m); origin.append(i)
                 hidden_to = end
                 strip = None
@@ -965,7 +993,7 @@ class Manager:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
                 res = content_text(msgs[i].get("content"))
-                m = {**m, "content": call_note_text(name, path, rid, res) +
+                m = {**m, "content": call_note_text(name, path, rid, res, self.rn) +
                      (c0 if isinstance(c0, str) else content_text(c0))}
             tk = masks.get(hs[i] + THINK_SUFFIX)
             if tk and m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str):
@@ -1036,6 +1064,7 @@ class Manager:
         conv, known = self.store.find_conv(hs)
         if hint:
             conv = "c-" + H(hint)[:16]
+        existed = conv is not None and self.store.has_conv(conv)   # già nell'archivio prima di questa richiesta
         if conv is None:
             conv = "c" + uuid.uuid4().hex[:12]
             events.append(self.journal.log("new_conversation", conv=conv, messages=len(msgs)))
@@ -1056,15 +1085,17 @@ class Manager:
         events.extend(self._scan_marks(conv, msgs, hs))
         events.extend(self._scan_fileops(conv, msgs))
 
+        names = self.tool_names(conv, client_tools, legacy=existed)
+        self.rn, self.tn = names["recall"], names["tools"]
         tools = list(self.shorten_tools(client_tools) or [])
         catalog: dict = {}
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
-        if cfg.inject_recall and not any((t.get("function") or {}).get("name") == RECALL_NAME for t in tools):
+        if cfg.inject_recall and not any((t.get("function") or {}).get("name") == self.rn for t in tools):
             from .recall2 import recall_tool
-            tools.append(recall_tool(cfg, RECALL_TOOL))
+            tools.append(recall_tool(cfg, recall_tool_def(self.rn)))
         if catalog:
-            tools.append(self.pager.tools_tool(catalog))
+            tools.append(self.pager.tools_tool(catalog, self.tn))
 
         seg, start, notes_msg, _, had_segments = self._segment_for(conv, hs)
         if upstream is not None and hasattr(upstream, "ctx"):
@@ -1135,7 +1166,55 @@ class Manager:
                         virtual_tokens=virtual, events=events, masked=len(masks),
                         masked_tokens=sum(n for _, n in masks.values()),
                         masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
-                        invalidated=inv)
+                        invalidated=inv, recall_name=self.rn, tools_name=self.tn,
+                        recall_aliases=self.call_aliases("recall", client_tools),
+                        tools_aliases=self.call_aliases("tools", client_tools))
+
+    # ---------- nomi degli strumenti del proxy (0.2.0) ----------
+    def tool_names(self, conv: str, client_tools, legacy: bool = False) -> dict:
+        """Nomi di recall/tools per la conversazione. La scelta di base si fa alla prima richiesta e si ricorda (kv),
+        così il prompt resta identico fra richieste e fra riavvii: conversazione già nell'archivio senza nomi
+        registrati = nata prima della 0.2.0 -> tiene strata_recall/strata_tools (prefisso, cache e salvataggi restano
+        validi); conversazione nuova -> recall_tool_name/tools_tool_name. Poi, funzione pura degli strumenti del
+        client: se il client dichiara già strata_recall/strata_tools si usano quelli (comportamento 0.1); se dichiara
+        uno strumento con il nome scelto, si passa a un nome alternativo invece di sovrascrivere il suo."""
+        taken = {(t.get("function") or {}).get("name") for t in client_tools or [] if isinstance(t, dict)}
+        key = NAMES_KEY + conv
+        raw = self.store.kv_get(key)
+        base = None
+        if raw:
+            try:
+                base = json.loads(raw)
+            except ValueError:
+                base = None
+        if not isinstance(base, dict) or not base.get("recall") or not base.get("tools"):
+            if legacy:
+                base = {"recall": LEGACY_RECALL_NAME, "tools": LEGACY_TOOLS_NAME}
+            else:
+                base = {"recall": self.cfg.recall_tool_name or RECALL_NAME,
+                        "tools": self.cfg.tools_tool_name or TOOLS_NAME}
+            self.store.kv_set(key, json.dumps(base, sort_keys=True))
+        out = dict(base)
+        for k, legacy_name, alts in (("recall", LEGACY_RECALL_NAME, RECALL_ALTERNATES),
+                                     ("tools", LEGACY_TOOLS_NAME, TOOLS_ALTERNATES)):
+            if legacy_name in taken:
+                out[k] = legacy_name
+            elif out[k] in taken:
+                out[k] = next(n for n in alts + ("%s_%s" % (k, H(conv)[:6]),) if n not in taken)
+                if raw is None:
+                    self.journal.log("tool_name_collision", conv=conv, kind=k, client=base[k], used=out[k])
+        return out
+
+    def call_aliases(self, kind: str, client_tools) -> frozenset:
+        """Nomi di chiamata risolti dal proxy come recall (o tools): quello della conversazione più i nomi storici,
+        esclusi quelli che il client dichiara come propri (quelle chiamate sono sue). Il nome storico strata_* resta
+        sempre del proxy (come nella 0.1)."""
+        taken = {(t.get("function") or {}).get("name") for t in client_tools or [] if isinstance(t, dict)}
+        if kind == "recall":
+            cur, legacy, cands = self.rn, LEGACY_RECALL_NAME, (RECALL_NAME, self.cfg.recall_tool_name)
+        else:
+            cur, legacy, cands = self.tn, LEGACY_TOOLS_NAME, (TOOLS_NAME, self.cfg.tools_tool_name)
+        return frozenset({cur, legacy} | {n for n in cands if n and n not in taken})
 
     # ---------- misura: token di cache invalidati (ricerca §21) ----------
     def _invalidation(self, conv, phys, tools, per, est, events) -> dict:
@@ -1168,7 +1247,7 @@ class Manager:
             c = content_text((m or {}).get("content"))
             if c.startswith(AUTO_HEAD):
                 return "richiamo_automatico"
-            if m and m.get("role") == "tool" and c.startswith("[strata_tools"):
+            if m and m.get("role") == "tool" and is_tools_result(c):
                 return "strumenti"
             return None
         cause = kind(pphys[k] if k < len(pphys) else None) or kind(phys[k] if k < len(phys) else None)
@@ -1268,10 +1347,11 @@ class Manager:
                 if t not in words:
                     words.append(t)
         text = (AUTO_HEAD + " Nell'archivio NASCOSTO di questa conversazione ci sono pezzi su: %s (%s). Se servono "
-                "per la richiesta, usa strata_recall id=<id> (testo intero) o query=...; non ricostruirli a memoria."
-                % (", ".join(words[:8]), "; ".join("id=%s msg %d %s" % (c["rid"], c["idx"] + 1, what.get(c["role"],
-                                                                                                    c["role"]))
-                                                  for c in chosen)))
+                "per la richiesta, usa %s id=<id> (testo intero) o query=...; non ricostruirli a memoria."
+                % (", ".join(words[:8]),
+                   "; ".join("id=%s msg %d %s" % (c["rid"], c["idx"] + 1, what.get(c["role"], c["role"]))
+                             for c in chosen),
+                   self.rn))
         return text, chosen
 
     def _auto_recall(self, conv, msgs, hs, start, phys, est, resp) -> dict | None:
@@ -1316,8 +1396,8 @@ class Manager:
         n_args = 0
         head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
                 "richiesta qui sopra (trovati dal gestore del contesto, non scritti dall'utente). Testo vero, "
-                "eventualmente estratto; testo intero con strata_recall id=<id>. Lo stato attuale dei file può "
-                "essere diverso: se serve, rileggili.")
+                "eventualmente estratto; testo intero con %s id=<id>. Lo stato attuale dei file può "
+                "essere diverso: se serve, rileggili." % self.rn)
         blocks, used, chosen = [], self.tc.count(head), []
         for rid, idx, role, name, content, tokens, score, matched in cands[:cfg.auto_recall_k * 3]:
             if len(chosen) >= cfg.auto_recall_k:
@@ -1352,7 +1432,7 @@ class Manager:
 
     # ---------- registro delle operazioni sui file ----------
     def _scan_fileops(self, conv: str, msgs: list) -> list:
-        """Registro file (operazione, esito, id di argomenti e uscita) per strata_recall path=… e, come segnali per il
+        """Registro file (operazione, esito, id di argomenti e uscita) per recall path=… e, come segnali per il
         futuro selettore, riletture dello stesso file e modifiche fallite (eventi `reread`, `edit_failed`)."""
         calls, rows = {}, []
         for i, m in enumerate(msgs):
@@ -1461,7 +1541,7 @@ class Manager:
                         and not any(k in pinned for k in range(i, end)):
                     before = sum(per[x] for x in js)
                     note = DROP_NOTE.format(n=before, fx=self.exchange_receipts(msgs, i, end) or "nessuna chiamata",
-                                            rid=rid_for(i, msgs[i]))
+                                            rid=rid_for(i, msgs[i]), rn=self.rn)
                     sv = before - self.tc.count(note)
                     if sv > 0:
                         cand.append((i, j, hs[i] + DROP_SUFFIX, rid_for(i, msgs[i]), before, sv,
@@ -1505,7 +1585,7 @@ class Manager:
                     # letto dal risultato vero: il testo della nota cambia con l'esito)
                     res = {x.get("tool_call_id"): content_text(x.get("content"))
                            for x in msgs[i + 1:i + 1 + len(m["tool_calls"]) + 2] if x.get("role") == "tool"}
-                    note_cost = sum(self.tc.count(call_note_text(nm, pa, rid, res.get(cid, ""))) + 1
+                    note_cost = sum(self.tc.count(call_note_text(nm, pa, rid, res.get(cid, ""), self.rn)) + 1
                                     for cid, (nm, pa, _) in call_notes(m, rid).items())
                     sv = self.msg_tokens(m, True) - self.msg_tokens(m2, True) - note_cost
                     if sv > 0:
@@ -1579,7 +1659,7 @@ class Manager:
             line = "- recall:%s \u00b7 %s \u00b7 %d token" % (rid_for(i, m), calls.get(m.get("tool_call_id"), "?"), n)
             t = self.tc.count(line)
             if used + t > self.cfg.index_max_tokens:
-                lines.append("- \u2026 (blocchi più vecchi: cerca con strata_recall query)")
+                lines.append("- \u2026 (blocchi più vecchi: cerca con %s query)" % self.rn)
                 break
             lines.append(line)
             used += t
@@ -1600,7 +1680,7 @@ class Manager:
         t0 = time.time()
         notes, usage, finish, timings = "", {}, None, None
         try:
-            r = upstream.chat({**params, "messages": phys + [{"role": "user", "content": NOTES_INSTRUCTION}],
+            r = upstream.chat({**params, "messages": phys + [{"role": "user", "content": NOTES_INSTRUCTION.replace("{rn}", self.rn)}],
                                "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False})
             notes = (r["choices"][0]["message"].get("content") or "").strip()
             usage = r.get("usage") or {}
@@ -1611,7 +1691,7 @@ class Manager:
                                        tokens=self.tc.count(notes), usage=usage, finish=finish, timings=timings,
                                        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens")))
         if not notes:
-            notes = "(note non disponibili: usa strata_recall per ricostruire i dettagli)"
+            notes = "(note non disponibili: usa %s per ricostruire i dettagli)" % self.rn
         # 2) sigillo (sperimentale) + SAVE di A
         if cfg.slot_save:
             if cfg.seal_experimental:
@@ -1641,7 +1721,7 @@ class Manager:
         first_user = next((m for m in msgs if is_human_user(m)), None)
         parts = [SEG_MARK.format(seg=seg + 1),
                  "I messaggi 1\u2013%d di questa conversazione sono stati archiviati e non sono più nel contesto. "
-                 "Il loro testo esatto è recuperabile con lo strumento %s (per id o per ricerca)." % (c, RECALL_NAME)]
+                 "Il loro testo esatto è recuperabile con lo strumento %s (per id o per ricerca)." % (c, self.rn)]
         if cfg.keep_first_user and first_user is not None and msgs.index(first_user) < c:
             parts += ["", "## Prima richiesta dell'utente (letterale)", content_text(first_user.get("content"))]
         parts += ["", "## Note di passaggio", notes]
@@ -1680,8 +1760,8 @@ class Manager:
         head = [PIN_HEAD, "Punti fissati dall'utente nella parte archiviata della conversazione: valgono ancora, "
                 "testuali."]
         if dropped:
-            head.append("(avviso: %d punti fermi più vecchi oltre il tetto di %d token: cercali con strata_recall)"
-                        % (dropped, self.cfg.pins_max_tokens))
+            head.append("(avviso: %d punti fermi più vecchi oltre il tetto di %d token: cercali con %s)"
+                        % (dropped, self.cfg.pins_max_tokens, self.rn))
         ev = self.journal.log("pins_block", conv=conv, count=len(lines), dropped=dropped, tokens=used,
                               over_limit=bool(dropped))
         return "\n".join(head + lines), ev
@@ -1720,7 +1800,7 @@ class Manager:
 
     def recall_legacy(self, conv: str, args: dict, max_idx: int | None = None, meta: list | None = None,
                       head_fn=None) -> str:
-        """strata_recall di serie (id / path / query). head_fn: intestazione alternativa per id (recall2)."""
+        """recall di serie (id / path / query). head_fn: intestazione alternativa per id (recall2)."""
         rid = str(args.get("id") or "").strip().removeprefix("recall:").removeprefix("id=")
         try:
             off = max(0, int(args.get("offset") or 0))
@@ -1744,7 +1824,7 @@ class Manager:
             if head_fn is not None:
                 head = head_fn(r, off, len(chunk), len(text))
             tail = "" if off + len(chunk) >= len(text) else \
-                "\n[continua: strata_recall id=%s offset=%d]" % (rid, off + len(chunk))
+                "\n[continua: %s id=%s offset=%d]" % (self.rn, rid, off + len(chunk))
             return head + chunk + tail
         path = str(args.get("path") or "").strip()
         if path:

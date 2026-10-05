@@ -75,7 +75,7 @@ class TestHelpers(unittest.TestCase):
         self.assertIn("FALLITO", n)
         self.assertIn("src/game.js", n)
         self.assertIn("nessuna modifica esterna", n)
-        self.assertIn("strata_recall id=a1", n)
+        self.assertIn("recall id=a1", n)
 
 
 class TestManager(unittest.TestCase):

@@ -71,7 +71,7 @@ class TestReceipts(unittest.TestCase):
         I = self.info
         k, r = typed_receipt(I("write", path="a.js", content="ciao"), "Successfully wrote 4 bytes", False, "aabc")
         self.assertIn("scrittura: riuscito, 4 byte, sha256", r)
-        self.assertIn("strata_recall id=aabc", r)
+        self.assertIn("recall id=aabc", r)
         k, r = typed_receipt(I("edit", path="a.js", edits=[{}, {}]), "Error: oldText not found in the current file",
                              True)
         self.assertIn("FALLITO", r)

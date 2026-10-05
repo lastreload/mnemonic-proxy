@@ -1,4 +1,4 @@
-"""strata_recall strutturato (recall2.py) e indizio del richiamo automatico: opzioni spente = comportamento di serie."""
+"""recall strutturato (recall2.py) e indizio del richiamo automatico: opzioni spente = comportamento di serie."""
 import json
 import unittest
 

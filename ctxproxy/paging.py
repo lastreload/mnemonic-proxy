@@ -8,11 +8,11 @@ cache a prefisso di Strata continua a valere.
    sistema, cioè in testa al prompt: cambiare l'elenco a metà conversazione riscrive tutto (rilettura completa). Un
    messaggio di sistema tardivo non è ammesso (il template solleva "System message must be at the beginning";
    frontend.py lo trasforma in user). Quindi:
-     - elenco strumenti FISSO per tutta la conversazione: strumenti di base del client + strata_recall + strata_tools
-       (la cui descrizione elenca per nome gli strumenti caricabili);
-     - le definizioni complete arrivano come RISULTATO di strata_tools, in coda (role tool -> <tool_response> dentro
+     - elenco strumenti FISSO per tutta la conversazione: strumenti di base del client + recall + tools (nomi 0.2.0;
+       strata_recall + strata_tools nelle conversazioni nate prima) — la descrizione di tools elenca i caricabili;
+     - le definizioni complete arrivano come RISULTATO di tools, in coda (role tool -> <tool_response> dentro
        un turno user): si aggiungono, non riscrivono nulla; il proxy le ricorda come eventi interni (tabella inserts,
-       come strata_recall), quindi alla richiesta dopo sono reinserite identiche;
+       come recall), quindi alla richiesta dopo sono reinserite identiche;
      - "caricati" = strumenti le cui definizioni sono presenti nel prompt fisico corrente (si rilegge dal prompt, così
        dopo un cambio di segmento che taglia quel risultato tornano non caricati);
      - chiamata diretta a uno strumento non caricato: il proxy NON la passa al client, risponde con la definizione e
@@ -28,9 +28,16 @@ import hashlib
 import json
 import re
 
-TOOLS_NAME = "strata_tools"
-TOOLS_HEAD = "[strata_tools: definizioni caricate: "
-_TOOLS_HEAD_RE = re.compile(r"^\[strata_tools: definizioni caricate: ([^\]]*)\]", re.M)
+TOOLS_NAME = "tools"                 # 0.2.0 (era strata_tools: resta per le conversazioni nate prima, vedi core.py)
+LEGACY_TOOLS_NAME = "strata_tools"
+TOOLS_HEAD_TPL = "[%s: definizioni caricate: "
+TOOLS_HEAD = TOOLS_HEAD_TPL % TOOLS_NAME
+_TOOLS_HEAD_RE = re.compile(r"^\[([A-Za-z0-9_.-]+): definizioni caricate: ([^\]]*)\]", re.M)
+
+
+def is_tools_result(text: str) -> bool:
+    """Risultato del caricatore di strumenti (con qualunque nome: tools, strata_tools, alternativo)."""
+    return isinstance(text, str) and _TOOLS_HEAD_RE.match(text) is not None
 AUTO_HEAD = "[gestore del contesto: richiamo automatico]"
 
 
@@ -56,7 +63,7 @@ def _words(s: str) -> list[str]:
 
 
 class ToolPager:
-    """Divide gli strumenti del client in base (sempre nel prompt) e catalogo (caricabili con strata_tools)."""
+    """Divide gli strumenti del client in base (sempre nel prompt) e catalogo (caricabili con lo strumento tools)."""
 
     def __init__(self, core: tuple | list | set):
         self.core = set(core or ())
@@ -72,12 +79,12 @@ class ToolPager:
                 catalog[n] = t
         return base, catalog
 
-    def tools_tool(self, catalog: dict) -> dict:
-        """Definizione di strata_tools: funzione pura dei NOMI del catalogo (stabile fra richieste)."""
+    def tools_tool(self, catalog: dict, name: str = TOOLS_NAME) -> dict:
+        """Definizione dello strumento tools: funzione pura del nome e dei NOMI del catalogo (stabile fra richieste)."""
         groups: dict[str, list[str]] = {}
         for n in catalog:
             groups.setdefault(category(n), []).append(n)
-        key = json.dumps(sorted((k, sorted(v)) for k, v in groups.items()))
+        key = json.dumps([name] + sorted((k, sorted(v)) for k, v in groups.items()))
         t = self._tool_cache.get(key)
         if t is not None:
             return t
@@ -87,7 +94,7 @@ class ToolPager:
         if single:
             listing += ("; " if listing else "") + "altri: " + ", ".join(single)
         t = {"type": "function", "function": {
-            "name": TOOLS_NAME,
+            "name": name,
             "description": (
                 "Carica la definizione completa di strumenti che NON sono nell'elenco qui sopra. Per risparmiare "
                 "spazio il prompt contiene solo gli strumenti di base; gli altri esistono e funzionano normalmente, "
@@ -105,16 +112,16 @@ class ToolPager:
 
     @staticmethod
     def loaded_in(phys: list) -> set[str]:
-        """Strumenti le cui definizioni sono nel prompt fisico (risultati di strata_tools presenti)."""
+        """Strumenti le cui definizioni sono nel prompt fisico (risultati del caricatore presenti)."""
         out = set()
         for m in phys or []:
             if m.get("role") != "tool":
                 continue
             c = m.get("content")
-            if isinstance(c, str) and c.startswith(TOOLS_HEAD):
+            if isinstance(c, str):
                 g = _TOOLS_HEAD_RE.match(c)
                 if g:
-                    out.update(x.strip() for x in g.group(1).split(",") if x.strip())
+                    out.update(x.strip() for x in g.group(2).split(",") if x.strip())
         return out
 
     @staticmethod
@@ -144,15 +151,16 @@ class ToolPager:
         return (exact + [n for _, n in scored])[:limit]
 
     @staticmethod
-    def result(catalog: dict, names: list[str], loaded: set, query: str = "", note: str = "") -> str:
-        """Testo del risultato di strata_tools. La prima riga (TOOLS_HEAD) dice quali definizioni contiene: è ciò che
+    def result(catalog: dict, names: list[str], loaded: set, query: str = "", note: str = "",
+               name: str = TOOLS_NAME) -> str:
+        """Testo del risultato dello strumento tools. La prima riga (TOOLS_HEAD) dice quali definizioni contiene: è ciò che
         loaded_in() rilegge. Strumenti già caricati: non si ripetono."""
         new = [n for n in names if n not in loaded]
         again = [n for n in names if n in loaded]
         if not names:
-            return ("[strata_tools: nessuno strumento trovato per %r. Caricabili: %s]"
-                    % (query, ", ".join(sorted(catalog))))
-        lines = [TOOLS_HEAD + ", ".join(new) + "]"]
+            return ("[%s: nessuno strumento trovato per %r. Caricabili: %s]"
+                    % (name, query, ", ".join(sorted(catalog))))
+        lines = [TOOLS_HEAD_TPL % name + ", ".join(new) + "]"]
         if note:
             lines.append(note)
         if again:
@@ -248,7 +256,7 @@ _GUARD_RE = re.compile(r"\u27eactx-archive id=[rta][0-9a-f]{12}|\u27eb Ricevuta:
                        r"\[gestore del contesto: richiamo automatico\] Pezzi|nascosta per spazio \(\d+ token\)")
 GUARD_MSG = ("[gestore del contesto: chiamata NON eseguita. I suoi argomenti contengono il testo di una ricevuta o di "
              "un segnaposto del gestore del contesto (es. \u27eactx-archive \u2026\u27eb, \"nascosta per spazio\"): "
-             "non è contenuto vero del file. Rileggi il file (read) o recupera il testo esatto con strata_recall, "
+             "non è contenuto vero del file. Rileggi il file (read) o recupera il testo esatto con {rn}, "
              "poi ripeti la chiamata con il contenuto vero.]")
 
 
@@ -288,7 +296,8 @@ def receipt_kind(info: dict | None, text: str, failed: bool) -> str:
     return "altro"
 
 
-def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | None = None) -> tuple[str, str]:
+def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | None = None,
+                  rn: str = "recall") -> tuple[str, str]:
     """-> (tipo, testo della ricevuta) per un'uscita nascosta. Funzione pura di (chiamata, uscita, esito)."""
     kind = receipt_kind(info, text, failed)
     args = (info or {}).get("args") or {}
@@ -303,7 +312,7 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
             nb = len(ed) if isinstance(ed, list) else (1 if args.get("oldText") or args.get("old_string") else 0)
             s = "modifica: %s, %d blocchi" % (esito, nb)
         if rid_args:
-            s += ", argomenti originali: strata_recall id=%s" % rid_args
+            s += ", argomenti originali: %s id=%s" % (rn, rid_args)
         if failed:
             s += ". Errore: \u00ab%s\u00bb" % last_lines(text, 2, 200)
         return kind, s

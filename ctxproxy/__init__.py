@@ -1,3 +1,8 @@
-"""virtual-context-proxy (ctxproxy): OpenAI-compatible "virtual context" proxy in front of Strata."""
+"""Mnemonic Proxy (package `ctxproxy`): transparent proxy that lets local coding agents work for hours.
 
-__version__ = "0.1.0"
+Verbatim archive, structured recall, segments with handoff notes, saved engine state. In front of Strata, llama.cpp
+(llama-server) or any OpenAI-compatible engine; speaks Chat Completions, Anthropic Messages and OpenAI Responses.
+"""
+# Author: Maurizio Verde — LastReload
+
+__version__ = "0.2.0"

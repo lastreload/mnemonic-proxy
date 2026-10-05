@@ -165,7 +165,7 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
             if getattr(cfg, f, False):
                 setattr(cfg, f, False)
         if off:
-            warn.append("motore %s senza salvataggi di sessione: spente %s" % (engine.kind, ", ".join(off)))
+            warn.append("engine %s has no saved-state support: disabled %s" % (engine.kind, ", ".join(off)))
     if engine.n_ctx and "window" not in explicit and engine.kind == "llama.cpp" and engine.n_ctx != cfg.window:
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window
@@ -180,12 +180,12 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
                 if nv != v:
                     setattr(cfg, f, nv)
                     scaled[f] = nv
-        warn.append("finestra da n_ctx del motore: %d (era %d); soglie scalate x%.3f" % (cfg.window, old, ratio))
+        warn.append("window from engine n_ctx: %d (was %d); thresholds scaled x%.3f" % (cfg.window, old, ratio))
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
     for w in warn:
         if log:
-            log("[strata-context] avviso: " + w)
+            log("[mnemonic-proxy] warning: " + w)
         if journal is not None:
             journal.log("engine_warning", message=w)
     if journal is not None:

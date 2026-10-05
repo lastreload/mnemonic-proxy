@@ -4,7 +4,7 @@
     python3 -m ctxproxy.mcp_server --db data/archive.sqlite --http 8133     # HTTP "streamable" su /mcp
 
 Strumenti:
-  recall         come strata_recall del proxy con recall_struct/recall_multi/recall_flex attivi (recall2.py): id,
+  recall         come lo strumento recall del proxy con recall_struct/recall_multi/recall_flex attivi (recall2.py): id,
                  query, queries, path, mode first/timeline/neighbors/output/reasoning/tree, filtri role/seg/from/to;
                  `conversation` facoltativo (di serie la conversazione più recente; con `id` quella del pezzo)
   conversations  elenco delle conversazioni archiviate (messaggi, token, segmenti, primo messaggio dell'utente)
@@ -29,7 +29,7 @@ from .core import Config, Journal, Manager, Store, TokenCounter
 from .recall2 import Recall2
 
 PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
-SERVER_INFO = {"name": "ctxproxy-archive", "version": "0.1.0"}
+SERVER_INFO = {"name": "mnemonic-archive", "version": "0.2.0"}
 TEMP_SCHEMA = """
 CREATE TEMP TABLE IF NOT EXISTS passages(pid INTEGER PRIMARY KEY, rid TEXT, conv TEXT, idx INT, role TEXT, off INT,
     len INT);
@@ -343,7 +343,7 @@ class McpServer:
 
         httpd = ThreadingHTTPServer((host, port), H)
         httpd.daemon_threads = True
-        print("[ctxproxy-mcp] http://%s:%d%s (sola lettura: %s)" % (host, port, path, self.arc.path),
+        print("[mnemonic-mcp] http://%s:%d%s (read-only: %s)" % (host, port, path, self.arc.path),
               file=sys.stderr, flush=True)
         httpd.serve_forever()
 
@@ -357,13 +357,15 @@ def _err(mid, code, message):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="server MCP in sola lettura sull'archivio del proxy di contesto")
-    ap.add_argument("--db", required=True, help="archive.sqlite del proxy (aperto in sola lettura)")
-    ap.add_argument("--journal", help="journal.jsonl (di serie: accanto al database)")
-    ap.add_argument("--max-tokens", type=int, default=6000, help="tetto in token di un risultato di recall")
-    ap.add_argument("--tokenizer", help="tokenizer.json HF per contare i token (facoltativo)")
-    ap.add_argument("--http", type=int, metavar="PORT", help="HTTP streamable su /mcp invece di stdio")
-    ap.add_argument("--host", default="127.0.0.1")
+    ap = argparse.ArgumentParser(prog="mnemonic-mcp",
+                                 description="Read-only MCP server over the Mnemonic Proxy archive "
+                                             "(tools: recall, conversations, journal).")
+    ap.add_argument("--db", required=True, help="the proxy's archive.sqlite (opened read-only)")
+    ap.add_argument("--journal", help="journal.jsonl (default: next to the database)")
+    ap.add_argument("--max-tokens", type=int, default=6000, help="token cap of one recall result (default: 6000)")
+    ap.add_argument("--tokenizer", help="HF tokenizer.json for token counts (optional)")
+    ap.add_argument("--http", type=int, metavar="PORT", help="serve streamable HTTP on /mcp instead of stdio")
+    ap.add_argument("--host", default="127.0.0.1", help="bind address for --http (default: 127.0.0.1)")
     a = ap.parse_args(argv)
     srv = McpServer(Archive(a.db, a.journal, a.max_tokens, a.tokenizer))
     if a.http:

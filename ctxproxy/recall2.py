@@ -1,4 +1,4 @@
-"""strata_recall strutturato (RECALL-RESULT.md): ricerca a passaggi, parole flessibili, struttura dai dati.
+"""recall strutturato (docs/dev-notes/RECALL-RESULT.md): ricerca a passaggi, parole flessibili, struttura dai dati.
 
 Nessun modello: solo SQLite/FTS5 e Python. Attivato da opzioni di Config (tutte spente di serie):
   recall_struct  risultati con intestazione (id, messaggio, segmento, ruolo, strumento, percorso, collegamento),
@@ -266,7 +266,7 @@ ROLE_IT = {"tool": "uscita di strumento", "assistant-reasoning": "ragionamento",
 
 
 class Recall2:
-    """strata_recall con le opzioni recall_struct / recall_multi / recall_flex."""
+    """recall con le opzioni recall_struct / recall_multi / recall_flex."""
 
     def __init__(self, mgr):
         self.mgr, self.cfg, self.st, self.tc = mgr, mgr.cfg, mgr.store, mgr.tc
@@ -274,6 +274,11 @@ class Recall2:
         self.sx = Structure(self.st)
 
     # ------------------------------------------------------------ helpers
+    @property
+    def rn(self) -> str:
+        """Nome dello strumento di recall nella conversazione corrente (per le indicazioni nei risultati)."""
+        return getattr(self.mgr, "rn", None) or "recall"
+
     def _row(self, rid, conv):
         r = self.st.get(rid, conv) or self.st.get(rid)
         return r  # (rid, conv, idx, role, name, content, tokens)
@@ -528,9 +533,9 @@ class Recall2:
             s.append("- nessuna di queste parole compare: prova sinonimi, l'altra lingua (italiano/inglese) o i nomi "
                      "usati nel codice")
         if files:
-            s.append("- file modificati: %s \u2192 strata_recall path=<file> mode=timeline (o mode=first per la "
-                     "prima scrittura)" % ", ".join(files))
-        s.append("- mappa della sessione per turni: strata_recall mode=tree")
+            s.append("- file modificati: %s \u2192 %s path=<file> mode=timeline (o mode=first per la "
+                     "prima scrittura)" % (", ".join(files), self.rn))
+        s.append("- mappa della sessione per turni: %s mode=tree" % self.rn)
         s.append("Se l'informazione non c'è, dillo: non ricostruirla.")
         return "\n".join(s)
 
@@ -675,9 +680,9 @@ class Recall2:
             outs = by_args.get(rid, [])
             if r[3] == "tool":
                 info = by_out.get(rid) or {}
-                return ("[recall: l'uscita id=%s viene dalla chiamata id=%s del messaggio %s (%s)] -> strata_recall "
+                return ("[recall: l'uscita id=%s viene dalla chiamata id=%s del messaggio %s (%s)] -> %s "
                         "id=%s" % (rid, info.get("args_rid"), (info.get("call_idx") or 0) + 1, info.get("link") or
-                                   "non collegata", info.get("args_rid")))
+                                   "non collegata", self.rn, info.get("args_rid")))
             if not outs:
                 return "recall: nessuna uscita collegata agli argomenti id=%s" % rid
             lines = ["[recall: uscite delle chiamate id=%s (messaggio %d)]" % (rid, idx + 1)]
@@ -745,8 +750,8 @@ class Recall2:
         if starts[0] > lo:
             starts = [lo] + starts
         out = ["[recall: mappa della sessione per segmento e turno (messaggi %d\u2013%d); dati dell'archivio, nessun "
-               "riassunto. Dettagli: strata_recall from=<msg> to=<msg> query=..., o path=<file> mode=timeline]"
-               % (lo + 1, hi + 1)]
+               "riassunto. Dettagli: %s from=<msg> to=<msg> query=..., o path=<file> mode=timeline]"
+               % (lo + 1, hi + 1, self.rn)]
         cur_seg = None
         from .core import outcome
         for k, s in enumerate(starts):
