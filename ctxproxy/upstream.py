@@ -19,6 +19,16 @@ class Upstream:
         self.base = base.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.engine = None          # engines.Engine (None = Strata, comportamento storico)
+        self.slot_id = 0
+        self.slot_dir = ""          # per riconoscere un file mancante (llama-server risponde 400)
+        self.extra_body: dict = {}  # campi aggiunti a ogni richiesta chat (llama.cpp: id_slot, cache_prompt)
+
+    def set_engine(self, engine, slot_dir: str = ""):
+        self.engine = engine
+        self.slot_id = engine.slot_id
+        self.slot_dir = slot_dir
+        self.extra_body = {"id_slot": engine.slot_id, "cache_prompt": True} if engine.kind == "llama.cpp" else {}
 
     def _headers(self, extra=None):
         h = {"Content-Type": "application/json"}
@@ -42,17 +52,24 @@ class Upstream:
         return json.loads(body)
 
     def chat(self, body: dict) -> dict:
-        body = {k: v for k, v in body.items() if k not in ("stream", "stream_options")}
+        body = {**self.extra_body, **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}
         return self.post_json("/v1/chat/completions", body)
 
     def chat_stream(self, body: dict) -> "StreamCall":
         """Apre /v1/chat/completions in streaming. Iterare l'oggetto dà i chunk JSON; close() chiude la connessione
         (Strata vede la disconnessione e annulla la generazione)."""
-        body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+        body = {**self.extra_body, **body, "stream": True, "stream_options": {"include_usage": True}}
         return StreamCall(self, body)
 
     def slot(self, action: str, filename: str) -> dict:
-        return self.post_json("/slots/0?action=%s" % action, {"filename": filename})
+        """Strata e llama-server hanno la stessa forma: POST /slots/{id}?action=save|restore {"filename"} ->
+        {id_slot, filename, n_saved|n_restored, n_written|n_read, timings.save_ms|restore_ms}."""
+        st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
+                               json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
+        if st >= 400:
+            from .engines import slot_error_status
+            raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename), body)
+        return json.loads(body)
 
 
 class StreamCall:

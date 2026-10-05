@@ -104,6 +104,33 @@ systemd user unit with placeholder paths is in `examples/ctx-proxy.service`.
 | `autorestore`, `autorestore_min_gain` | true, 8192 | restore before forwarding when it saves at least this many tokens |
 | `response_floor` | 0 | minimum response size assumed in the window check |
 | `live_dump` | false | write `data/live/last_request.json` for the dashboard |
+| `engine`, `slot_id`, `engine_tokenize` | "auto", 0, false | engine type (auto-detected), slot to use, token counting via the engine's `/tokenize` |
+
+### Archive over MCP
+
+`python3 -m ctxproxy.mcp_server --db data/archive.sqlite` exposes the archive, read-only, as an
+MCP server (stdio; `--http PORT` for streamable HTTP on 127.0.0.1) with three tools: `recall`
+(same search as `strata_recall`, across all conversations or one), `conversations`, `journal`.
+The database is opened with sqlite `mode=ro` (the proxy can keep writing to it); the MCP server
+never writes. Registration:
+
+    claude mcp add ctxarchive -- python3 -m ctxproxy.mcp_server --db /path/archive.sqlite
+    codex mcp add ctxarchive -- python3 -m ctxproxy.mcp_server --db /path/archive.sqlite
+    hermes mcp add ctxarchive --command python3 --args -m ctxproxy.mcp_server --db /path/archive.sqlite
+
+(add `PYTHONPATH=<repo>` via `-e`/`--env` if the package is not installed). Equivalent Hermes
+`config.yaml` entry (what `hermes mcp add` writes):
+
+    mcp_servers:
+      ctxarchive:
+        command: python3
+        args: [-m, ctxproxy.mcp_server, --db, /path/archive.sqlite]
+        env: {PYTHONPATH: /path/to/repo}
+        enabled: true
+
+Claude Desktop / Cowork: local stdio servers go under `mcpServers` in
+`~/.config/Claude/claude_desktop_config.json` (same command/args/env); not tested here.
+Tested: Claude Code 2.1.287 (stdio and HTTP), Codex CLI 0.160.0, Hermes (`hermes mcp test`).
 
 Extra endpoints: `GET /v1/strata/archive/<id>`, `GET /v1/strata/conversations/<conv>`,
 `GET /v1/strata/journal`, `GET|POST /v1/strata/marks[/<conv>]` (📌/🗑). Every response carries
@@ -112,6 +139,18 @@ a `strata_context` field and an `X-Strata-Context` header. An optional
 explicitly; otherwise conversations are recognised by a hash chain over the messages.
 
 ## Compatibility
+
+The proxy recognises the engine at startup (`engine: "auto"`, or `--engine strata|llama.cpp|openai`)
+and turns off, with a warning, every feature the engine cannot support. `GET /v1/strata/engine`
+shows what was detected. Details and measurements: `ENGINES-RESULT.md`.
+
+| engine | what works |
+|---|---|
+| Strata with session files | everything (see below) |
+| Official Strata (no session files) | reduced mode, see below |
+| llama.cpp `llama-server --slot-save-path DIR` | everything that Strata with session files has: masking anchor, segment A saved, autosave/autorestore, `kv_archive`. Same slot API (`/slots/{id}?action=save|restore`); engine state is read from `/slots`; the window comes from the server's `n_ctx` (default thresholds scaled) unless `window` is set; `engine_tokenize: true` counts tokens with the server's `/tokenize`. With `--parallel N` the proxy pins `id_slot` (`slot_id`, default 0). |
+| llama.cpp without `--slot-save-path` | reduced mode (detected: slot actions answer 501) |
+| any other OpenAI-compatible server (vLLM, online APIs, ...) | reduced mode: masking, archive + `strata_recall`, segments with handoff notes, 📌/🗑, streaming |
 
 | Strata build | what works |
 |---|---|

@@ -97,11 +97,10 @@ class Tracker:
                 pass
 
     def status(self) -> dict | None:
+        """Stato del motore nella forma di /v1/status di Strata (llama-server: ricavato da /slots)."""
+        from .engines import normalize_status
         try:
-            st, _, data = self.up.raw("GET", "/v1/status")
-            if st != 200:
-                return None
-            return json.loads(data)
+            return normalize_status(getattr(self.up, "engine", None), self.up)
         except Exception:  # noqa: BLE001
             return None
 
@@ -148,9 +147,15 @@ class Tracker:
             return
         conv, seg = self.ctx
         self.text = text
+        req = ((s.get("activity") or {}).get("requests") or 0) + 1
+        eng = getattr(self.up, "engine", None)
+        if eng is not None and eng.counter_after_call:
+            # llama-server: il contatore è l'id dell'ultimo compito dello slot (non cresce di 1): lo si rilegge
+            s2 = self.status()
+            req = (s2.get("activity") or {}).get("requests") if s2 else None
         self._set({"phash": H(text), "plen": len(text), "tokens": int((usage or {}).get("prompt_tokens") or 0),
                    "conv": conv, "seg": seg, "started": s.get("started"),
-                   "requests": ((s.get("activity") or {}).get("requests") or 0) + 1, "t_end": time.time()})
+                   "requests": req, "t_end": time.time()})
 
     def chat(self, body: dict) -> dict:
         text, s = self._before(body)
