@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 — 2026-10-06
+
+First-run onboarding, tested literally in a clean Ubuntu 24.04 container.
+
+- `mnemonic-proxy demo`: offline demo (fake model behind the real proxy: archive, masking, exact recall), no model,
+  no GPU, ~1 minute. The fake engine now ships in the package (`ctxproxy/fake_engine.py`).
+- `mnemonic-proxy check [--live]`: reads the same options/config as the server and says what is wrong (config fields,
+  port, engine reachable/loaded/type, window, saved state, `slot_dir` vs `--slot-save-path`); `--live` runs a real
+  generation, a tool call and a save/restore. Exit 0 ready, 2 ready with warnings, 1 not ready; `--json`.
+- `/health` combines proxy and engine health (llama-server answers 503 while loading); new `/v1/engine`.
+- Small windows: scaled limits have floors (recall/notes/default response ≥ 1024, auto-recall/pins ≥ 512).
+- `examples/config.llama-server.json` (saved state, autosave) and `config.llama-server-8k.json` (thresholds for an
+  8K engine window). Both keep the short `recall` tool: with `recall_struct`/`recall_multi` Qwen3-4B made 0/6 tool
+  calls instead of 4–6/6.
+- README: quick start in tiers (T0 demo, T1 llama.cpp + Qwen3-4B on CPU + pi, T2 real use), tested combinations,
+  troubleshooting, platforms, uninstall.
+- CI workflow (unit tests on 3.10/3.14, demo, check against the fake engine; real-model job on demand).
+- `tests/test_kvarchive.py` skips on Python < 3.14 (no `compression.zstd`).
+
 ## 0.2.0 — 2026-10-05
 
 Renamed: **virtual-context-proxy → Mnemonic Proxy** (`mnemonic-proxy`; future repository

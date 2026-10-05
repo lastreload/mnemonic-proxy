@@ -168,6 +168,23 @@ class TestConfigPaths(unittest.TestCase):
                 with open(os.path.join(ROOT, "examples", fn)) as f:
                     self.assertEqual(set(json.load(f)) - names, set(), fn)
 
+    def test_starter_config_keeps_recall_tool_small(self):
+        # first-run 2026-10-05: with recall_struct/recall_multi (recall tool 2.4K chars, 12 params) Qwen3-4B on
+        # llama-server b11430 called pi's bash 0/6 times; plain recall 4-6/6. The starter config stays plain.
+        for fn in ("config.llama-server.json", "config.llama-server-8k.json"):
+            with open(os.path.join(ROOT, "examples", fn)) as f:
+                raw = json.load(f)
+            for k in ("recall_struct", "recall_multi", "tools_paging"):
+                self.assertFalse(raw.get(k, False), (fn, k))
+
+    def test_8k_config_masks_within_8k(self):
+        # T1 runs the engine with -c 8192: masking must start well before the window is full.
+        a = build_parser().parse_args(["--config", os.path.join(ROOT, "examples", "config.llama-server-8k.json")])
+        raw, cfg = load_config(a)
+        self.assertLess(cfg.mask_trigger, 8192 // 2)
+        self.assertLess(cfg.mask_target, cfg.mask_trigger)
+        self.assertTrue(cfg.slot_save and cfg.autosave)
+
     def test_no_args_namespace(self):
         a = SimpleNamespace(config=None, engine=None)
         raw, cfg = load_config(a)

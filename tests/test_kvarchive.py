@@ -13,6 +13,9 @@ import unittest
 from ctxproxy import kvarchive as K
 from ctxproxy.core import Config, Journal, Store
 
+if K.zstd is None:  # kv_archive needs Python >= 3.14 (compression.zstd); the rest of the proxy runs on 3.10+
+    raise unittest.SkipTest("kv_archive needs Python >= 3.14 (compression.zstd)")
+
 
 def make_session(tokens: int, seed: int, prefix_seed: int = 0, prefix_tokens: int = 0, layers: int = 3,
                  gdn_bytes: int = 300_000) -> bytes:

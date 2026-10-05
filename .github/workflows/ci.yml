@@ -1,0 +1,114 @@
+# Author: Maurizio Verde — LastReload
+# Tests on every push / PR (no model, no secrets). The real-model job (llama-server on CPU + Qwen3-0.6B) runs only on
+# demand: Actions → ci → Run workflow.
+name: ci
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      llama:
+        description: "also run the llama-server CPU job (Qwen3-0.6B)"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: install (pip install .)
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install .
+      - name: unit tests
+        run: python -m unittest discover -s tests -t . -v
+      - name: mnemonic-proxy demo (installed command)
+        run: |
+          cd /tmp
+          /tmp/venv/bin/mnemonic-proxy demo
+          /tmp/venv/bin/ctxproxy demo > /dev/null
+      - name: mnemonic-proxy check against the fake engine
+        run: |
+          cd /tmp
+          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 8192 --port 18095 &
+          for i in $(seq 1 50); do curl -sf localhost:18095/health > /dev/null && break; sleep 0.2; done
+          mkdir -p slots
+          cp "$GITHUB_WORKSPACE/examples/config.llama-server.json" .
+          /tmp/venv/bin/mnemonic-proxy check --json --upstream http://127.0.0.1:18095 --port 18096 \
+            --data ./data --config config.llama-server.json | tee check.json || true
+          /tmp/venv/bin/python -c "import json; d = json.load(open('check.json')); assert d['ready'] and d['exit_code'] == 0, d"
+
+  llama-cpu:
+    if: github.event_name == 'workflow_dispatch' && inputs.llama
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      LLAMA_TAG: b11430
+      MODEL_URL: https://huggingface.co/ggml-org/Qwen3-0.6B-GGUF/resolve/main/Qwen3-0.6B-Q8_0.gguf
+      MODEL_SHA256: 361cc68159042c36ebff7715dc5a2e4612153e88f3e9c9c234820849d6dc9e1d
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: cache llama.cpp build
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: llama.cpp/build/bin
+          key: llama-${{ env.LLAMA_TAG }}-cpu-ubuntu-24.04
+      - name: build llama-server ${{ env.LLAMA_TAG }} (CPU)
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF
+          cmake --build llama.cpp/build --config Release -j "$(nproc)" --target llama-server
+      - name: cache model
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-${{ env.MODEL_SHA256 }}
+      - name: download model (checksum verified)
+        run: |
+          mkdir -p models
+          [ -f models/model.gguf ] || curl -fL -o models/model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  models/model.gguf" | sha256sum -c -
+      - name: install
+        run: python -m pip install .
+      - name: engine
+        run: |
+          mkdir -p slots data
+          llama.cpp/build/bin/llama-server -m models/model.gguf -c 8192 --parallel 1 --jinja \
+            --slot-save-path ./slots --port 8095 > engine.log 2>&1 &
+          for i in $(seq 1 120); do curl -sf localhost:8095/health > /dev/null && break; sleep 1; done
+          curl -sf localhost:8095/health
+      - name: mnemonic-proxy check --live
+        run: |
+          mnemonic-proxy check --live --upstream http://127.0.0.1:8095 --port 8096 --data ./data \
+            --config examples/config.llama-server.json
+      - name: proxy + chat round trip + saved state
+        run: |
+          sed 's#"./slots"#"'"$PWD"'/slots"#' examples/config.llama-server.json > cfg.json
+          mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config cfg.json > proxy.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8096/health > /dev/null && break; sleep 1; done
+          curl -sf localhost:8096/v1/engine
+          curl -sf localhost:8096/v1/chat/completions -H 'Content-Type: application/json' \
+            -d '{"model": "m", "max_tokens": 32, "messages": [{"role": "user", "content": "Say hello. /no_think"}]}'
+          grep -q '"event": "request"' data/journal.jsonl
+      - name: logs
+        if: always()
+        run: tail -n 50 engine.log proxy.log || true

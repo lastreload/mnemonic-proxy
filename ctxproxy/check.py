@@ -340,7 +340,8 @@ def main(argv=None):
     else:
         rep = run_checks(a, raw_cfg, cfg, live=a.live)
     if a.json:
-        print(json.dumps({"exit_code": rep.exit_code, "checks": rep.items}, ensure_ascii=False, indent=1))
+        print(json.dumps({"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items},
+                         ensure_ascii=False, indent=1))
     else:
         render(rep)
     sys.exit(rep.exit_code)

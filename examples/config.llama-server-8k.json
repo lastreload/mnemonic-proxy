@@ -1,0 +1,15 @@
+{
+  "slot_dir": "./slots",
+  "slot_save": true,
+  "mask_anchor": true,
+  "autosave": true,
+  "autosave_idle_s": 60,
+  "autosave_min_tokens": 1024,
+  "mask_tool_args": true,
+  "engine_tokenize": true,
+  "mask_trigger": 3500,
+  "mask_target": 2000,
+  "keep_recent_tokens": 400,
+  "min_batch_tokens": 500,
+  "min_age_turns": 1
+}

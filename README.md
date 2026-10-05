@@ -124,54 +124,224 @@ lands.
 
 ## Quick start
 
-```sh
-# 1. an engine — llama.cpp with slot saving
-llama-server -m model.gguf -c 131072 --slot-save-path ./slots --port 8095
+Three levels. Each one stands on its own.
 
-# 2. the proxy (binds to 127.0.0.1 by default)
+| | what you see | needs | time |
+|---|---|---|---|
+| **T0 — see it work** | archive, masking, exact recall, with a scripted fake model | Python ≥ 3.10, git | 1 minute |
+| **T1 — real model on CPU** | a real agent (pi) writing code through the proxy, masking, recall, resume after an engine restart | + cmake, a C++ compiler, Node.js ≥ 22.19, ~4 GB RAM, 2.5 GB disk | ~30 minutes |
+| **T2 — real use (GPU)** | your own model and agent, long sessions | a GPU engine | — |
+
+Commands are for Linux; see [Platforms](#platforms) for macOS and Windows (WSL).
+
+### T0 — see it work (1 minute, no model)
+
+```sh
+python3 -m venv mnemonic-venv && . mnemonic-venv/bin/activate
 pip install git+https://github.com/lastreload/mnemonic-proxy
-mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
+mnemonic-proxy demo
 ```
 
-The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
-(`--engine auto|strata|llama.cpp|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
-Saved-state features are off by default; to use them, pass a config file (see [Configuration](#configuration)):
+The demo starts the real proxy in a temporary folder, in front of a scripted fake model. An agent reads a long
+`build.log` that contains one build id; the session grows until the proxy hides the log; the demo prints what the
+engine receives in its place (a one-line receipt); then the user asks for the build id, the model calls `recall`,
+the proxy answers it internally and the archived text is compared byte for byte with the original. It ends with
+`PASS` (exit 0) or `FAIL` (exit 1).
+
+It proves the proxy's own logic: archive, masking, recall. It does not prove anything about a real model, its tool
+calling, or saved engine state — that is T1.
+
+### T1 — a real model on CPU
+
+Tested end to end in a clean Ubuntu 24.04 container (see [Tested combinations](#tested-combinations)). A 4B model on
+CPU is slow (seconds per answer) and limited: the point is to see every mechanism work, not to do real work.
+
+**0. Prerequisites** (Ubuntu/Debian; other systems: [Platforms](#platforms)):
 
 ```sh
+sudo apt install git cmake build-essential python3-venv curl
+```
+
+and Node.js ≥ 22.19 for pi (<https://nodejs.org/en/download>, or your package manager).
+
+**1. Folder, proxy, example config.**
+
+```sh
+mkdir mnemonic-trial && cd mnemonic-trial
+git clone --depth 1 https://github.com/lastreload/mnemonic-proxy
+python3 -m venv .venv && . .venv/bin/activate
+pip install ./mnemonic-proxy
+cp mnemonic-proxy/examples/config.llama-server-8k.json .
+mkdir -p slots data
+```
+
+**2. llama.cpp, the tested release (CPU build, ~2 minutes on 12 cores).**
+
+```sh
+git clone --depth 1 --branch b11430 https://github.com/ggml-org/llama.cpp
+cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build llama.cpp/build --config Release -j 8 --target llama-server
+```
+
+**3. The model**: Qwen3-4B-Instruct-2507, Q4_K_M (2.5 GB). Qwen publishes no GGUF for this model
+([model card](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)); this is the
+[Unsloth conversion](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF), pinned to the tested revision:
+
+```sh
+mkdir -p models
+curl -L -o models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
+  https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+sha256sum models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+# 3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597
+```
+
+**4. The engine** (terminal 1, inside `mnemonic-trial`):
+
+```sh
+llama.cpp/build/bin/llama-server -m models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
+  -c 8192 --parallel 1 --jinja --slot-save-path ./slots --port 8095
+```
+
+Wait for the line `listening on http://127.0.0.1:8095` (about 2 s once the model file is cached; `curl -s
+localhost:8095/health` answers `{"status":"ok"}`). `--slot-save-path ./slots` is what makes saved state
+possible, and it must be the same folder as `slot_dir` in the config (`./slots`). `--jinja` is already the default in
+this build; it is written out because tool calling depends on it. `-c 8192` keeps memory small and makes the proxy
+work early: a window of 8K fills up after a few tool outputs.
+
+**5. Check, then start the proxy** (terminal 2, inside `mnemonic-trial`, venv active: `. .venv/bin/activate`):
+
+```sh
+mnemonic-proxy check --live --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-8k.json
+mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-8k.json
+```
+
+`check` must end with `READY` (exit 0): engine recognised as llama.cpp, model loaded, window taken from `n_ctx`
+(8192) with the thresholds scaled to it, saved state supported and configured, and — because of `--live` — one
+real generation, one tool call, one save/restore whose file appeared in `./slots`. Each failing line says how to fix
+it; see also [Troubleshooting](#troubleshooting). The proxy then prints
+`[mnemonic-proxy] 127.0.0.1:8096 -> http://127.0.0.1:8095 (engine llama.cpp, saved state yes) ... window=8192`.
+
+**6. pi, the coding agent** (terminal 3). Install the tested version:
+
+```sh
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.3
+```
+
+Create `~/.pi/agent/models.json` (if it exists, add the `mnemonic` entry to its `providers`):
+
+```json
+{
+  "providers": {
+    "mnemonic": {
+      "baseUrl": "http://127.0.0.1:8096/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": { "supportsDeveloperRole": false, "supportsReasoningEffort": false },
+      "models": [
+        { "id": "local-model", "name": "local model via mnemonic-proxy", "reasoning": false,
+          "contextWindow": 131072, "maxTokens": 2048 }
+      ]
+    }
+  }
+}
+```
+
+and `~/.pi/agent/settings.json` (if it exists, add these three keys):
+
+```json
+{
+  "defaultProvider": "mnemonic",
+  "defaultModel": "local-model",
+  "compaction": { "enabled": false }
+}
+```
+
+`compaction.enabled: false` matters: pi's own auto-compaction would summarise the history the proxy is managing.
+`contextWindow` is the *virtual* window the client sees (131072), not the engine's 8192: pi subtracts the prompt size
+from it to choose `max_tokens`, and with 8192 it asks for 1 token as soon as the history grows. Fitting the history
+into the engine's real window is the proxy's job. `apiKey` is a placeholder (the proxy does not check it); the model
+id is any name, llama-server serves its loaded model.
+
+**7. The exercise.** In terminal 3, a folder with a log whose one interesting line is buried in the middle:
+
+```sh
+mkdir -p ~/mnemonic-exercise && cd ~/mnemonic-exercise
+python3 -c "for i in range(150): print('[%04d] compiling module_%03d.c ... ok (%d ms)' % (i, i, 80 + i * 7 % 61) if i != 97 else '[0097] build id: BUILD-7f3a9c-ORCHID-42')" > build.log
+pi
+```
+
+Type these requests one at a time and wait for each answer (or non-interactively, same session:
+`pi -p "<request 1>"`, then `pi -c -p "<request 2>"`, …):
+
+1. `Run python3 -c "import uuid; print(uuid.uuid4())" and tell me the value.` — a `bash` tool call; pi repeats the
+   value.
+2. `Run cat build.log and tell me whether every module compiled.` — a long output (≈3K tokens).
+3. `Write primes.py with a function first_primes(n) that returns the first n prime numbers, and test_primes.py with
+   three unittest tests. Run the tests.` — `write` calls, then `bash`. The 8K window is now full: the proxy hides
+   the oldest outputs behind a receipt. Nothing is printed; check with
+   `grep -c '"event": "mask"' ~/mnemonic-trial/data/journal.jsonl` (≥ 1).
+4. `Add a function is_prime(n) to primes.py and a test for it in test_primes.py, then run the tests.`
+5. `What build id is written in build.log? Do not run commands and do not read files.` — the log is no longer in the
+   prompt, only its receipt; the expected path is a `recall` call answered by the proxy itself (pi never sees it):
+   `grep -c '"event": "recall"' ~/mnemonic-trial/data/journal.jsonl`. Small models often skip it: see the results
+   below.
+
+Wait one minute (the proxy saves the engine state after 60 s idle: `"event": "autosave"`), then restart the engine:
+Ctrl+C in terminal 1, start it again with the same command, and ask `Which files did you write in this session?`.
+The proxy restores the conversation from `./slots` instead of re-reading it:
+`grep '"event": "autorestore"' ~/mnemonic-trial/data/journal.jsonl` shows the restored tokens and milliseconds.
+
+What this proves and what it does not, for this model: see [Tested combinations](#tested-combinations).
+
+### T2 — real use (GPU)
+
+Use the engine and model you already have; the only requirements are an OpenAI-compatible endpoint and, for saved
+state, an engine that can save its KV state to disk:
+
+```sh
+llama-server -m your-model.gguf -c 131072 --parallel 1 --jinja --slot-save-path /path/to/slots --port 8095
+mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
 mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
 ```
 
+with `config.json` = `examples/config.llama-server.json` and `slot_dir` = the same `/path/to/slots` (see
+[Configuration](#configuration) for the recommended fields). With an engine that has no saved state (vLLM, online
+APIs) the proxy runs in base mode. The measurements at the top of this page (35B-A3B MoE, 128K window) come from
+Strata built from its session-files branch on a 12 GB RTX 4070 Ti — see [Engines](#engines); they say nothing about
+other hardware.
+
+The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
+(`--engine auto|strata|llama.cpp|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
 Optional: `--tokenizer` (a Hugging Face `tokenizer.json`, or a Strata pack `tokenizer/` folder; needs
 `pip install 'mnemonic-proxy[exact] @ git+https://github.com/lastreload/mnemonic-proxy'`) for exact token counts
-instead of a chars/3.5 estimate. A systemd user unit is in
-[examples/mnemonic-proxy.service](examples/mnemonic-proxy.service).
+instead of a chars/3.5 estimate; with llama-server, `"engine_tokenize": true` counts through its `/tokenize`. A
+systemd user unit is in [examples/mnemonic-proxy.service](examples/mnemonic-proxy.service).
 
 Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
 history.
 
-### Chat Completions (pi, Hermes, Continue, …)
+### pi, Hermes, Continue, … (Chat Completions)
 
-Point the client's OpenAI base URL at `http://127.0.0.1:8096/v1`, e.g.
-
-```sh
-OPENAI_BASE_URL=http://127.0.0.1:8096/v1 pi
-```
-
-For pi, add a provider with that base URL in `~/.pi/agent/models.json` and set
-`"compaction": {"enabled": false}` in `settings.json`.
+Point the client's OpenAI base URL at `http://127.0.0.1:8096/v1`. For pi, the two files of T1 step 6 (with your real
+`contextWindow`/`maxTokens`). For other clients: their OpenAI-compatible provider setting, plus their own way to turn
+off context compaction.
 
 ### Claude Code (Anthropic Messages, experimental)
+
+Checked against Claude Code 2.1.287:
 
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8096      # no /v1
 export ANTHROPIC_AUTH_TOKEN=local                    # any value; the proxy does not check it
 export ANTHROPIC_MODEL=local-model                   # any name; the engine serves its loaded model
-export ANTHROPIC_SMALL_FAST_MODEL=local-model
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=local-model     # background tasks (replaces ANTHROPIC_SMALL_FAST_MODEL)
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1    # fewer side requests competing for the engine
-export DISABLE_AUTO_COMPACT=1
+export DISABLE_AUTO_COMPACT=1                        # turns off auto-compaction; /compact still works
 claude
 ```
 
+`ANTHROPIC_SMALL_FAST_MODEL` is still read by 2.1.287 (it takes precedence), but the documented name is
+`ANTHROPIC_DEFAULT_HAIKU_MODEL`. `DISABLE_COMPACT=1` would also turn off the manual `/compact`.
 `POST /v1/messages` (streaming and not) and `POST /v1/messages/count_tokens` are supported. Thinking blocks get a
 local placeholder signature: a session started through the proxy cannot be continued on Anthropic's API.
 
@@ -183,6 +353,8 @@ Codex 0.160 speaks only the Responses API (`wire_api = "chat"` is rejected). In 
 ```toml
 model = "local-model"
 model_provider = "local"
+model_context_window = 131072              # the proxy's window; Codex compacts relative to this
+model_auto_compact_token_limit = 100000000 # compaction threshold far above any real session
 
 [model_providers.local]
 name = "local engine via mnemonic-proxy"
@@ -193,6 +365,8 @@ requires_openai_auth = false
 supports_websockets = false
 ```
 
+Codex 0.160 has no setting that turns auto-compaction off: `model_auto_compact_token_limit` only moves the
+threshold. Set it far above any session, as above, so that in practice the proxy is the only context manager.
 Codex's `prompt_cache_key` is used as the conversation key. Stateless only (`store=false`, no
 `previous_response_id`), which is what Codex sends.
 
@@ -222,14 +396,92 @@ mcp_servers:
     enabled: true
 ```
 
-### Dashboard (optional)
+### Dashboard (optional; needs the git clone; UI in Italian)
+
+The dashboard is not part of the pip package: it runs from a clone of this repository, and its interface is in
+Italian.
 
 ```sh
-python3 dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 --proxy http://127.0.0.1:8096 --port 8097
+python3 mnemonic-proxy/dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 --proxy http://127.0.0.1:8096 --port 8097
 ```
 
-Read-only: engine status, physical vs. virtual context over time, masking/segment/recall events, and the live
-physical prompt (with `live_dump: true`). UI in Italian.
+Read-only, on `127.0.0.1:8097`: engine status, physical vs. virtual context over time, masking/segment/recall events,
+and the live physical prompt (with `live_dump: true`).
+
+### Proxy endpoints
+
+Besides the client APIs (`/v1/chat/completions`, `/v1/messages`, `/v1/responses`), all other paths are passed to the
+engine. The proxy's own:
+
+| endpoint | what |
+|---|---|
+| `GET /health` | proxy + engine health: `{"status": "ok" \| "loading" \| "engine_unreachable", "engine", "version", "upstream"}`; HTTP 200 only when the engine is ready |
+| `GET /v1/engine` | what was detected: `kind`, `slot_save` (saved state supported and on), `n_ctx`, `model`, `notes`. `GET /v1/strata/engine` is the same (0.1 name, kept) |
+| `GET /v1/strata/conversations/<id>` | one conversation: archived messages, masks, segments |
+| `GET /v1/strata/archive/<id>` | one archived block, verbatim |
+| `GET /v1/strata/journal` | the last 200 journal events |
+
+## Tested combinations
+
+Run literally as written in T1, in a clean `ubuntu:24.04` container (12 CPU cores, no GPU, user without sudo),
+llama.cpp `b11430` CPU build, pi 1.0.3, Node 22.23.3, Python 3.12, `config.llama-server-8k.json`, engine `-c 8192`
+(2026-10-06).
+
+| model | `check --live` | tool calls | masking | recall (step 5) | engine restart |
+|---|---|---|---|---|---|
+| Qwen3-4B-Instruct-2507 Q4_K_M (Unsloth) | READY | yes | yes: 5 masks, 4 segment switches | **no**: answered "cannot determine" instead of calling `recall` | autorestore 2450 tokens in 42 ms; next prompt 2486/2505 reused |
+| Qwen2.5-Coder-7B-Instruct Q4_K_M (Qwen) | READY with warnings (no tool call) | **no**: writes the call as JSON text, same straight to llama-server | — | — | autorestore 3698 tokens in 17 ms |
+
+What T1 proves: the proxy in front of a real llama-server — window read from the engine, thresholds scaled to 8K,
+masking and segment switches under a real agent, state saved when idle and restored after an engine restart without
+re-reading. What it does not prove: that a 4B model on 8K uses `recall` reliably (it did not, here), or that the
+agent finishes the task — in step 4 the 4B model looped on read/edit until the timeout. Those depend on the model;
+use T2 for real work.
+
+Found while testing, fixed in 0.2.1: with the extended recall tool (`recall_struct`, `recall_multi`) in the tool
+list, Qwen3-4B made 0/6 tool calls (4–6/6 without): the example configs keep the short `recall` tool.
+
+## Troubleshooting
+
+Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every failing line says what to change.
+
+| symptom | cause | fix |
+|---|---|---|
+| `check`: port … is in use | another proxy (or another program) on that port | stop it, or pass a different `--port` (and change the client's base URL) |
+| `check`: engine answers 503 / `GET /health` says `loading` | llama-server is still loading the model | wait for `listening on …` in its log |
+| `check`: engine not reachable | wrong `--upstream`, or the engine is not running | start the engine; `curl http://127.0.0.1:8095/health` must answer |
+| llama-server: `failed to allocate` / killed | not enough memory for model + context | a smaller `-c`, a smaller quantisation, or a smaller model |
+| HTTP 400 `exceeds the available context size` | the client asked for more than the window | proxy started with a config whose `window` is larger than the engine's `-c`? The proxy reads `n_ctx` from llama-server at startup: restart the proxy after changing `-c` |
+| the model describes the command instead of calling a tool, or says it "cannot run commands" | chat template without tools, or a model weak at tool calling | llama-server with `--jinja`; `check --live` shows whether a tool call works; try a stronger model (see [Tested combinations](#tested-combinations)) |
+| `check`: saved state supported by the engine, disabled in the proxy | config without `slot_save` | use `examples/config.llama-server.json` |
+| `check --live`: the state file is not in `slot_dir` | `slot_dir` ≠ llama-server `--slot-save-path`, or the engine runs on another host / in a container with another path | the same folder, as seen from the proxy's host |
+| `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata's session-files branch; everything else works |
+| Strata (official) has no saved state | the save endpoint is only in Strata's unmerged PR #668 | build Strata from the `session-files` branch, or use llama-server |
+| answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses-experimental) |
+| Codex: `wire_api = "chat"` rejected | Codex ≥ 0.160 only speaks the Responses API | `wire_api = "responses"` |
+| `kv_archive` refused | needs Python ≥ 3.14 (`compression.zstd`) | Python 3.14, or leave `kv_archive` off (default) |
+
+## Platforms
+
+- **Linux**: the reference. Every tested combination below ran on Linux.
+- **macOS**: the proxy is plain Python and should work as on Linux (not yet tested). Build llama.cpp the same way
+  (Metal is on by default on Apple Silicon) or install it with Homebrew (`brew install llama.cpp`), then use the same
+  `llama-server` command; `sha256sum` is `shasum -a 256`.
+- **Windows**: use WSL 2 (Ubuntu) and follow the Linux commands inside WSL. Keep the engine, the proxy and the
+  `slots` folder all inside WSL, so that `slot_dir` and `--slot-save-path` are the same path. Not yet tested.
+
+## Uninstall
+
+```sh
+pip uninstall mnemonic-proxy        # inside the venv you installed it in, or delete the venv
+rm -rf ./data                       # the archive, the journal: your conversations in plaintext
+rm -rf ./slots                      # saved engine state (large files), and kv-archive/ if you used kv_archive
+```
+
+`./data` and `./slots` are separate on purpose: deleting the state files keeps the archive (recall still works, only
+resuming without re-reading is lost); deleting `./data` loses the archive and the conversations' state becomes
+unreachable. Undo the client changes as well (pi `models.json`/`settings.json`, the Claude Code variables, the Codex
+provider).
 
 ## Engines
 
@@ -334,6 +586,8 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
 
 ## Security & privacy
 
+- **Everything stays local.** The proxy talks only to the `--upstream` you give it; no telemetry, no update checks,
+  no other network access. The dashboard and the MCP server bind to `127.0.0.1` and are read-only.
 - **The archive is plaintext.** `data/archive.sqlite` holds everything the agent saw — file contents, command
   outputs, reasoning — secrets included. `data/journal.jsonl` holds request metadata and recall queries;
   `data/live/last_request.json` (with `live_dump`) the whole last prompt. Saved engine state files (`slot_dir`) and
