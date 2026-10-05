@@ -94,6 +94,24 @@ class ToolPager:
         listing = "; ".join("%s: %s" % (k, ", ".join(sorted(groups[k]))) for k in multi)
         if single:
             listing += ("; " if listing else "") + "altri: " + ", ".join(single)
+        if name != LEGACY_TOOLS_NAME:
+            listing_en = re.sub(r"(^|; )altri: ", r"\1other: ", listing)
+            t = {"type": "function", "function": {
+                "name": name,
+                "description": (
+                    "Load the full definition of tools that are NOT in the list above. To save space the prompt "
+                    "holds only the core tools; the others exist and work normally, but before calling one you "
+                    "must load its definition with this tool (runs on the server, cheap). After loading, call them "
+                    "like the others. Loadable: " + listing_en + "."),
+                "parameters": {"type": "object", "properties": {
+                    "query": {"type": "string", "description": "what you want to do, or keywords (e.g. 'todo "
+                                                                "list', 'background process')"},
+                    "names": {"type": "array", "items": {"type": "string"},
+                              "description": "exact names of the tools to load (1-5)"}}}}}
+            if len(self._tool_cache) > 50:
+                self._tool_cache.clear()
+            self._tool_cache[key] = t
+            return t
         t = {"type": "function", "function": {
             "name": name,
             "description": (

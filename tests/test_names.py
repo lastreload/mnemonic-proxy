@@ -181,5 +181,50 @@ class TestPagingNames(unittest.TestCase):
         self.assertEqual(ToolPager.loaded_in([{"role": "tool", "content": new}]), {"todo_add"})
 
 
+class TestLegacyBytes(unittest.TestCase):
+    """Conversazioni nate con la 0.1: le definizioni degli strumenti del proxy devono restare IDENTICHE a quelle della
+    0.1 (commit f072240), altrimenti il prefisso cambia e la cache / i salvataggi del motore si perdono. Nomi nuovi:
+    testo inglese, stessa struttura."""
+
+    @classmethod
+    def setUpClass(cls):
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "legacy_tooldefs_0.1.json")
+        with open(p, encoding="utf-8") as f:
+            cls.old = json.load(f)
+
+    def dump(self, x):
+        return json.dumps(x, ensure_ascii=False, sort_keys=True)
+
+    def test_recall_definitions_identical(self):
+        from ctxproxy.core import recall_tool_def
+        from ctxproxy.recall2 import recall_tool
+        base = recall_tool_def(LEGACY_RECALL_NAME)
+        self.assertEqual(self.dump(base), self.dump(self.old["recall"]))
+        for flags in ("struct", "multi", "struct+multi"):
+            cfg = Config(recall_struct="struct" in flags, recall_multi="multi" in flags)
+            self.assertEqual(self.dump(recall_tool(cfg, base)), self.dump(self.old["recall_" + flags]), flags)
+
+    def test_tools_loader_identical(self):
+        from ctxproxy.paging import ToolPager
+        cat = {n: {"type": "function", "function": {"name": n}} for n in self.old["_catalog"]}
+        t = ToolPager(("read",)).tools_tool(cat, LEGACY_TOOLS_NAME)
+        self.assertEqual(self.dump(t), self.dump(self.old["tools"]))
+
+    def test_new_names_english_same_shape(self):
+        from ctxproxy.core import recall_tool_def
+        from ctxproxy.paging import ToolPager
+        from ctxproxy.recall2 import recall_tool
+        cfg = Config(recall_struct=True, recall_multi=True)
+        new = recall_tool(cfg, recall_tool_def(RECALL_NAME))["function"]
+        old = self.old["recall_struct+multi"]["function"]
+        self.assertEqual(sorted(new["parameters"]["properties"]), sorted(old["parameters"]["properties"]))
+        self.assertIn("Retrieve the ORIGINAL", new["description"])
+        self.assertIn("recall id=<id>", new["description"])
+        cat = {n: {"type": "function", "function": {"name": n}} for n in self.old["_catalog"]}
+        t = ToolPager(("read",)).tools_tool(cat)["function"]
+        self.assertTrue(t["description"].startswith("Load the full definition"))
+        self.assertEqual(sorted(t["parameters"]["properties"]), ["names", "query"])
+
+
 if __name__ == "__main__":
     unittest.main()

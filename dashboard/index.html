@@ -671,7 +671,7 @@ $("evtb").addEventListener("click", e => { const tr = e.target.closest("tr"); if
 function applyConvFilter() { for (const tr of $("evtb").children) setCls(tr, "othconv", S.conv && tr.dataset.c && tr.dataset.c !== S.conv); }
 
 // ---------- prompt: nodi aggiornati solo se il messaggio cambia ----------
-const PH = /(\[gestore del contesto:[^\]]*?strata_recall id=[a-z0-9]+[^\]]*\]|\(nota del gestore del contesto:[^)]*\)|\[(?:uscita strumento omessa|ragionamento omesso)[^\]]*?recall:[a-z0-9]+\]|argomenti omessi \([^)]*\) \u2014 recall:[a-z0-9]+|\[[^\]\n]{0,80}omess[ao][^\]\n]{0,120}recall:[a-z0-9]+\])/g;
+const PH = /(\[gestore del contesto:[^\]]*?[a-z_]*recall id=[a-z0-9]+[^\]]*\]|\(nota del gestore del contesto:[^)]*\)|\[(?:uscita strumento omessa|ragionamento omesso)[^\]]*?recall:[a-z0-9]+\]|argomenti omessi \([^)]*\) \u2014 recall:[a-z0-9]+|\[[^\]\n]{0,80}omess[ao][^\]\n]{0,120}recall:[a-z0-9]+\])/g;
 const SG = /(\[strata-context:[^\]]*\])/g;
 function hl(s) { return esc(s).replace(PH, '<mark class="ph">$1</mark>').replace(SG, '<mark class="sg">$1</mark>'); }
 function msgText(m) {

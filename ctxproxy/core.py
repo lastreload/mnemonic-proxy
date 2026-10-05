@@ -58,7 +58,25 @@ NOTES_MARK = "[strata-context: richiesta note di passaggio]"
 SEG_MARK = "[strata-context: segmento {seg}]"
 
 def recall_tool_def(name: str = RECALL_NAME) -> dict:
-    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome)."""
+    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome). Conversazioni
+    nate prima della 0.2.0 (nome strata_recall): testo italiano di allora, byte per byte (prefisso invariato); nomi
+    nuovi: testo inglese."""
+    if name != LEGACY_RECALL_NAME:
+        return {"type": "function", "function": {
+            "name": name,
+            "description": (
+                "Retrieve the ORIGINAL, exact text of a tool output or message that the context manager removed "
+                "from the prompt to save space. Use `id` when you see '" + name + " id=<id>' or an id in the "
+                "archive index; use `query` to search (words, path, function name, error message) across "
+                "everything archived; use `path` for the history of operations on a file (reads, writes, edits, "
+                "with outcome and id). Runs on the server and is cheap: use it instead of guessing or re-running "
+                "commands. Results and receipts may be in Italian."),
+            "parameters": {"type": "object", "properties": {
+                "id": {"type": "string", "description": "id of the archived block, e.g. r1a2b3c4d5e6"},
+                "query": {"type": "string", "description": "text to search in the archive (words or substring)"},
+                "path": {"type": "string", "description": "path (or name) of a file: history of operations"},
+                "offset": {"type": "integer", "description": "for long texts: character offset to continue from"},
+            }}}}
     return {
     "type": "function",
     "function": {

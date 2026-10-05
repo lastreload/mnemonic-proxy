@@ -42,52 +42,52 @@ CREATE VIRTUAL TABLE IF NOT EXISTS temp.p_norm USING fts5(t, content='', tokeniz
 """
 
 RECALL_DESC = (
-    "Cerca nell'archivio ESATTO delle conversazioni passate dal proxy di contesto (uscite di strumenti, messaggi, "
-    "ragionamento, argomenti di chiamata). Usa `query` (o `queries` per più varianti insieme) per cercare parole, "
-    "percorsi, nomi di funzione, errori; `id` per il testo intero di un pezzo (con `offset` per proseguire); "
-    "`path` per la storia di un file (mode timeline, o first = prima scrittura); con `id`, mode neighbors/output/"
-    "reasoning per i messaggi vicini, l'uscita di una chiamata o il ragionamento dello stesso turno; mode=tree per "
-    "la mappa della sessione. Risultati 'forte' = tutte le parole nello stesso passaggio. Sola lettura.")
+    "Search the EXACT archive of past conversations kept by the context proxy (tool outputs, messages, reasoning, "
+    "tool-call arguments). Use `query` (or `queries` for several variants at once) to search words, paths, function "
+    "names, errors; `id` for the full text of a piece (with `offset` to continue); `path` for the history of a file "
+    "(mode timeline, or first = first write); with `id`, mode neighbors/output/reasoning for nearby messages, the "
+    "output of a call or the reasoning of the same turn; mode=tree for a map of the session. 'Strong' results = all "
+    "words in the same passage. Read-only. Result headers and notes are in Italian.")
 
 
 def recall_schema() -> dict:
     s = {"type": "string"}
     i = {"type": "integer"}
     return {"type": "object", "properties": {
-        "conversation": {**s, "description": "id conversazione (vedi conversations); di serie la più recente"},
-        "id": {**s, "description": "id di un pezzo archiviato, es. r1a2b3c4d5e6"},
-        "query": {**s, "description": "testo da cercare"},
-        "queries": {"type": "array", "items": s, "description": "più varianti della ricerca in una chiamata"},
-        "path": {**s, "description": "percorso o nome di file: storia delle operazioni"},
+        "conversation": {**s, "description": "conversation id (see conversations); default: the most recent"},
+        "id": {**s, "description": "id of an archived piece, e.g. r1a2b3c4d5e6"},
+        "query": {**s, "description": "text to search"},
+        "queries": {"type": "array", "items": s, "description": "several search variants in one call"},
+        "path": {**s, "description": "file path or name: history of operations"},
         "mode": {"type": "string", "enum": ["timeline", "first", "neighbors", "output", "reasoning", "tree"]},
         "order": {"type": "string", "enum": ["pertinenza", "tempo"]},
-        "role": {**s, "description": "filtro: user, assistant, reasoning, args, tool"},
-        "seg": {**i, "description": "filtro: segmento"},
-        "from": {**i, "description": "filtro: dal messaggio numero"},
-        "to": {**i, "description": "filtro: fino al messaggio numero"},
-        "n": {**i, "description": "con mode=neighbors: messaggi prima e dopo"},
-        "offset": {**i, "description": "con id: carattere da cui proseguire"},
+        "role": {**s, "description": "filter: user, assistant, reasoning, args, tool"},
+        "seg": {**i, "description": "filter: segment"},
+        "from": {**i, "description": "filter: from message number"},
+        "to": {**i, "description": "filter: up to message number"},
+        "n": {**i, "description": "with mode=neighbors: messages before and after"},
+        "offset": {**i, "description": "with id: character offset to continue from"},
     }}
 
 
 TOOLS = [
     {"name": "recall", "description": RECALL_DESC, "inputSchema": recall_schema(),
      "annotations": {"readOnlyHint": True}},
-    {"name": "conversations", "description": "Elenco delle conversazioni nell'archivio del proxy (più recenti prima): "
-                                             "id, messaggi, token, segmenti, data, inizio del primo messaggio "
-                                             "dell'utente. Sola lettura.",
+    {"name": "conversations", "description": "Conversations in the proxy's archive (most recent first): id, "
+                                             "messages, tokens, segments, date, start of the user's first "
+                                             "message. Read-only.",
      "inputSchema": {"type": "object", "properties": {
-         "limit": {"type": "integer", "description": "quante (di serie 20)"},
-         "query": {"type": "string", "description": "filtro: testo contenuto nel primo messaggio dell'utente o "
-                                                    "nell'id"}}},
+         "limit": {"type": "integer", "description": "how many (default 20)"},
+         "query": {"type": "string", "description": "filter: text contained in the user's first message or in "
+                                                    "the id"}}},
      "annotations": {"readOnlyHint": True}},
-    {"name": "journal", "description": "Eventi recenti del giornale del proxy (richieste, recall, mask, segmenti, "
-                                       "salvataggi...), i più recenti per ultimi. Sola lettura.",
+    {"name": "journal", "description": "Recent events of the proxy journal (requests, recall, masking, segments, "
+                                       "saves...), most recent last. Read-only.",
      "inputSchema": {"type": "object", "properties": {
-         "limit": {"type": "integer", "description": "quanti eventi (di serie 30, massimo 500)"},
-         "event": {"type": "string", "description": "filtro sul tipo (es. recall, request, autosave); più tipi "
-                                                    "separati da virgola"},
-         "conversation": {"type": "string", "description": "filtro sulla conversazione"}}},
+         "limit": {"type": "integer", "description": "how many events (default 30, max 500)"},
+         "event": {"type": "string", "description": "filter by type (e.g. recall, request, autosave); several "
+                                                    "types separated by commas"},
+         "conversation": {"type": "string", "description": "filter by conversation"}}},
      "annotations": {"readOnlyHint": True}},
 ]
 
@@ -150,10 +150,10 @@ class Archive:
             conv = r[1] if r else ""
         conv = conv or self.latest_conv()
         if not conv:
-            return "archivio vuoto"
+            return "empty archive"
         with self.lock:
             out = self.r2.recall(conv, args, None, [])
-        return "[conversazione %s]\n%s" % (conv, out)
+        return "[conversation %s]\n%s" % (conv, out)
 
     def conversations(self, args: dict) -> str:
         limit = max(1, min(int((args or {}).get("limit") or 20), 500))
@@ -181,7 +181,7 @@ class Archive:
         kinds = {k.strip() for k in str(args.get("event") or "").split(",") if k.strip()}
         conv = str(args.get("conversation") or "").strip()
         if not os.path.exists(self.journal_path):
-            return "giornale non trovato: %s" % self.journal_path
+            return "journal not found: %s" % self.journal_path
         out = []
         for line in _tail_lines(self.journal_path, max(limit * 50, 2000) if (kinds or conv) else limit):
             try:
@@ -196,7 +196,7 @@ class Archive:
                 e.pop(k, None)
             out.append(e)
         out = out[-limit:]
-        return "\n".join(json.dumps(e, ensure_ascii=False)[:2000] for e in out) or "nessun evento"
+        return "\n".join(json.dumps(e, ensure_ascii=False)[:2000] for e in out) or "no events"
 
     def call(self, name: str, args: dict) -> str:
         if name == "recall":
@@ -250,9 +250,9 @@ class McpServer:
                 return _ok(mid, {"protocolVersion": v if v in PROTOCOLS else PROTOCOLS[0],
                                  "capabilities": {"tools": {"listChanged": False}},
                                  "serverInfo": SERVER_INFO,
-                                 "instructions": "Archivio esatto delle conversazioni del proxy di contesto: usa "
-                                                 "recall per cercare, conversations per l'elenco, journal per gli "
-                                                 "eventi. Sola lettura."})
+                                 "instructions": "Exact archive of the context proxy's conversations: use recall "
+                                                 "to search, conversations for the list, journal for events. "
+                                                 "Read-only."})
             if method == "ping":
                 return _ok(mid, {})
             if method == "tools/list":
@@ -260,7 +260,7 @@ class McpServer:
             if method == "tools/call":
                 name = params.get("name")
                 if name not in {t["name"] for t in TOOLS}:
-                    return _err(mid, -32602, "strumento sconosciuto: %s" % name)
+                    return _err(mid, -32602, "unknown tool: %s" % name)
                 try:
                     text = self.arc.call(str(name), params.get("arguments") or {})
                     return _ok(mid, {"content": [{"type": "text", "text": text}], "isError": False})
@@ -270,9 +270,9 @@ class McpServer:
                 return _ok(mid, {method.split("/")[0]: []})
             if method == "resources/templates/list":
                 return _ok(mid, {"resourceTemplates": []})
-            return _err(mid, -32601, "metodo non supportato: %s" % method)
+            return _err(mid, -32601, "method not supported: %s" % method)
         except Exception as e:  # noqa: BLE001
-            return _err(mid, -32603, "errore interno: %r" % e)
+            return _err(mid, -32603, "internal error: %r" % e)
 
     def handle_any(self, data):
         """Messaggio singolo o batch (lista)."""
@@ -280,7 +280,7 @@ class McpServer:
             out = [r for r in (self.handle(m) for m in data if isinstance(m, dict)) if r is not None]
             return out or None
         if not isinstance(data, dict):
-            return _err(None, -32600, "richiesta non valida")
+            return _err(None, -32600, "invalid request")
         return self.handle(data)
 
     # ---------- stdio ----------
@@ -294,7 +294,7 @@ class McpServer:
             try:
                 data = json.loads(line)
             except ValueError:
-                resp = _err(None, -32700, "JSON non valido")
+                resp = _err(None, -32700, "invalid JSON")
             else:
                 resp = self.handle_any(data)
             if resp is not None:
@@ -336,7 +336,7 @@ class McpServer:
                 try:
                     data = json.loads(self.rfile.read(n) or b"null")
                 except ValueError:
-                    return self._send(400, _err(None, -32700, "JSON non valido"))
+                    return self._send(400, _err(None, -32700, "invalid JSON"))
                 resp = srv.handle_any(data)
                 if resp is None:
                     return self._send(202)

@@ -313,7 +313,7 @@ class TestMcp(unittest.TestCase):
 
     def test_recall_query_id_path_tree(self):
         out = self.call("recall", {"query": "velocità iniziale"})
-        self.assertIn("conversazione convA", out)
+        self.assertIn("conversation convA", out)
         self.assertIn("startSpeed", out)
         self.assertIn("startSpeed", self.call("recall", {"queries": ["start speed", "velocita"]}),
                       "parole flessibili: startSpeed spezzato")

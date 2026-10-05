@@ -339,8 +339,10 @@ counting (a tokenizer in `./tok` or `CTX_TOKDIR`, plus `tokenizers`), Strata moc
 `jinja2`), and `kv_archive` (Python ≥ 3.14). `tools/replay_dry.py` and `tools/replay_exact.py` replay a pi session
 through the context manager offline.
 
-Code comments, the dashboard UI, the handoff-note instruction and the developer notes in `docs/dev-notes/` are in
-Italian; the CLI, startup logs and this README are in English.
+Partly in Italian: code comments, the dashboard UI, the developer notes in `docs/dev-notes/`, and some text the model
+reads — receipts and placeholders of hidden content, the handoff-note request, recall result headers. Those strings
+are part of the stable prompt prefix of existing conversations, so they were not translated in 0.2.0. Tool
+definitions for new conversations, the MCP tools, the CLI, startup logs and this README are in English.
 
 ## Credits & license
 

@@ -850,6 +850,34 @@ def _edit_summary(args_text: str) -> str:
     return args_text[:200]
 
 
+def _recall_tool_en(cfg, f, props, desc) -> dict:
+    """Estensioni in inglese (conversazioni con i nomi della 0.2.0); stessa struttura di quelle italiane."""
+    if getattr(cfg, "recall_multi", False):
+        props["queries"] = {"type": "array", "items": {"type": "string"},
+                            "description": "several search variants in ONE call (synonyms, Italian/English, names "
+                                           "used in the code): results merged without duplicates"}
+    if getattr(cfg, "recall_struct", False):
+        props["mode"] = {"type": "string", "enum": ["timeline", "first", "neighbors", "output", "reasoning", "tree"],
+                         "description": "with path: timeline (history of the file) or first (first write + reasoning "
+                                        "of the same turn); with id: neighbors (nearby messages), output (output of "
+                                        "a call), reasoning (reasoning of the same turn); tree: map of the session "
+                                        "by turns"}
+        props["order"] = {"type": "string", "enum": ["pertinenza", "tempo"],
+                          "description": "pertinenza = by relevance (default); tempo = OLDEST occurrences first "
+                                         "(first version, first outcome)"}
+        props["role"] = {"type": "string", "description": "filter: user, assistant, reasoning, args, tool"}
+        props["seg"] = {"type": "integer", "description": "filter: segment number"}
+        props["from"] = {"type": "integer", "description": "filter: from message number"}
+        props["to"] = {"type": "integer", "description": "filter: up to message number"}
+        props["n"] = {"type": "integer", "description": "with mode=neighbors: how many messages before and after"}
+        desc += (" For the FIRST version of something use path=<file> mode=first (or mode=timeline with query) and "
+                 "cite id and message; tell values that were WRITTEN (arguments/outputs) from values only CONSIDERED "
+                 "in reasoning. 'forte' (strong) results contain all searched words; 'parziale' (partial) do not.")
+    f["parameters"] = dict(f["parameters"], properties=props)
+    f["description"] = desc
+    return {"type": "function", "function": f}
+
+
 def recall_tool(cfg, base: dict) -> dict:
     """Definizione dello strumento: quella di serie, o quella estesa se recall_struct/recall_multi sono attivi."""
     if not (getattr(cfg, "recall_struct", False) or getattr(cfg, "recall_multi", False)):
@@ -857,6 +885,8 @@ def recall_tool(cfg, base: dict) -> dict:
     f = dict(base["function"])
     props = dict(f["parameters"]["properties"])
     desc = f["description"]
+    if f.get("name") != "strata_recall":
+        return _recall_tool_en(cfg, f, props, desc)
     if getattr(cfg, "recall_multi", False):
         props["queries"] = {"type": "array", "items": {"type": "string"},
                             "description": "più varianti della ricerca in UNA chiamata (sinonimi, italiano/inglese, "
