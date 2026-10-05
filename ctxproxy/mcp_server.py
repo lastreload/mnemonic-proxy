@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Server MCP (Model Context Protocol) in sola lettura sull'archivio del proxy.
 
     python3 -m ctxproxy.mcp_server --db data/archive.sqlite                 # stdio (Claude Code, Codex, Hermes)

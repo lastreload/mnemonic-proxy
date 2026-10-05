@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """recall strutturato (docs/dev-notes/RECALL-RESULT.md): ricerca a passaggi, parole flessibili, struttura dai dati.
 
 Nessun modello: solo SQLite/FTS5 e Python. Attivato da opzioni di Config (tutte spente di serie):

@@ -303,9 +303,9 @@ Q = [
          queries=["autopilot score len", "sim score lunghezza autopilota", "score len 59"]),
     dict(id="n2-08", db=N2, split="test", ask=1000, kind="esito",
          q="Dove si trovava l'immagine di riferimento che l'utente voleva far vedere?",
-         answer="su AI395, /home/mverde/Immagini/nibbles.jpeg",
-         ev=[dict(re=r"/home/mverde/Immagini/nibbles\.jpeg", role="user")],
-         queries=["immagine riferimento utente", "nibbles.jpeg", "AI395 Immagini"]),
+         answer="sull'altro computer dell'utente, ~/Immagini/nibbles.jpeg",
+         ev=[dict(re=r"Immagini/nibbles\.jpeg", role="user")],
+         queries=["immagine riferimento utente", "nibbles.jpeg", "Immagini nibbles"]),
     dict(id="n2-09", db=N2, split="test", ask=1000, kind="ragionamento",
          q="Perché l'assistente credeva che un'altra sessione avesse riscritto game.js?",
          answer="trovava costanti che non ricordava di aver scritto (TURN_ASSIST, SELF_IGNORE_ARC...): i suoi "

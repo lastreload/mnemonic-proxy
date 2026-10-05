@@ -1,9 +1,9 @@
-# strata_recall: recupero affidabile (task t_3b7d7714)
+# strata_recall (dalla 0.2.0: `recall`): recupero affidabile (task t_3b7d7714)
 
 Tutto è stato fatto offline e solo su CPU, senza modelli, solo con SQLite/FTS5 e Python stdlib. Le opzioni nuove sono tutte **spente di serie**: con le opzioni spente il comportamento è identico a prima (`recall()` → `recall_legacy()`, verificato da test). Il proxy installato non è stato toccato.
 
-## Banco di prova (`proxy/bench/`)
-- Archivi: copie in `bench/data/{prova-paging,nibble2,g3}.sqlite`, fatte con la API backup di SQLite da PC4070TI e da `g3/results/paging/archive-auto.sqlite`. Le copie sono anche in `pc4070ti:/mnt/mneme-nvme/recall-bench/`.
+## Banco di prova (`bench/`)
+- Archivi: copie in `bench/data/{prova-paging,nibble2,g3}.sqlite`, fatte con la API backup di SQLite dagli archivi di tre sessioni reali. **Non sono nel repository** (contengono sessioni private): il banco richiede archivi propri, con domande ricostruite per essi.
 - Domande: `questions_spec.py` → `build_questions.py` → `questions.json`. In tutto 71: 37 per lo sviluppo (dev) e 34 per la verifica (test). Comprendono le 6 di oggi, le domande di G3, domande nuove da prova-paging e nibble2, 8 controlli negativi e 4 parafrasi. Per ogni domanda l'evidenza è una regola (regex + ruolo + intervallo di messaggi) che viene risolta negli id dell'archivio. Se un gruppo non trova evidenza, il build fallisce, così le etichette non possono restare vuote senza che ce ne accorgiamo.
 - Separazione: la verifica è stata tenuta da parte. La taratura è avvenuta solo su dev; con test ho solo misurato.
 - Comandi: `python3 bench/recall_bench.py --label X --split dev|test [--set opzione=valore …] [--list-miss] [--show id]` e `python3 bench/auto_bench.py --split all`.
@@ -85,16 +85,16 @@ Il verso di bm25 è stato controllato: `search_fts_scored` restituisce `-bm25`, 
 - `bench/`: banco, domande e strumenti di etichettatura (`grep_archive.py`, `grep_batch.py`, `dump_range.py`, `fops.py`, `one.py`).
 
 ## Test
-- Suite completa su PC4070TI, in una copia (`/mnt/mneme-nvme/recall-bench/repo-t3b`, con `/mnt/mneme-nvme/g3/venv/bin/python -m unittest discover -s tests -t .`): **109 test, OK** (5 saltati).
-- Su MVLINNA due test di kvarchive falliscono anche nella copia non modificata, e `test_postprova::TestExact` fallisce perché manca `tokenizers`. Sono problemi dell'ambiente, non del codice.
+- Suite completa sulla macchina di prova (Python 3.14 con `compression.zstd` e `tokenizers`): **109 test, OK** (5 saltati).
+- Su una seconda macchina, allora, due test di kvarchive fallivano anche nella copia non modificata (test fragile su T0, poi corretto) e `test_postprova::TestExact` falliva perché mancava `tokenizers`. Problemi d'ambiente, non del codice.
 
 ## Commit
-Commit locale sul ramo `feature/paging` di `~/src/virtual-context-proxy` (non pubblicato).
+Commit sul ramo `feature/paging` (poi confluito nella 0.2.0).
 
-## Installazione (dopo la sessione dell'utente; da fare a cura dell'orchestratore)
-1. Copiare `ctxproxy/recall2.py` e `ctxproxy/core.py` dal commit in `/mnt/mneme-nvme/ctx-proxy/ctxproxy/` su PC4070TI.
-2. Aggiungere a `cfg.json`: `"recall_struct": true, "recall_flex": true, "recall_multi": true, "auto_recall_hint": true`.
-3. `systemctl --user restart ctx-proxy`.
+## Installazione
+1. Aggiornare il proxy installato alla versione con `recall2.py`.
+2. Aggiungere alla configurazione: `"recall_struct": true, "recall_flex": true, "recall_multi": true, "auto_recall_hint": true`.
+3. Riavviare il servizio del proxy.
 
 Proposta per l'impostazione di serie: tutte e quattro attive. Va dichiarato che questo cambia l'output di `strata_recall` e la forma del richiamo automatico. Prima di attivarle di serie, prova dal vivo su una sessione tipo prova-paging.
 

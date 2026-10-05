@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Ingresso Anthropic Messages (Claude Code) -> formato interno Chat Completions -> cuore invariato -> uscita
 riconvertita (anche in streaming).
 

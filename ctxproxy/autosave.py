@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Salvataggio / ripristino automatico del segmento attivo.
 
 Strata tiene UNA conversazione (più pochi checkpoint) e la perde al riavvio o quando un'altra conversazione la

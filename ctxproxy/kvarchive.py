@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Archivio freddo dei salvataggi di Strata (.kva): blocchi indirizzati per contenuto + zstd (card t_6c016d94).
 
 Solo libreria standard (Python >= 3.14: `compression.zstd`). Non modifica Strata: un file archiviato torna un `.bin`

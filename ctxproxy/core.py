@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Nucleo del proxy "contesto virtuale": catena di hash, archivio, masking a pacchetti, segmenti, recall.
 
 Niente HTTP qui: il server (server.py) e il rigioco a secco (replay_dry.py) usano lo stesso codice.

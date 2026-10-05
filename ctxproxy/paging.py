@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Strumenti su richiesta, ricevute tipizzate, query del richiamo automatico (card t_00c5aef6, PAGING-RESULT.md).
 
 Tutto qui è DETERMINISTICO: stesso ingresso -> stesso testo, così il prompt fisico resta identico fra richieste e la

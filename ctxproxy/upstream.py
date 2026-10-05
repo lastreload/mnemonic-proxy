@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Client HTTP minimale verso Strata (solo stdlib)."""
 from __future__ import annotations
 

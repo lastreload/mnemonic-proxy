@@ -1,12 +1,21 @@
-# runtime data (archive, journal, live dumps, slot files)
+# runtime data (archive, journal, live dumps, slot files, cold archive)
 data/
 data-*/
+sessions/
+slots/
+kv-archive/
 *.sqlite
 *.sqlite-*
 *.jsonl
 *.bin
 *.bin.json
+*.kva
+*.kvb
 last_request.json
+# benchmark archives and outputs (private sessions: bring your own)
+bench/data/
+bench/out/
+bench/results.jsonl
 # local tokenizer / Strata checkout used by optional tests
 tok/
 Strata/
@@ -14,6 +23,8 @@ Strata/
 config.json
 cfg*.json
 !examples/config.example.json
+# local release notes (not published)
+RELEASE-*-RESULT.md
 # python
 __pycache__/
 *.pyc

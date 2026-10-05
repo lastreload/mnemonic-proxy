@@ -1,0 +1,19 @@
+# Example systemd *user* unit. Copy to ~/.config/systemd/user/mnemonic-proxy.service, replace the /path/to/...
+# placeholders, then: systemctl --user daemon-reload && systemctl --user enable --now mnemonic-proxy
+[Unit]
+Description=Mnemonic Proxy in front of a local engine (127.0.0.1:8096 -> 127.0.0.1:8095)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/mnemonic-proxy
+Environment=MNEMONIC_CONFIG=/path/to/config.json
+# --tokenizer is optional (exact token counts): a HF tokenizer.json or a Strata pack tokenizer/ folder
+ExecStart=/path/to/venv/bin/mnemonic-proxy --host 127.0.0.1 --port 8096 \
+  --upstream http://127.0.0.1:8095 --data /path/to/mnemonic-data --config ${MNEMONIC_CONFIG}
+Restart=on-failure
+RestartSec=3
+MemoryMax=8G
+
+[Install]
+WantedBy=default.target

@@ -1,5 +1,5 @@
 import sqlite3, os, sys
-os.chdir('/home/mverde/projects/flash-next-local/workspaces/context-vm/proxy')
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repository root
 db, lo, hi, n = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
 roles = sys.argv[5].split(',') if len(sys.argv) > 5 else ['assistant']
 d = sqlite3.connect('bench/data/%s.sqlite' % db)

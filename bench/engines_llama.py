@@ -145,7 +145,7 @@ def main():
         def last(ev):
             return next((e for e in reversed(j.mem) if e["event"] == ev), None)
 
-        h, tools = build_history(a.files, "Analizza il progetto virtual-context-proxy.")
+        h, tools = build_history(a.files, "Analizza il progetto mnemonic-proxy.")
         res["1_first_read"] = send(h, tools)
         ev = saver.tick(now=time.time() + 5)
         assert ev, [e for e in j.mem if e["event"].startswith("autosave")]

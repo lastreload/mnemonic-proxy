@@ -33,7 +33,7 @@ Card t_0ebd2f7a, branch feature/engines. Misure del 2026-10-05.
 
 | funzione | Strata + file di sessione | Strata ufficiale | llama-server --slot-save-path | llama-server senza | OpenAI generico (vLLM, online) |
 |---|---|---|---|---|---|
-| masking a frontiera stabile, archivio, strata_recall | sì | sì | sì | sì | sì |
+| masking a frontiera stabile, archivio, recall (era strata_recall) | sì | sì | sì | sì | sì |
 | segmenti con note di passaggio, 📌/🗑, streaming | sì | sì | sì | sì | sì |
 | conteggio token esatto | --tokenizer | --tokenizer | --tokenizer o /tokenize | --tokenizer o /tokenize | --tokenizer |
 | ancora di masking (save/restore alla frontiera) | sì | no | sì | no | no |
@@ -47,7 +47,7 @@ Card t_0ebd2f7a, branch feature/engines. Misure del 2026-10-05.
 
 ## Misure reali: llama-server con --slot-save-path
 
-PC4070TI, llama.cpp b1-6c5afc8 (build-cuda-gcc15) in sola CPU (`CUDA_VISIBLE_DEVICES=""`, `-ngl 0`, 8 thread,
+Macchina di prova (RTX 4070 Ti 12 GB, 64 GB RAM), llama.cpp b1-6c5afc8 (build-cuda-gcc15) in sola CPU (`CUDA_VISIBLE_DEVICES=""`, `-ngl 0`, 8 thread,
 nice 19: la GPU era occupata da Strata), Qwen3-0.6B Q8_0, `-c 16384 -np 1`. Il proxy gira nel processo del banco
 (`bench/engines_llama.py`), conversazione di prova ~8.2K token. Rilevamento: llama.cpp, salvataggi sì, n_ctx 16384,
 /tokenize sì; finestra 16384 presa dal server (avviso e soglie scalate).
@@ -108,7 +108,7 @@ Claude Desktop / Cowork: la configurazione dei server MCP locali è `mcpServers`
 ## Test
 
     python3 -m unittest discover -s tests -t .      # 135 test (109 + 26 nuovi), OK, 5 saltati come prima
-                                                    # PC4070TI, g3 venv (3.14.6): 135 OK, 4 saltati
+                                                    # seconda macchina, Python 3.14.6: 135 OK, 4 saltati
 
 `tests/test_kvarchive.py`: T0 era calcolato all'import (+10 s); con i 26 test nuovi prima in ordine alfabetico la
 suite superava i 10 s e due test di integrazione fallivano. Ora T0 si calcola in setUp.

@@ -1,4 +1,5 @@
-"""Motori dietro al proxy: che cosa sa fare ciascuno (ENGINES-RESULT.md).
+# Author: Maurizio Verde — LastReload
+"""Motori dietro al proxy: che cosa sa fare ciascuno (docs/dev-notes/ENGINES-RESULT.md).
 
 Il proxy è nato davanti a Strata; qui si descrive il motore e lo si riconosce all'avvio:
 

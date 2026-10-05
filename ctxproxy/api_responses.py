@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Ingresso OpenAI Responses (Codex) -> formato interno Chat Completions -> cuore invariato -> uscita riconvertita
 (anche in streaming).
 

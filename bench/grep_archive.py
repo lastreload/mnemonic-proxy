@@ -1,5 +1,5 @@
 import sqlite3, os, sys, re
-os.chdir('/home/mverde/projects/flash-next-local/workspaces/context-vm/proxy')
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repository root
 # usage: grep.py db regex [maxidx] [role] [ctx]
 db, rx = sys.argv[1], sys.argv[2]
 mx = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != '-' else 10**9

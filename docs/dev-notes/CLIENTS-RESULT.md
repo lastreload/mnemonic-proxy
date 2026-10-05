@@ -21,8 +21,8 @@ reasoning_text.delta / function_call_arguments.delta/done / content_part.* / com
 ## Verificato
 
 Suite completa: `python3 -m unittest discover -s tests -t .` -> 127 test, OK (5 saltati: gruppi
-facoltativi tokenizer/Strata mock, come prima). Su questo MVLINNA `compression.zstd` c'è e la suite è
-verde; nessun fallimento d'ambiente.
+facoltativi tokenizer/Strata mock, come prima). Sulla macchina di sviluppo (Python 3.14, `compression.zstd`
+presente) la suite è verde; nessun fallimento d'ambiente.
 
 Test unitari (motore finto, testo + ragionamento + chiamate, stream e no):
 - id strumenti: interno `call_x` -> Anthropic `toolu_call_x`; in ingresso l'id resta quello del client
@@ -33,7 +33,7 @@ Test unitari (motore finto, testo + ragionamento + chiamate, stream e no):
   immagini dentro un `tool_result` -> nota testuale (rifiutarle bloccherebbe la sessione per sempre).
 - `max_tokens` obbligatorio (400 `invalid_request_error`).
 - `count_tokens` = `Manager.estimate` del proxy sulla stessa richiesta convertita.
-- `strata_recall` risolto dal proxy e invisibile al client (nessun tool_use / function_call), sia
+- `strata_recall` (dalla 0.2.0: `recall`) risolto dal proxy e invisibile al client (nessun tool_use / function_call), sia
   stream sia no, con entrambi i formati.
 - catena di hash: secondo giro (storia rimandata + tool_result) -> stessa conversazione.
 - Codex: strumenti `custom` (apply_patch) -> funzione con `input`; tornano come `custom_tool_call`.
@@ -80,7 +80,7 @@ lo strumento shell del client e poi risponde col risultato):
 
 Proxy (sul ramo feature/clients):
 
-    cd /home/mverde/src/vcp-wt/clients
+    cd /path/to/mnemonic-proxy
     python3 -m ctxproxy.server --upstream http://127.0.0.1:8095 --port 18096 --data ./data-clients \
         --config examples/config.example.json [--tokenizer <pack>/tokenizer]
 
@@ -101,7 +101,7 @@ Codex (config in una CODEX_HOME separata):
     approval_policy = "never"
     sandbox_mode = "workspace-write"
     [model_providers.strata]
-    name = "Strata via virtual-context-proxy"
+    name = "Strata via mnemonic-proxy"
     base_url = "http://127.0.0.1:18096/v1"
     wire_api = "responses"
     env_key = "STRATA_API_KEY"

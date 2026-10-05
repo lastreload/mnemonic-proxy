@@ -2704,17 +2704,17 @@
   "ask": 1000,
   "kind": "esito",
   "q": "Dove si trovava l'immagine di riferimento che l'utente voleva far vedere?",
-  "answer": "su AI395, /home/mverde/Immagini/nibbles.jpeg",
+  "answer": "sull'altro computer dell'utente, ~/Immagini/nibbles.jpeg",
   "queries": [
    "immagine riferimento utente",
    "nibbles.jpeg",
-   "AI395 Immagini"
+   "Immagini nibbles"
   ],
   "conv": "cfbb3f8ae1bc8",
   "evidence": [
    {
     "rule": {
-     "re": "/home/mverde/Immagini/nibbles\\.jpeg",
+     "re": "Immagini/nibbles\\.jpeg",
      "role": "user"
     },
     "rids": [

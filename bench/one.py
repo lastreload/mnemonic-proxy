@@ -1,5 +1,5 @@
 import os, sys
-os.chdir('/home/mverde/projects/flash-next-local/workspaces/context-vm/proxy')
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repository root
 sys.path.insert(0, '.')
 sys.path.insert(0, 'bench')
 import json

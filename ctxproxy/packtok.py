@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Tokenizer del pack di Strata -> tokenizer HF (`tokenizers`), identico a serve/strata_tokenizer.py.
 
 Il tokenizer.json del pack è un descrittore (model gpt2, pre qwen35, pre_pattern), non un file HF: qui si costruisce

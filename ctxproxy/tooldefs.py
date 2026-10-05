@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Definizioni degli strumenti accorciate in modo DETERMINISTICO (card t_e41e63fd, TOOLDEFS-RESULT.md).
 
 Le definizioni dei 49 strumenti di pi pesano ~21,5K token fissi in ogni richiesta. Qui si accorciano SOLO i testi

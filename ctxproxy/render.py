@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Conteggio token ESATTO del prompt che Strata leggerà.
 
 Strata (serve/frontend.py + chat_template.jinja del pack) fa: openai_to_messages(req) -> template Jinja -> tokenizer

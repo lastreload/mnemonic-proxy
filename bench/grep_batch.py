@@ -1,6 +1,6 @@
 """Ricerca a lotti per etichettare il banco: spec = righe 'id|db|regex|maxidx|role|n'."""
 import sqlite3, os, sys, re
-os.chdir('/home/mverde/projects/flash-next-local/workspaces/context-vm/proxy')
+os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repository root
 dbs = {}
 for line in open(sys.argv[1], encoding='utf-8'):
     line = line.rstrip('\n')

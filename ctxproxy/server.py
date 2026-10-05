@@ -1,3 +1,4 @@
+# Author: Maurizio Verde — LastReload
 """Server HTTP del proxy (OpenAI-compatibile) davanti a Strata.
 
     python3 -m ctxproxy.server --upstream http://127.0.0.1:8095 --port 8096 --data ./data
