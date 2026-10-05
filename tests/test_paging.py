@@ -212,6 +212,9 @@ class TestPager(unittest.TestCase):
         self.assertEqual(set(cat), {"todo", "bg_run", "bg_logs", "github_list_issues", "github_search_code",
                                     "web_fetch"})
         self.assertEqual(pg.search(cat, "", ["todo"]), ["todo"])
+        self.assertEqual(pg.search(cat, "lista todo", ["todo"]), ["todo"])          # per nome: niente extra
+        self.assertEqual(pg.search(cat, "", ["todo", "bg_run"]), ["todo", "bg_run"])
+        self.assertIn("todo", pg.search(cat, "", ["todo", "inesistente_xyz"]))       # un nome sbagliato: ricerca
         self.assertEqual(set(pg.search(cat, "processo in background")[:2]), {"bg_run", "bg_logs"})
         self.assertEqual(pg.search(cat, "github issue")[0], "github_list_issues")
         self.assertEqual(pg.search(cat, "zzzz"), [])
@@ -400,6 +403,18 @@ class TestAutoRecall(Base):
         self.assertEqual(len([e for e in self.events("auto_recall") if e["index"] == ar[-1]["index"]]), 1)
         self.assertEqual(self.events("auto_recall")[-1]["injected"], 0)   # già presente: non ripetuto
         assert_tool_pairs(self, self.eng.requests[-1]["messages"])
+
+    def test_dedup_and_max_args(self):
+        """Comandi identici ripetuti: un solo pezzo per testo, e al massimo auto_recall_max_args argomenti."""
+        h = history(1)
+        for k in range(1, 40):
+            h += tool_round(k, 3500)
+            h[-2]["tool_calls"][0]["function"]["arguments"] = json.dumps({"command": "cat SEED_MAGICO config"})
+        h += [{"role": "assistant", "content": "fatto"}, {"role": "user", "content": "qual era SEED_MAGICO config?"}]
+        self.send(h)
+        ar = self.events("auto_recall")[-1]
+        args = [p for p in ar["pieces"] if p["role"] == "assistant-tool-args"]
+        self.assertLessEqual(len(args), 1, ar)
 
     def test_only_hidden_pieces(self):
         h = history(1) + [{"role": "assistant", "content": "x"},

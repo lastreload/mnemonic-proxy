@@ -29,7 +29,7 @@ from .tooldefs import ToolShortener
 RECALL_NAME = "strata_recall"
 PLACEHOLDER = "[uscita strumento omessa: {n} token \u2014 recall:{rid}]"   # formato vecchio (solo riconoscimento)
 THINK_PLACEHOLDER = "[ragionamento omesso: {n} token \u2014 recall:{rid}]"
-# Segnaposto con provenienza: solo nei RISULTATI degli strumenti (il modello li legge
+# Segnaposto con provenienza (NEXT.md punto 10, GPT-ANSWER3): solo nei RISULTATI degli strumenti (il modello li legge
 # ma non li scrive), con chiamata/file di origine, inizio vero dell'uscita e istruzione esplicita.
 OUT_PLACEHOLDER = ("[gestore del contesto: uscita di {origin} nascosta per spazio ({n} token). Inizio: \u00ab{head}\u00bb. "
                    "Testo esatto: strata_recall id={rid}. Per lo stato ATTUALE rileggi il file o riesegui il comando.]")
@@ -97,7 +97,7 @@ class Config:
     keep_recent_tokens: int = 16000 # coda protetta (mai mascherata)
     min_age_turns: int = 2          # un'uscita è mascherabile solo dopo almeno N messaggi assistant successivi
     min_batch_tokens: int = 16000   # un pacchetto parte solo se libera almeno tanti token (niente micro-pacchetti)
-    # ancora di masking: dopo ogni pacchetto il proxy legge il prompt fisico fino alla "frontiera"
+    # ancora di masking (LIVE-READY §1): dopo ogni pacchetto il proxy legge il prompt fisico fino alla "frontiera"
     # (primo messaggio che un pacchetto futuro potrà ancora cambiare) e lo salva con /slots save; al pacchetto
     # successivo lo ripristina, così Strata rilegge solo dalla frontiera e non da 16.384 (unico checkpoint rimasto)
     mask_anchor: bool = False
@@ -116,7 +116,7 @@ class Config:
     index_max_tokens: int = 2000
     keep_first_user: bool = True
     slot_save: bool = False         # SAVE di A via /slots/0?action=save prima dello switch
-    seal_experimental: bool = False # "trucco del sigillo" prima del SAVE
+    seal_experimental: bool = False # "trucco del sigillo" (CLAUDE-ANSWER2 §1.2-a) prima del SAVE
     # recall
     inject_recall: bool = True
     recall_max_chars: int = 24000
@@ -142,7 +142,9 @@ class Config:
     auto_recall_max_tokens: int = 4000   # tetto del messaggio iniettato
     auto_recall_piece_tokens: int = 1200 # tetto per pezzo
     auto_recall_min_score: float = 8.0   # soglia su -bm25 (FTS5)
-    auto_recall_min_terms: int = 2       # termini distinti della query presenti nel pezzo
+    auto_recall_min_terms: int = 2       # termini distinti della query presenti nel pezzo (esclusi i comuni)
+    auto_recall_common_frac: float = 0.4 # termine comune se compare in più di questa quota dei pezzi trovati
+    auto_recall_max_args: int = 1        # argomenti di chiamata al massimo per iniezione
     # punti fermi / usa e getta (NEXT.md 11-12)
     pins_max_tokens: int = 8192     # tetto del blocco "Punti fermi" copiato al cambio di segmento
     # stima token
@@ -150,7 +152,7 @@ class Config:
     msg_overhead: int = 6
     image_tokens: int = 1024
     reasoning_last_turn_only: bool = False  # template Strata: preserve_thinking indefinito => tiene tutto
-    # salvataggio/ripristino automatico del segmento attivo
+    # salvataggio/ripristino automatico del segmento attivo (AUTOSAVE-RESULT.md)
     autosave: bool = False          # salva lo stato di Strata quando la conversazione che lo occupa resta ferma
     autosave_idle_s: float = 180.0  # ...per almeno tanti secondi (e Strata è libero)
     autosave_min_tokens: int = 16384  # sotto questa soglia rileggere costa poco: niente file
@@ -318,7 +320,7 @@ def call_notes(m: dict, rid: str) -> dict:
 
 
 def call_note_text(name: str, path: str, rid: str, result: str) -> str:
-    """operazione, file, esito accertato o no, accesso allo storico, niente 'modifiche
+    """GPT-ANSWER3 §game.js: operazione, file, esito accertato o no, accesso allo storico, niente 'modifiche
     esterne' inventate."""
     esito = outcome(name, result)
     what = "%s%s" % (name, (" su " + path) if path else "")
@@ -341,7 +343,7 @@ def is_human_user(m: dict) -> bool:
     return not (t.startswith("<tool_response>") and t.endswith("</tool_response>"))
 
 
-# ---------- 📌 punti fermi / 🗑 usa e getta ----------
+# ---------- 📌 punti fermi / 🗑 usa e getta (NEXT.md 11-12) ----------
 _PIN_LINE = re.compile(r"^[ \t]*(?:\U0001F4CC|!!)[ \t]*(.+)$", re.M)
 _PIN_BLOCK = re.compile(r"\[\[importante\]\](.*?)\[\[/importante\]\]", re.S | re.I)
 _DROP_LINE = re.compile(r"^[ \t]*(?:\U0001F5D1\uFE0F?|~)(?!~)[ \t]*\S", re.M)
@@ -518,7 +520,7 @@ CREATE TABLE IF NOT EXISTS drops(conv TEXT, idx INT, created REAL, PRIMARY KEY(c
 CREATE TABLE IF NOT EXISTS fileops(conv TEXT, idx INT, call_id TEXT, op TEXT, path TEXT, outcome TEXT, rid_args TEXT,
     rid_out TEXT, head TEXT, PRIMARY KEY(conv, idx, call_id));
 """
-# Ricerca: indice FTS5 a contenuto esterno sull'archivio, aggiornato da trigger.
+# Ricerca (GPT-ANSWER3 §ricerca): indice FTS5 a contenuto esterno sull'archivio, aggiornato da trigger.
 FTS_SCHEMA = """
 CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(content, content='archive', content_rowid='rowid',
     tokenize='unicode61 remove_diacritics 2');
@@ -860,7 +862,7 @@ class Manager:
 
     def estimate(self, msgs: list, tools) -> tuple[int, list[int]]:
         """-> (totale, token per messaggio). Con il tokenizer del pack: conteggio ESATTO del prompt che Strata
-        tokenizza (render_pieces = template Jinja vero, verificato su 421 richieste di una sessione reale)."""
+        tokenizza (render_pieces = template Jinja vero, verificato su 421 richieste di nibble2)."""
         if self.tc.exact:
             try:
                 per, fixed = [0] * len(msgs), 0
@@ -1059,7 +1061,7 @@ class Manager:
             if ev:
                 phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
                 est2, per = self.estimate(phys, tools)
-                # Δ MISURATO sulla stessa richiesta con/senza il pacchetto
+                # Δ MISURATO sulla stessa richiesta con/senza il pacchetto (GPT-ANSWER3 passo 1)
                 ev["tokens_saved_measured"] = est - est2
                 ev["est_after_measured"] = est2
                 self.journal.log("mask_measured", conv=conv, seg=seg or 0, est_before=est, est_after=est2,
@@ -1226,15 +1228,29 @@ class Manager:
                 already.update(re.findall(r"id=([rta][0-9a-f]{12})", c))
         t0 = time.time()
         hits = self.store.search_fts_scored(conv, terms, limit=80, max_idx=i) if hidden and terms else []
-        cands = []
+        pre = []
         for rid, idx, role, name, content, tokens, score in hits:
             if rid not in hidden or rid in already or not content:
                 continue
             low = content.lower()
-            matched = [t for t in terms if t in low]
-            if score < cfg.auto_recall_min_score or len(matched) < cfg.auto_recall_min_terms:
+            pre.append((rid, idx, role, name, content, tokens, score, [t for t in terms if t in low]))
+        # termini comuni (presenti in gran parte dei pezzi trovati: percorso del progetto, 'node', 'game', 'ogni'…)
+        # non distinguono un pezzo dall'altro: non contano per la soglia dei termini
+        df = {}
+        for c in pre:
+            for t in c[7]:
+                df[t] = df.get(t, 0) + 1
+        common = {t for t, n in df.items() if len(pre) >= 8 and n > cfg.auto_recall_common_frac * len(pre)}
+        cands, seen_txt, n_args = [], set(), 0
+        for rid, idx, role, name, content, tokens, score, matched in pre:
+            distinct = [t for t in matched if t not in common]
+            if score < cfg.auto_recall_min_score or len(distinct) < cfg.auto_recall_min_terms:
                 continue
-            cands.append((rid, idx, role, name, content, tokens, score, matched))
+            h = hashlib.sha1(content.strip().encode("utf-8", "replace")).hexdigest()
+            if h in seen_txt:                       # stesso testo già scelto (comandi ripetuti identici)
+                continue
+            seen_txt.add(h)
+            cands.append((rid, idx, role, name, content, tokens, score, distinct + [t for t in matched if t in common]))
         room = cfg.window - cfg.reserve - resp - est - 64
         budget = min(cfg.auto_recall_max_tokens, max(0, room))
         head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
@@ -1245,6 +1261,10 @@ class Manager:
         for rid, idx, role, name, content, tokens, score, matched in cands[:cfg.auto_recall_k * 3]:
             if len(chosen) >= cfg.auto_recall_k:
                 break
+            if role == "assistant-tool-args":       # argomenti di chiamata: al massimo N per iniezione
+                if n_args >= cfg.auto_recall_max_args:
+                    continue
+                n_args += 1
             low = content.lower()
             p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
             s = content[max(0, p - 300):p + 2400]
@@ -1335,7 +1355,7 @@ class Manager:
         anc = self.store.anchor(conv, seg) if cfg.mask_anchor else None
         floor = anc[0] if anc else 0
         # coda protetta INCLUSIVA: gli ultimi keep_recent_tokens del prompt fisico più il messaggio che attraversa
-        # il confine (prima il messaggio a cavallo restava scoperto)
+        # il confine (GPT-ANSWER3: prima il messaggio a cavallo restava scoperto)
         protected, acc = set(), 0
         for j in range(len(phys) - 1, -1, -1):
             protected.add(j)

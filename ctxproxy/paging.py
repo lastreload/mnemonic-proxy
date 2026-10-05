@@ -123,6 +123,8 @@ class ToolPager:
         if isinstance(names, str):
             names = [names]
         exact = [n for n in (names or []) if n in catalog][:limit]
+        if names and len(exact) == len(names):
+            return exact                    # tutti chiesti per nome ed esistenti: solo quelli, niente extra
         q = _words(query) + [w for n in (names or []) if n not in catalog for w in _words(n)]
         qset = set(q)
         scored = []
