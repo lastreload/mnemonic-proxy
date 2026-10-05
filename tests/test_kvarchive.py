@@ -339,6 +339,8 @@ class FakeProxy:
 
 class TestProxyIntegration(Base):
     def setUp(self):
+        global T0
+        T0 = time.time() + 10      # rispetto all'ora di creazione dei file del test (non all'import del modulo)
         super().setUp()
         self.slot = os.path.join(self.d, "sessions")
         os.makedirs(self.slot)

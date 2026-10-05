@@ -111,6 +111,67 @@ a `strata_context` field and an `X-Strata-Context` header. An optional
 `X-Strata-Conversation` header (or `prompt_cache_key`) binds a request to a conversation
 explicitly; otherwise conversations are recognised by a hash chain over the messages.
 
+## Using it with Claude Code / Codex
+
+Besides OpenAI Chat Completions (`/v1/chat/completions`), the proxy accepts:
+
+- **Anthropic Messages** — `POST /v1/messages` (streaming and not) and
+  `POST /v1/messages/count_tokens` (same counter the proxy uses for its own window checks);
+- **OpenAI Responses** — `POST /v1/responses` (streaming and not; stateless: `store=false`,
+  no `previous_response_id`).
+
+Both are converted to Chat Completions before the context manager and back on the way out, so
+masking, archive, `strata_recall`, segments, receipts and on-demand tools work the same; the
+proxy's own tools never reach the client.
+
+**Claude Code** (tested with 2.1.287):
+
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8096      # no /v1
+export ANTHROPIC_AUTH_TOKEN=local                    # any value; the proxy does not check it
+export ANTHROPIC_MODEL=qwen-local                    # any name; Strata serves its loaded model
+export ANTHROPIC_SMALL_FAST_MODEL=qwen-local
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+claude                                               # or: claude -p "…"
+```
+
+Disable Claude Code's auto-compaction (`export DISABLE_AUTO_COMPACT=1`, or `/config` →
+Auto-compact off), otherwise two context managers fight over the same history.
+
+**Codex** (tested with codex-cli 0.160.0). Codex 0.160 only speaks the Responses API:
+`wire_api = "chat"` is rejected ("`wire_api = "chat"` is no longer supported"). Add a provider
+to `~/.codex/config.toml` (or to a separate `CODEX_HOME`):
+
+```toml
+model = "qwen-local"
+model_provider = "strata"
+
+[model_providers.strata]
+name = "Strata via virtual-context-proxy"
+base_url = "http://127.0.0.1:8096/v1"
+wire_api = "responses"
+env_key = "STRATA_API_KEY"          # export STRATA_API_KEY=local (any value)
+requires_openai_auth = false
+supports_websockets = false
+```
+
+Codex sends `prompt_cache_key` (its session id), which the proxy uses as the conversation key.
+Codex warns "Model metadata for `qwen-local` not found": harmless; set `model_context_window`
+to Strata's window if you want Codex's own accounting to match.
+
+Conversion details and limits:
+
+- reasoning ↔ `thinking` blocks / `reasoning` items; Anthropic `signature` is a local
+  placeholder (hash of the text), incoming signatures and `encrypted_content` are ignored;
+- tool ids: Anthropic gets `toolu_<internal id>`, Responses keeps `call_id` unchanged;
+  several tool calls per turn, `tool_result` with block content and `is_error` are supported;
+- Codex `custom` tools (e.g. `apply_patch`) become a function with one `input` string and
+  come back as `custom_tool_call`; hosted tools (web search etc.) are dropped;
+- images in user messages are rejected with a 400 in the client's error format; images inside
+  tool results are replaced by a text note; `cache_control` is ignored;
+- `x-anthropic-billing-header` system blocks (they change every request) are dropped so the
+  hash chain and Strata's prefix cache stay stable.
+
 ## Compatibility
 
 | Strata build | what works |

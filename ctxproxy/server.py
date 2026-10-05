@@ -577,6 +577,12 @@ def make_handler(proxy: Proxy):
                 except (ValueError, KeyError, TypeError) as e:
                     st, out = 400, {"error": {"message": "richiesta non valida: %s" % e}}
                 return self._send(st, out)
+            if path in ("/v1/messages", "/v1/messages/count_tokens", "/messages", "/messages/count_tokens"):
+                from . import api_anthropic
+                return api_anthropic.handle(self, proxy, path, body)
+            if path in ("/v1/responses", "/responses"):
+                from . import api_responses
+                return api_responses.handle(self, proxy, path, body)
             if path not in ("/v1/chat/completions", "/chat/completions"):
                 return self._passthrough("POST", body)
             try:
