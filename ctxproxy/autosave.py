@@ -335,6 +335,9 @@ class AutoSaver:
                     ok = False
                     self.journal.log("autosave_error", step="prune", file=r["file"], error=str(e)[:200])
             if ok:
+                if cfg.kv_archive:
+                    from .kvarchive import discard
+                    discard(cfg, r["file"], self.journal)
                 self.store.autosave_deleted(r["file"])
                 self.journal.log("autosave_prune", conv=r["conv"], seg=r["seg"], file=r["file"], reason=why,
                                  bytes=r["bytes"])

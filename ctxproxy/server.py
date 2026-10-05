@@ -660,6 +660,9 @@ def main(argv=None):
                   mode=a.mode)
     if cfg.autosave:
         proxy.enable_autosave()
+    if cfg.kv_archive:
+        from .kvarchive import enable as enable_kv_archive
+        enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
     srv.daemon_threads = True
     print("[strata-context] %s:%d -> %s mode=%s window=%d token=%s anchor=%s" % (

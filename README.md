@@ -100,6 +100,7 @@ systemd user unit with placeholder paths is in `examples/ctx-proxy.service`.
 | `inject_recall`, `max_recall_rounds`, `recall_max_tokens` | true, 4, 6000 | `strata_recall` tool |
 | `pins_max_tokens` | 8192 | cap for the carried-over 📌 block |
 | `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb`, `autosave_min_free_gb` | false, 180, 10, 25, 8 | idle autosave (needs session files) |
+| `kv_archive`, `kv_archive_idle_s`, `kv_archive_min_age_s`, `kv_archive_threads` | false, 600, 1800, 4 | cold archive of session files: content-addressed zstd blocks with cross-file dedup, original deleted only after sha256-verified rebuild, rebuilt on demand before a restore (`ctxproxy/kvarchive.py`, CLI `python3 -m ctxproxy.kvarchive`) |
 | `autorestore`, `autorestore_min_gain` | true, 8192 | restore before forwarding when it saves at least this many tokens |
 | `response_floor` | 0 | minimum response size assumed in the window check |
 | `live_dump` | false | write `data/live/last_request.json` for the dashboard |

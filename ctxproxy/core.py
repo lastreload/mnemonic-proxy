@@ -162,6 +162,16 @@ class Config:
     autosave_poll_s: float = 10.0
     autorestore: bool = True        # (con autosave) restore prima di inoltrare se Strata non ha già il prefisso
     autorestore_min_gain: int = 8192  # token di prefisso in più rispetto a quanto Strata ha già, per fare restore
+    # archivio freddo dei salvataggi (kvarchive.py): blocchi deduplicati + zstd, originale cancellato solo dopo
+    # ricostruzione verificata (sha256); restore di un file archiviato = ricostruzione prima
+    kv_archive: bool = False
+    kv_archive_dir: str = ""        # vuoto = <cartella madre di slot_dir>/kv-archive
+    kv_archive_idle_s: float = 600.0  # Strata fermo (requests invariato, nessuna in_flight) da almeno tanto
+    kv_archive_min_age_s: float = 1800.0  # file non modificato da almeno tanto
+    kv_archive_min_bytes: int = 64 * 2 ** 20
+    kv_archive_poll_s: float = 60.0
+    kv_archive_level: int = 3
+    kv_archive_threads: int = 4
     # osservabilità
     live_dump: bool = False         # scrive data_dir/live/last_request.json (prompt fisico + risposta) per la dashboard
 
@@ -1794,6 +1804,9 @@ class Manager:
                     os.remove(os.path.join(cfg.slot_dir, old[2]))
                 except OSError:
                     pass
+                if cfg.kv_archive:
+                    from .kvarchive import discard
+                    discard(cfg, old[2], self.journal)
         except Exception as e:  # noqa: BLE001
             events.append(self.journal.log("anchor_error", conv=conv, step="save", error=str(e)[:300]))
         return events
