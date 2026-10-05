@@ -30,6 +30,14 @@ Project page: <https://lastreload.github.io/mnemonic-proxy/>
 A real coding session — a canvas tower-defense game built from scratch by a 35B-A3B MoE model on a single 12 GB
 RTX 4070 Ti — with the proxy in between.
 
+<p align="center">
+  <img src="docs/assets/replay.gif" alt="Replay: a question answered from three hours earlier via one recall call" width="100%">
+</p>
+
+<p align="center"><sub>Replay of a real exchange (animated GIF; <a href="docs/assets/replay.mp4">MP4</a>).
+Three hours and two segment switches into the session, one <code>recall</code> call — resolved inside the proxy in
+61 ms — brings back the verbatim first version of the boss block, message 20. No model summarized anything.</sub></p>
+
 | | |
 |---|---|
 | **448K** | tokens of history archived and recallable |

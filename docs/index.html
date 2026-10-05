@@ -131,6 +131,8 @@ footer b{color:var(--cy)}
     <div class="stat"><div class="n">3h15</div><div class="l">continuous agent work · 430 requests · 0 errors</div></div>
     <div class="stat"><div class="n">1.4<small>s</small></div><div class="l">to resume a 110K-token conversation from disk (≈50&nbsp;s re-reading it)</div></div>
   </div>
+  <div style="margin:34px 0 6px;border:1px solid var(--line);border-radius:6px;overflow:hidden"><video src="assets/replay.mp4" autoplay loop muted playsinline style="width:100%;display:block"></video></div>
+  <p class="cap">Replay of a real exchange (<a href="assets/replay.gif">GIF</a>). Three hours and two segment switches in, one <code>recall</code> call — resolved inside the proxy in 61&nbsp;ms — brings back the verbatim first version of the boss block, message 20. No model summarized anything.</p>
   <div class="chartbox">
 <svg viewBox="0 0 900 340" class="chart" role="img" aria-label="Virtual history versus physical prompt over a 3h15 session">
 <defs><linearGradient id="gv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff2bd6" stop-opacity=".35"/><stop offset="1" stop-color="#ff2bd6" stop-opacity="0"/></linearGradient>
