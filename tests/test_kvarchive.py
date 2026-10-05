@@ -351,8 +351,6 @@ class TestProxyIntegration(Base):
         self.up = FakeUp(self.slot)
         self.proxy = FakeProxy(self.cfg, self.up, self.store, self.journal)
         self.archiver = K.enable(self.proxy, start=False)
-        global T0
-        T0 = time.time() + 10                     # per test: con discover i moduli si importano tutti prima
 
     def events(self, name):
         return [e for e in self.journal.mem if e["event"] == name]
