@@ -45,7 +45,8 @@ NEEDS_SLOTS = ("slot_save", "mask_anchor", "autosave", "autorestore", "seal_expe
 # scritte in configurazione)
 SCALED = ("mask_trigger", "mask_target", "keep_recent_tokens", "min_batch_tokens", "tail_max", "reserve",
           "default_response", "notes_max_tokens", "anchor_min_tokens", "autosave_min_tokens", "autorestore_min_gain",
-          "pins_max_tokens", "recall_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens")
+          "pins_max_tokens", "recall_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens",
+          "response_floor")
 BASE_WINDOW = 131072
 
 
@@ -211,6 +212,12 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         warn.append("window from engine n_ctx: %d (was %d); thresholds scaled x%.3f" % (cfg.window, old, ratio))
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
+    # una risposta minima che da sola riempie (quasi) la finestra fa scattare un cambio di segmento a ogni richiesta
+    floor = int(getattr(cfg, "response_floor", 0) or 0)
+    if floor and cfg.window and floor > cfg.window // 4:
+        cfg.response_floor = cfg.window // 4
+        warn.append("response_floor %d too large for window %d: lowered to %d" % (floor, cfg.window,
+                                                                                    cfg.response_floor))
     for w in warn:
         if log:
             log("[mnemonic-proxy] warning: " + w)

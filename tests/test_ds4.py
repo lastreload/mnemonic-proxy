@@ -161,6 +161,14 @@ class TestDs4Engine(Ds4Base):
         engines.apply(cfg, engines.Engine("ds4", slot_save=False, status_kind=None), None, log=None)
         self.assertTrue(cfg.mask_tool_args)
 
+    def test_response_floor_fits_small_window(self):
+        """Visto davvero (GLM su ds4, --ctx 16384): response_floor 16384 scritto in configurazione = un cambio di
+        segmento a ogni richiesta. Con una finestra piccola il minimo si abbassa a un quarto della finestra."""
+        cfg = Config(response_floor=16384)
+        engines.apply(cfg, engines.Engine("ds4", slot_save=False, status_kind=None, n_ctx=16384), None,
+                      explicit={"response_floor"}, log=None)
+        self.assertEqual((cfg.window, cfg.response_floor), (16384, 4096))
+
     def test_fake_rejects_unknown_tool_result(self):
         """Il ds4 finto fa come il vero: risultato con id sconosciuto e senza chiamata precedente -> 400."""
         up = Upstream(self.url)
