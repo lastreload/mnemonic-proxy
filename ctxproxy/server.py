@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
-from .paging import GUARD_MSG, GUARD_NAMES, receipt_contaminated
+from .paging import GUARD_MSG, is_guarded, receipt_contaminated
 from .upstream import Upstream, UpstreamError
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
@@ -293,7 +293,7 @@ class Proxy:
                         name = f.get("name") or ""
                         c = calls[i] = {"id": tc.get("id"), "name": name,
                                         "args": "", "mine": name in state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
-                                        "cidx": None, "held": self.cfg.receipt_guard and name in GUARD_NAMES}
+                                        "cidx": None, "held": self.cfg.receipt_guard and is_guarded(name)}
                         if not c["mine"] and not c["held"]:
                             c["cidx"] = state["client_calls"]
                             state["client_calls"] += 1

@@ -270,25 +270,51 @@ def last_lines(text: str, n: int = 4, max_chars: int = 320) -> str:
 
 
 # ---------------------------------------------------------------- guardia in uscita
-GUARD_NAMES = ("write", "edit", "bash")
+# write/edit/bash di pi; Write/Edit/MultiEdit/NotebookEdit/Bash di Claude Code; apply_patch/exec_command/shell di
+# Codex (il confronto ignora maiuscole e minuscole, vedi is_guarded)
+GUARD_NAMES = ("write", "edit", "bash", "multiedit", "notebookedit", "apply_patch", "exec_command", "shell")
 _GUARD_RE = re.compile(r"\u27eactx-archive id=[rta][0-9a-f]{12}|\u27eb Ricevuta: |"
                        r"\[gestore del contesto: richiamo automatico\] Pezzi|nascosta per spazio \(\d+ token\)")
+# 0.3.0 (LIVE020, problema 3): l'argomento voluminoso di una chiamata vecchia è accorciato a "prime righe" + una riga
+# fatta solo di "…" (core.masked_calls). Il modello a volte la ricopia in una scrittura nuova: una riga che contiene
+# solo "…" dentro un valore di testo è quel segno, non codice vero.
+_CUT_LINE = re.compile(r"(?m)^[ \t]*\u2026[ \t]*$")
 GUARD_MSG = ("[gestore del contesto: chiamata NON eseguita. I suoi argomenti contengono il testo di una ricevuta o di "
-             "un segnaposto del gestore del contesto (es. \u27eactx-archive \u2026\u27eb, \"nascosta per spazio\"): "
+             "un segnaposto del gestore del contesto (es. \u27eactx-archive \u2026\u27eb, \"nascosta per spazio\", "
+             "oppure la forma accorciata di una chiamata vecchia: prime righe seguite da una riga con solo \"\u2026\"): "
              "non è contenuto vero del file. Rileggi il file (read) o recupera il testo esatto con {rn}, "
              "poi ripeti la chiamata con il contenuto vero.]")
 
 
+def is_guarded(name: str | None) -> bool:
+    return bool(name) and name.lower() in GUARD_NAMES
+
+
+def _strings(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, dict):
+        for x in v.values():
+            yield from _strings(x)
+    elif isinstance(v, list):
+        for x in v:
+            yield from _strings(x)
+
+
 def receipt_contaminated(name: str | None, args) -> bool:
-    """Una chiamata con effetti (write/edit/bash) che contiene una ricevuta/segnaposto copiato: va bloccata."""
-    if name not in GUARD_NAMES or not args:
+    """Una chiamata con effetti (scrittura/modifica/shell) che contiene una ricevuta, un segnaposto o un argomento
+    accorciato copiato: va bloccata."""
+    if not is_guarded(name) or not args:
         return False
     s = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+    vals = [s]
     try:   # gli argomenti arrivano come JSON: i caratteri non ASCII possono essere \\uXXXX
-        s = s + "\n" + json.dumps(json.loads(s), ensure_ascii=False)
+        dec = json.loads(s)
+        s = s + "\n" + json.dumps(dec, ensure_ascii=False)
+        vals = list(_strings(dec))
     except (ValueError, TypeError):
         pass
-    return bool(_GUARD_RE.search(s))
+    return bool(_GUARD_RE.search(s)) or any(_CUT_LINE.search(v) for v in vals)
 
 
 def receipt_kind(info: dict | None, text: str, failed: bool) -> str:

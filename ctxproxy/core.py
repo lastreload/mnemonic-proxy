@@ -360,7 +360,7 @@ def masked_calls(m: dict, rid: str, n: int) -> list:
             f["arguments"] = json.dumps(kept, ensure_ascii=False)
         else:
             s = a if isinstance(a, str) else json.dumps(a, ensure_ascii=False)
-            f["arguments"] = s[:ARGS_KEEP_CHARS] + "…"
+            f["arguments"] = s[:ARGS_KEEP_CHARS].rstrip() + "\n…"
         out.append({**c, "function": f})
     return out
 
