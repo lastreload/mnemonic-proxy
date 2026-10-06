@@ -1824,7 +1824,36 @@ class Manager:
                 lo = mid
             else:
                 hi = mid - 1
-        return text[:lo] + "\n[recall troncato per spazio nel contesto: chiedi un id preciso o usa offset]"
+        return text[:lo] + ("\n[recall troncato per spazio nel contesto: chiedi un id preciso o usa offset; con id e "
+                            "query ricevi solo le righe che contengono la query]")
+
+    def _recall_lines(self, rid, r, text, q, meta, head_fn) -> str:
+        lines = text.splitlines()
+        low = q.lower()
+        hit = [i for i, l in enumerate(lines) if low in l.lower()]
+        terms = [t.lower() for t in re.findall(r"\w+", q) if len(t) > 1]
+        if not hit and terms:
+            hit = [i for i, l in enumerate(lines) if all(t in l.lower() for t in terms)]
+        if not hit:
+            return ("[recall:%s \u2014 nessuna riga contiene %r; il testo ha %d righe, %d caratteri: usa offset]"
+                    % (rid, q, len(lines), len(text)))
+        keep = sorted({j for i in hit for j in (i - 1, i, i + 1) if 0 <= j < len(lines)})
+        starts, pos = [], 0
+        for l in lines:
+            starts.append(pos)
+            pos += len(l) + 1
+        out = ["[recall:%s \u2014 messaggio %d (%s%s): %d righe su %d contengono %r (con una riga di contesto; "
+               "numero di riga e carattere iniziale; per il testo intorno usa offset)]"
+               % (rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", len(hit), len(lines), q)]
+        prev = None
+        for j in keep:
+            if prev is not None and j != prev + 1:
+                out.append("\u22ee")
+            out.append("%s%d@%d: %s" % (">" if j in hit else " ", j + 1, starts[j], lines[j]))
+            prev = j
+        if meta is not None:
+            meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "query": q, "lines": len(hit)})
+        return self.fit_tokens("\n".join(out), self.cfg.recall_max_tokens)
 
     def recall(self, conv: str, args, max_idx: int | None = None, meta: list | None = None) -> str:
         """id (testo esatto, solo della conversazione corrente), path (storia delle operazioni sul file), query
@@ -1859,6 +1888,12 @@ class Manager:
                 return ("recall: id %s non trovato nell'archivio (gli id validi sono quelli scritti dal gestore del "
                         "contesto; prova con query o path)" % rid)
             text = r[5] or ""
+            q = str(args.get("query") or "").strip()
+            if q:
+                # 0.3.0 (t_5de89914): id + query = solo le righe di QUESTO testo che contengono la query (con una
+                # riga di contesto), non il pezzo dall'inizio. A finestra piccola il pezzo dall'offset non arrivava
+                # mai alla riga cercata.
+                return self._recall_lines(rid, r, text, q, meta, head_fn)
             chunk = text[off:off + lim]
             chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
             if chunk.endswith("usa offset]"):

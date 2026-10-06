@@ -188,10 +188,21 @@ class Proxy:
                 else:
                     out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
                     # ricontrollo del budget: il risultato non deve far uscire il prompt dalla finestra
-                    room = self.cfg.window - self.cfg.reserve - int(body.get("max_tokens") or
-                                                                     self.cfg.default_response) \
+                    resp_budget = int(body.get("max_tokens") or self.cfg.default_response)
+                    room = self.cfg.window - self.cfg.reserve - resp_budget \
                         - self.mgr.estimate(phys + new, p.tools)[0] - 64
-                    if self.tc.count(out) > max(room, 0):
+                    need = self.tc.count(out)
+                    if need > max(room, 0):
+                        # 0.3.0 (t_5de89914): a finestra piccola prima si accorcia lo spazio della risposta (fino a
+                        # default_response), poi si taglia il risultato. Prima il risultato veniva tagliato a zero.
+                        floor = min(resp_budget, int(self.cfg.default_response))
+                        give = min(need - max(room, 0), resp_budget - floor) if room + resp_budget - floor > 0 else 0
+                        if give > 0:
+                            body["max_tokens"] = resp_budget - give
+                            room += give
+                            self.journal.log("response_shrunk", conv=p.conv, round=rnd, max_tokens=resp_budget - give,
+                                             was=resp_budget)
+                    if need > max(room, 0):
                         out = self.mgr.fit_tokens(out, max(room, 0))
                         self.journal.log("recall_trimmed", conv=p.conv, room=room, round=rnd)
                 new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})

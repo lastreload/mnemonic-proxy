@@ -431,7 +431,8 @@ class Recall2:
                             "chiamata"):
             return self.around(conv, rid, mode, args, max_idx, meta)
         if rid:
-            return self.mgr.recall_legacy(conv, {"id": rid, "offset": args.get("offset")}, max_idx, meta,
+            return self.mgr.recall_legacy(conv, {"id": rid, "offset": args.get("offset"), "query": args.get("query")},
+                                          max_idx, meta,
                                           head_fn=self._id_head)
         if path:
             return self.file(conv, path, mode or "timeline", args, max_idx, meta)
