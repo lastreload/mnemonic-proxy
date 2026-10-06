@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemonic-proxy"
-version = "0.2.1"
+version = "0.3.0"
 description = "Transparent proxy that lets local coding agents work for hours: verbatim archive, structured recall, segments with handoff notes, saved engine state."
 readme = "README.md"
 license = { text = "MIT" }

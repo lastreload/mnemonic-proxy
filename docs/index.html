@@ -125,7 +125,7 @@ footer b{color:var(--cy)}
 <section id="numbers">
   <h2>One session, measured</h2>
   <p class="sub">A real coding session — a canvas tower-defense game built from scratch by a 35B-A3B MoE model on a single 12&nbsp;GB RTX&nbsp;4070&nbsp;Ti — with the proxy in between. Nothing was summarized away: every message, tool call and output stays on disk, verbatim, and the model can pull any of it back.</p>
-  <p class="sub">Developed and benchmarked primarily with <a href="https://github.com/Niko1221/Strata">Strata</a>, by Niko1221 and contributors. mnemonic-proxy is an independently maintained project that also supports llama-server and other OpenAI-compatible backends; saved engine state depends on what the backend supports.</p>
+  <p class="sub">Developed and benchmarked primarily with <a href="https://github.com/Niko1221/Strata">Strata</a>, by Niko1221 and contributors. mnemonic-proxy is an independently maintained project that also supports llama-server, <a href="https://github.com/antirez/ds4">ds4-server</a> and other OpenAI-compatible backends; saved engine state depends on what the backend supports.</p>
   <div class="stats">
     <div class="stat m"><div class="n">448<small>K</small></div><div class="l">tokens of history archived and recallable</div></div>
     <div class="stat"><div class="n">105<small>K</small></div><div class="l">peak tokens actually in the prompt (window: 128K)</div></div>
@@ -183,6 +183,14 @@ footer b{color:var(--cy)}
         <tr><td>llama-server, 8.2K tokens, CPU, Qwen3-0.6B</td><td class="y">1.9 s</td><td>28.6 s</td></tr>
       </table>
       <p class="cap">Context restore only; loading the model is separate.</p>
+      <h2 style="margin-top:34px">Claude Code and Codex, live</h2>
+      <table>
+        <tr><th>on Strata, 12&nbsp;GB GPU</th><th>Claude Code</th><th>Codex</th></tr>
+        <tr><td>session</td><td>1&nbsp;h&nbsp;41&nbsp;min, 339 requests, 0 proxy errors</td><td>20 requests</td></tr>
+        <tr><td>prompt tokens from the engine cache</td><td class="y">92.6%</td><td class="y">93.9%</td></tr>
+        <tr><td>context</td><td>328K virtual, ≤46K in the prompt, 14 segment switches</td><td>exact recall: 36 tests, 8/8 messages</td></tr>
+      </table>
+      <p class="cap">Claude Code 2.1.284 on a low-threshold test config (masking at 36K) so that segments switch. Facts scattered in 16K–122K prompts on Strata alone: 151/160 exact, 0 wrong, 9 omitted (all ≥ 64K).</p>
       <p class="sub" style="margin-top:18px"><b>Why it matters.</b> Without saved state, the whole prefill of a long conversation is paid again every time the engine loses it — after a restart, when another client used the engine in between, when the proxy returns to a sealed segment. On a 12&nbsp;GB GPU that is close to a minute for 100K tokens; restoring takes a second or two, from disk, not VRAM. Any client of a local engine benefits, not just this proxy. llama-server has it (<code>--slot-save-path</code>); for Strata it is proposed in <a href="https://github.com/Niko1221/Strata/pull/668">PR&nbsp;#668</a>, not yet merged.</p>
     </div>
   </div>
@@ -200,16 +208,17 @@ footer b{color:var(--cy)}
 
 <span class="c"># 3. your agent → http://127.0.0.1:8096</span>
 <span class="p">$</span> OPENAI_BASE_URL=http://127.0.0.1:8096/v1 pi              <span class="c"># Chat Completions</span>
-<span class="p">$</span> ANTHROPIC_BASE_URL=http://127.0.0.1:8096 claude          <span class="c"># Anthropic Messages (experimental)</span>
+<span class="p">$</span> ANTHROPIC_BASE_URL=http://127.0.0.1:8096 claude          <span class="c"># Anthropic Messages</span>
 <span class="p">$</span> codex -c model_providers.local.base_url=http://127.0.0.1:8096/v1 \
-        -c model_providers.local.wire_api=responses        <span class="c"># Responses (experimental)</span></pre>
+        -c model_providers.local.wire_api=responses        <span class="c"># Responses</span></pre>
   <table style="margin-top:26px">
-    <tr><th>client \ engine</th><th>Strata</th><th>llama-server</th><th>any OpenAI-compatible</th></tr>
-    <tr><td>Chat Completions (pi, Hermes, Continue…)</td><td class="y">tested · full</td><td class="w">tested on CPU · full</td><td class="w">base (no saved state)</td></tr>
-    <tr><td>Claude Code (Anthropic Messages)</td><td class="w">experimental</td><td class="w">experimental</td><td class="w">experimental</td></tr>
-    <tr><td>Codex (Responses)</td><td class="w">experimental</td><td class="w">experimental</td><td class="w">experimental</td></tr>
-    <tr><td>MCP recall server (Claude Code, Codex, Hermes)</td><td colspan="3" class="w">tested read-only on a real archive</td></tr>
+    <tr><th>client \ engine</th><th>Strata</th><th>llama-server</th><th>ds4-server</th><th>any OpenAI-compatible</th></tr>
+    <tr><td>Chat Completions (pi, Hermes, Continue…)</td><td class="y">tested · full</td><td class="w">tested on CPU · full</td><td class="w">tested with pi · engine keeps its own state</td><td class="w">base (no saved state)</td></tr>
+    <tr><td>Claude Code (Anthropic Messages)</td><td class="y">tested live</td><td class="w">experimental</td><td class="w">experimental</td><td class="w">experimental</td></tr>
+    <tr><td>Codex (Responses)</td><td class="y">tested live</td><td class="w">experimental</td><td class="w">experimental</td><td class="w">experimental</td></tr>
+    <tr><td>MCP recall server (Claude Code, Codex, Hermes)</td><td colspan="4" class="w">tested read-only on a real archive</td></tr>
   </table>
+  <p class="cap">ds4-server (<a href="https://github.com/antirez/ds4">antirez/ds4</a>) with pi on a Ryzen AI Max+ 395, 8K window: GLM 5.3 Flash Q2 recalled an error line removed from the prompt (right id and shard, plus an invented timestamp), and after each recall ds4 read only the new 614–634 tokens. mnemonic-proxy is a separate tool, compatible with ds4-server; it is not part of the ds4 project.</p>
 </section>
 
 <section id="honest">
@@ -219,7 +228,9 @@ footer b{color:var(--cy)}
     <li><b>The model does not attend to 448K tokens.</b> It sees at most one window; the rest is recallable, not "in context".</li>
     <li><b>Segment switches cost ≈2 minutes</b> of note-writing on a 12 GB GPU.</li>
     <li><b>Saved state on Strata</b> needs our session-files branch until <a href="https://github.com/Niko1221/Strata/pull/668">PR #668</a> is reviewed; official Strata runs in base mode.</li>
-    <li><b>Claude Code and Codex adapters</b> are tested against a mock engine, not yet on long real sessions.</li>
+    <li><b>Claude Code and Codex</b> are tested live only on Strata; on other engines only against mock engines.</li>
+    <li><b>Copied shortened arguments.</b> Live, in 3 writes out of 140 the model copied the shortened form of an old tool argument into a file (one caused a real <code>NameError</code>). 0.3.0 blocks these writes; tested on a mock engine, not yet live.</li>
+    <li><b>Old reasoning is masked.</b> Questions answered only in the model's reasoning: 3 exact + 1 partial of 5 with it, 2 of 5 without — and the model presented later values as the original ones instead of saying it did not know.</li>
     <li><b>The archive is plaintext.</b> It holds everything the agent saw, secrets included. The proxy binds to 127.0.0.1; protect the data folder.</li>
   </ul>
 </section>

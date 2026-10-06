@@ -17,15 +17,16 @@
 </p>
 
 A transparent HTTP proxy that sits between a coding agent and a local model (llama.cpp's `llama-server`,
-[Strata](https://github.com/Niko1221/Strata), or any OpenAI-compatible server). The agent keeps sending its whole,
+[Strata](https://github.com/Niko1221/Strata), [ds4-server](https://github.com/antirez/ds4), or any
+OpenAI-compatible server). The agent keeps sending its whole,
 unmodified history; the proxy decides what the model actually reads. Old material leaves the prompt but is never
 summarized away: every message, tool call and output stays on disk, verbatim, and the model can pull any of it back.
 
 It speaks OpenAI Chat Completions, Anthropic Messages and OpenAI Responses. Python ≥ 3.10, standard library only.
 
 Developed and benchmarked primarily with [Strata](https://github.com/Niko1221/Strata), by Niko1221 and contributors.
-mnemonic-proxy is an independently maintained project that also supports llama-server and other OpenAI-compatible
-backends; saved engine state depends on what the backend supports (see [Engines](#engines)).
+mnemonic-proxy is an independently maintained project that also supports llama-server, ds4-server and other
+OpenAI-compatible backends; saved engine state depends on what the backend supports (see [Engines](#engines)).
 
 Project page: <https://lastreload.github.io/mnemonic-proxy/>
 
@@ -121,6 +122,28 @@ llama-server already offers it through `--slot-save-path`. For Strata it is prop
 [PR #668](https://github.com/Niko1221/Strata/pull/668), which has not been merged; until then it requires building
 Strata from the `session-files` branch (see [Engines](#engines)). This note will be updated when upstream support
 lands.
+
+## Claude Code and Codex, live on Strata
+
+0.2.0 in front of Strata (Qwen3.8 Flash Next IQ3_XXS, RTX 4070 Ti 12 GB, 128K window), with the real clients:
+
+| | Claude Code 2.1.284 (Anthropic Messages) | Codex 0.160 (Responses) |
+|---|---|---|
+| session | 1 h 41 min, 9 steps, 339 requests, **0 proxy errors** | 3 steps, 20 requests |
+| prompt tokens served from the engine cache | **92.6%** of 11.36M | **93.9%** of 351K |
+| context | 328K virtual, at most 46K in the prompt; 14 segment switches | — |
+| `recall` | 22 calls | exact: 36 tests and 8/8 error messages, word for word |
+
+Claude Code ran on a test config with low thresholds (window 64K, masking at 36K) so that segments would switch
+within the session. Found live and fixed in 0.3.0: in 3 writes out of 140 the model copied the shortened form of an
+old tool argument into a file (see [What we have not proven](#what-we-have-not-proven)). Report:
+[docs/dev-notes/LIVE020-RESULT.md](docs/dev-notes/LIVE020-RESULT.md) (Italian).
+
+### Long context on Strata, without the proxy
+
+16 `name=number` facts scattered in a generated Italian story, question at the end, temperature 0, two seeds, from
+16K to 122K tokens of prompt: **151/160 exact, 0 wrong** — every miss is an omitted line, all at 64K and above.
+Prefill stays at ~2.5K tok/s up to 122K, VRAM flat at 11.6 GB. Same report, section 4.
 
 ## Quick start
 
@@ -326,9 +349,11 @@ Point the client's OpenAI base URL at `http://127.0.0.1:8096/v1`. For pi, the tw
 `contextWindow`/`maxTokens`). For other clients: their OpenAI-compatible provider setting, plus their own way to turn
 off context compaction.
 
-### Claude Code (Anthropic Messages, experimental)
+### Claude Code (Anthropic Messages)
 
-Checked against Claude Code 2.1.287:
+Checked against Claude Code 2.1.287; a 1 h 41 min session with 2.1.284 on Strata is measured
+[above](#claude-code-and-codex-live-on-strata). Claude Code may print `unrecognized_model local-model`: it works
+anyway.
 
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8096      # no /v1
@@ -345,7 +370,7 @@ claude
 `POST /v1/messages` (streaming and not) and `POST /v1/messages/count_tokens` are supported. Thinking blocks get a
 local placeholder signature: a session started through the proxy cannot be continued on Anthropic's API.
 
-### Codex (OpenAI Responses, experimental)
+### Codex (OpenAI Responses)
 
 Codex 0.160 speaks only the Responses API (`wire_api = "chat"` is rejected). In `~/.codex/config.toml` (or a separate
 `CODEX_HOME`):
@@ -457,7 +482,7 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 | `check --live`: the state file is not in `slot_dir` | `slot_dir` ≠ llama-server `--slot-save-path`, or the engine runs on another host / in a container with another path | the same folder, as seen from the proxy's host |
 | `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata's session-files branch; everything else works |
 | Strata (official) has no saved state | the save endpoint is only in Strata's unmerged PR #668 | build Strata from the `session-files` branch, or use llama-server |
-| answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses-experimental) |
+| answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses) |
 | Codex: `wire_api = "chat"` rejected | Codex ≥ 0.160 only speaks the Responses API | `wire_api = "responses"` |
 | `kv_archive` refused | needs Python ≥ 3.14 (`compression.zstd`) | Python 3.14, or leave `kv_archive` off (default) |
 
@@ -485,15 +510,15 @@ provider).
 
 ## Engines
 
-| client \ engine | Strata | llama-server | any OpenAI-compatible |
-|---|---|---|---|
-| Chat Completions (pi, Hermes, Continue…) | tested · full | tested on CPU · full | base (no saved state) |
-| Claude Code (Anthropic Messages) | experimental | experimental | experimental |
-| Codex (Responses) | experimental | experimental | experimental |
-| MCP recall server (Claude Code, Codex, Hermes) | tested read-only on a real archive | | |
+| client \ engine | Strata | llama-server | ds4-server | any OpenAI-compatible |
+|---|---|---|---|---|
+| Chat Completions (pi, Hermes, Continue…) | tested · full | tested on CPU · full | tested with pi (GLM 5.3, Qwen3.8) · engine keeps its own state | base (no saved state) |
+| Claude Code (Anthropic Messages) | **tested** (1 h 41 min live session) | experimental | experimental | experimental |
+| Codex (Responses) | **tested** (live, exact recall) | experimental | experimental | experimental |
+| MCP recall server (Claude Code, Codex, Hermes) | tested read-only on a real archive | | | |
 
-"Experimental": tested end to end against a mock engine and with short real client runs, not yet on long real
-sessions.
+"Tested": real client, real engine, measured; reports in `docs/dev-notes/`. "Experimental": tested end to end
+against a mock engine and with short real client runs, not yet on long real sessions.
 
 - **llama.cpp** — start `llama-server` with `--slot-save-path DIR` for saved state (masking anchor, segment saved
   before a switch, autosave/autorestore, `kv_archive`). The window comes from the server's `n_ctx` unless `window` is
@@ -512,7 +537,8 @@ sessions.
   `examples/config.official-strata.json` the one for official Strata.
 - **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
   handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
-- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — experimental, see below.
+- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — automatic detection, tool-call ids untouched, no
+  duplicate saving (ds4 has `--kv-disk-dir`). Tested with pi, see below.
 
 ### ds4-server
 
@@ -539,7 +565,32 @@ mnemonic-proxy --upstream http://127.0.0.1:8110 --port 8096 --data ./data --conf
   `--kv-cache-continued-interval-tokens` rounded to `--kv-cache-boundary-align-tokens`), a masking block starts just
   after a multiple of it, so fewer tokens are re-read after the last disk checkpoint. Needs an exact `--tokenizer`
   to be meaningful. Not measured yet.
-- Not proven: long real sessions; parallel sessions (`--batched-session N`) — the proxy still serialises requests.
+- Not proven: long real sessions; Claude Code and Codex in front of ds4; parallel sessions (`--batched-session N`)
+  — the proxy still serialises requests.
+
+mnemonic-proxy is a separate tool, compatible with ds4-server and tested with it; it is not part of the ds4 project.
+
+**Measured with pi** (4 tasks in one session on a 140-line `server.log`; the last one asks, without re-running
+anything, for the request id and shard of the *third* error, whose output the proxy had already removed from the
+prompt). AI395: Ryzen AI Max+ 395 "Strix Halo", 128 GB unified memory, ROCm gfx1151.
+
+| model, engine | window | tasks 1–3 | third error (rq-2290, shard 3) | `recall` | time |
+|---|---|---|---|---|---|
+| GLM 5.3 Flash Q2, ds4 `0aaea5a`, SSD streaming, MTP | 8K | ok | **right**, plus an invented timestamp | 5, by id + offset | 10 min 34 s |
+| Qwen3.8 Flash Next Q2, ds4 local ROCm port | 8K | ok | not found; said so, invented nothing (0.2 recall budget: fixed in 0.3.0) | 5 | 6 min 05 s |
+| Qwen3.8 Flash Next Q2, ds4 local ROCm port | 32K | ok | **right** (still in the prompt, no masking) | 0 | 3 min 30 s |
+
+- GLM: after each `recall` ds4 read only the new tokens (614–634), never the whole prompt again: it resumes by
+  tool-call id. Prompt reading 24–29 tok/s, generation ~6 tok/s — enough to verify the mechanism, too slow for work.
+- Qwen3.8 at 8K: the model used `recall` correctly (by id, then by offset), but 0.2's proxy cut the 2nd–4th results
+  to almost nothing (`room` < 0) and the third error, at character 6,183 of 9,282, never arrived. 0.3.0 fixes the
+  two causes (see the changelog); the fix is tested against a fake ds4 with the same log and the same calls.
+- Qwen3.8 runs on a local ROCm port of ds4's Qwen path (not the ds4 release, which supports Qwen3.8 on Metal/CUDA
+  only); prompt reading ~81 tok/s and generation 16–19 tok/s at 1.6K–7.8K tokens without MTP.
+
+Reports (Italian): [DS4-GLM-RESULT.md](docs/dev-notes/DS4-GLM-RESULT.md),
+[DS4-QWEN-COMPARE-RESULT.md](docs/dev-notes/DS4-QWEN-COMPARE-RESULT.md) (also Qwen3.8 quality on ds4 vs Strata),
+[DS4-RESULT.md](docs/dev-notes/DS4-RESULT.md) (the adapter).
 
 `GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](docs/dev-notes/ENGINES-RESULT.md) (Italian).
 
@@ -566,7 +617,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** |
 | `auto_recall` / `auto_recall_hint` | false / false | on each new user message, add relevant hidden pieces / only a one-line hint with ids | false / **true** |
 | `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls | tools on demand: only core tools + `recall` + `tools` in the prompt | **true** |
-| `typed_receipts`, `receipt_guard` | true, true | typed one-line receipts for hidden outputs; block write/edit/bash that copy a receipt | default |
+| `typed_receipts`, `receipt_guard` | true, true | typed one-line receipts for hidden outputs; block write/edit/shell calls (pi, Claude Code, Codex names) that copy a receipt or the shortened form of an old argument | default |
 | `pins_max_tokens` | 8192 | cap of the carried-over 📌 block | default |
 | `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb` | false, 180, 10, 25 | save engine state when the conversation is idle (saved state) | **true**, 180, 10, 25 |
 | `autorestore`, `autorestore_min_gain` | true, 8192 | restore before forwarding when it saves at least this many tokens | default |
@@ -606,7 +657,17 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
 - The model does not attend to 448K tokens. It sees at most one window; the rest is recallable, not "in context".
 - Segment switches cost ≈2 minutes of note-writing on a 12 GB GPU.
 - Saved state on Strata needs the session-files patch (upstream PR pending).
-- Claude Code and Codex adapters are tested against a mock engine, not yet on long real sessions.
+- Claude Code and Codex are tested live only on Strata; on llama-server and ds4-server only against mock engines.
+- Copied shortened arguments (found live with Claude Code: 3 writes out of 140 ended with the `…` line of a masked
+  old argument, one caused a real `NameError`). Since 0.3.0 the proxy blocks a write/edit/shell call whose text
+  contains a line made only of `…` and answers the model with an error pointing to `recall`; tested on a mock
+  engine, not yet live. Still possible: a copy that drops the `…` line (only the first 160 characters of the old
+  argument) passes, and a real file whose content has a line made only of `…` is blocked.
+- Old reasoning is masked. On questions whose answer was only in the model's reasoning ("what had you estimated?"),
+  a replayed real session went from 3 exact + 1 partial out of 5 (reasoning kept) to 2 out of 5 (reasoning removed)
+  — and the model did not say it did not know: it took the final values from the files and presented them as the
+  original estimate. Questions about visible content: 7/7 either way. Measured without the proxy's recall loop.
+- Facts scattered in a long prompt: 0 wrong out of 160 on Strata, but 9 omissions, all from 64K up (two seeds).
 - Recall search is lexical (FTS5 + structure), not semantic: a paraphrase with no shared words can miss.
 - One sequence: the proxy serialises requests and assumes it is the engine's only client; another client on the
   same engine costs re-reads.

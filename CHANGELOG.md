@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.3.0 — 2026-10-06
+
+ds4-server as an engine, Claude Code and Codex measured live, and two fixes found in those live runs.
+
+- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)): detected from `GET /v1/models` (`owned_by: "ds4.c"`),
+  window from `context_length`; `--engine ds4`. The proxy does not save engine state (ds4 has `--kv-disk-dir`),
+  passes tool-call ids through unchanged in all three protocols (ds4 resumes by id) and turns `mask_tool_args` off.
+  `examples/config.ds4.json`; `check` knows ds4. Tested with pi: GLM 5.3 Flash Q2 and Qwen3.8 Flash Next Q2 on a
+  Ryzen AI Max+ 395 (see README, Engines). mnemonic-proxy is a separate tool, not part of the ds4 project.
+- `response_floor` is limited to 1/4 of the window (small engine windows no longer switch segment on every request).
+- **Fix — copied shortened arguments** (live with Claude Code: 3 writes out of 140 ended with the `…` line of a masked
+  old argument; one caused a `NameError`). `receipt_guard` now also blocks a write/edit/shell call containing a line
+  made only of `…`, and it knows Claude Code's and Codex's tool names (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`,
+  `Bash`, `apply_patch`, `exec_command`, `shell`; names compared case-insensitively). The masked form keeps its `…` line.
+- **Fix — recall at small windows** (live with Qwen3.8 on ds4, 8K window: the 2nd–4th `recall` results were cut to
+  almost nothing and the data never arrived). `recall` with `id` + `query` now returns the lines of that output that
+  contain the query (one line of context, line number and character offset) instead of ignoring the query; before
+  cutting a recall result the proxy first lowers the space reserved for the answer, down to `default_response`
+  (journal event `response_shrunk`).
+- README and project page: Claude Code and Codex tested live on Strata (1 h 41 min, 92.6% / 93.9% of prompt tokens
+  from the engine cache), ds4 measurements, what is not proven (reasoning masking, scattered facts at ≥ 64K).
+- Reports in `docs/dev-notes/`: LIVE020-RESULT.md, DS4-RESULT.md, DS4-GLM-RESULT.md, DS4-QWEN-COMPARE-RESULT.md.
+
 ## 0.2.1 — 2026-10-06
 
 First-run onboarding, tested literally in a clean Ubuntu 24.04 container.
