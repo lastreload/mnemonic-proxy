@@ -118,10 +118,10 @@ segment. On a single 12 GB GPU that is close to a minute for 100K tokens; restor
 two, and the state lives on disk, not in VRAM.
 
 This is not specific to the proxy: any client that keeps long conversations on a local engine benefits.
-llama-server already offers it through `--slot-save-path`. For Strata it is proposed in
-[PR #668](https://github.com/Niko1221/Strata/pull/668), which has not been merged; until then it requires building
-Strata from the `session-files` branch (see [Engines](#engines)). This note will be updated when upstream support
-lands.
+llama-server already offers it through `--slot-save-path`. Strata has it since
+[v0.1.40](https://github.com/Niko1221/Strata/releases/tag/v0.1.40) ([PR #668](https://github.com/Niko1221/Strata/pull/668)),
+opt-in with `--slot-save-path`. The Strata numbers on this page were measured on our session-files build
+(0.1.38 + PR #668, `8d8f664`), before the release; the proxy has not yet been re-measured on 0.1.40.
 
 ## Claude Code and Codex, live on Strata
 
@@ -155,7 +155,7 @@ Prefill stays at ~2.5K tok/s up to 122K, VRAM flat at 11.6 GB. Same report, sect
   [DS4-QWEN-COMPARE-RESULT.md](docs/dev-notes/DS4-QWEN-COMPARE-RESULT.md),
   [RECALL-8K-030-RESULT.md](docs/dev-notes/RECALL-8K-030-RESULT.md).
 - Python ≥ 3.10 (`kv_archive`: ≥ 3.14). An OpenAI-compatible engine; saved state needs llama-server with
-  `--slot-save-path`, or Strata's session-files branch (see [Engines](#engines)).
+  `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path` (see [Engines](#engines)).
 
 ## Quick start
 
@@ -346,7 +346,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --conf
 with `config.json` = `examples/config.llama-server.json` and `slot_dir` = the same `/path/to/slots` (see
 [Configuration](#configuration) for the recommended fields). With an engine that has no saved state (vLLM, online
 APIs) the proxy runs in base mode. The measurements at the top of this page (35B-A3B MoE, 128K window) come from
-Strata built from its session-files branch on a 12 GB RTX 4070 Ti — see [Engines](#engines); they say nothing about
+Strata (our session-files build, 0.1.38 + PR #668) on a 12 GB RTX 4070 Ti — see [Engines](#engines); they say nothing about
 other hardware.
 
 The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
@@ -511,8 +511,8 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 | the model describes the command instead of calling a tool, or says it "cannot run commands" | chat template without tools, or a model weak at tool calling | llama-server with `--jinja`; `check --live` shows whether a tool call works; try a stronger model (see [Tested combinations](#tested-combinations)) |
 | `check`: saved state supported by the engine, disabled in the proxy | config without `slot_save` | use `examples/config.llama-server.json` |
 | `check --live`: the state file is not in `slot_dir` | `slot_dir` ≠ llama-server `--slot-save-path`, or the engine runs on another host / in a container with another path | the same folder, as seen from the proxy's host |
-| `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata's session-files branch; everything else works |
-| Strata (official) has no saved state | the save endpoint is only in Strata's unmerged PR #668 | build Strata from the `session-files` branch, or use llama-server |
+| `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path`; everything else works |
+| Strata has no saved state | Strata older than 0.1.40, or started without `--slot-save-path` | update to Strata ≥ 0.1.40 and start it with `--slot-save-path DIR` |
 | answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses) |
 | Codex: `wire_api = "chat"` rejected | Codex ≥ 0.160 only speaks the Responses API | `wire_api = "responses"` |
 | `kv_archive` refused | needs Python ≥ 3.14 (`compression.zstd`) | Python 3.14, or leave `kv_archive` off (default) |
@@ -555,17 +555,14 @@ against a mock engine and with short real client runs, not yet on long real sess
   before a switch, autosave/autorestore, `kv_archive`). The window comes from the server's `n_ctx` unless `window` is
   set; with `--parallel N` the proxy pins one slot (`slot_id`, default 0). Without `--slot-save-path` the proxy runs
   in base mode.
-- **Strata** — works as is in base mode. **Saved state requires the session-files patch, upstream PR pending:
-  <https://github.com/Niko1221/Strata/pull/668>.** Until it is merged, build Strata from the `session-files` branch of
-  the fork and start it with `--slot-save-path DIR`:
-
-  ```sh
-  git clone -b session-files https://github.com/maverde73/Strata
-  cd Strata && ./setup.sh          # Strata's normal installer (Windows: START-HERE.bat)
-  ```
+- **Strata** — works in base mode on any version. **Saved state: Strata ≥ 0.1.40**
+  ([PR #668](https://github.com/Niko1221/Strata/pull/668), released in
+  [v0.1.40](https://github.com/Niko1221/Strata/releases/tag/v0.1.40)), started with `--slot-save-path DIR`. Session files
+  must be trusted: the hashes detect corruption, not tampering. Our measurements are from the session-files build
+  (0.1.38 + PR #668, `8d8f664`); 0.1.40 has not been re-measured with the proxy yet.
 
   `examples/config.example.json` is the configuration used with session files;
-  `examples/config.official-strata.json` the one for official Strata.
+  `examples/config.official-strata.json` the one for Strata without `--slot-save-path` (or older than 0.1.40).
 - **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
   handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
 - **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — automatic detection, tool-call ids untouched, no
@@ -695,7 +692,8 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
   exactly, two partially (one value missed, one timeline mixed up). None were invented.
 - The model does not attend to 448K tokens. It sees at most one window; the rest is recallable, not "in context".
 - Segment switches cost ≈2 minutes of note-writing on a 12 GB GPU.
-- Saved state on Strata needs the session-files patch (upstream PR pending).
+- Saved state on Strata: measured on our 0.1.38 + PR #668 build; the released Strata 0.1.40 (which includes it) has not
+  been re-measured with the proxy.
 - Claude Code and Codex are tested live only on Strata; on llama-server and ds4-server only against mock engines.
 - Copied shortened arguments (found live with Claude Code: 3 writes out of 140 ended with the `…` line of a masked
   old argument, one caused a real `NameError`). Since 0.3.0 the proxy blocks a write/edit/shell call whose text

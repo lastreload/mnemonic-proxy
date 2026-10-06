@@ -4,6 +4,10 @@
 
 ds4-server as an engine, Claude Code and Codex measured live, and two fixes found in those live runs.
 
+- **Strata ≥ 0.1.40 saves sessions without patches.** Our session files (PR #668) were released in Strata v0.1.40,
+  with a fix by the maintainer (RESTORE grows the elastic K/V, `--kv-grow`, before the copy). Docs now point to the
+  release instead of the `session-files` branch; our Strata measurements remain those of the 0.1.38 + PR #668 build.
+
 - **Breaking — engine windows below 16K are refused.** If the engine's window (`n_ctx` / `context_length`) or a
   `window` written in the config is below 16384 tokens, the proxy exits at startup (exit 1) with the window found,
   the minimum (16384), the recommended size (≥ 32768) and the command to restart the engine (`llama-server -c 32768`,

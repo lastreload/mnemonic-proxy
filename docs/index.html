@@ -228,7 +228,7 @@ footer b{color:var(--cy)}
     <li><b>Long-range quality is not free.</b> Of six questions about the first hour of a 3-hour session, four were answered exactly, two partially (one value missed, one timeline mixed up). None were invented.</li>
     <li><b>The model does not attend to 448K tokens.</b> It sees at most one window; the rest is recallable, not "in context".</li>
     <li><b>Segment switches cost ≈2 minutes</b> of note-writing on a 12 GB GPU.</li>
-    <li><b>Saved state on Strata</b> needs our session-files branch until <a href="https://github.com/Niko1221/Strata/pull/668">PR #668</a> is reviewed; official Strata runs in base mode.</li>
+    <li><b>Saved state on Strata</b>: released in <a href="https://github.com/Niko1221/Strata/releases/tag/v0.1.40">Strata 0.1.40</a> (<a href="https://github.com/Niko1221/Strata/pull/668">PR #668</a>), opt-in with <code>--slot-save-path</code>. Our numbers were measured on the 0.1.38 + PR #668 build; 0.1.40 not yet re-measured with the proxy.</li>
     <li><b>Claude Code and Codex</b> are tested live only on Strata; on other engines only against mock engines.</li>
     <li><b>Copied shortened arguments.</b> Live, in 3 writes out of 140 the model copied the shortened form of an old tool argument into a file (one caused a real <code>NameError</code>). 0.3.0 blocks these writes; tested on a mock engine, not yet live.</li>
     <li><b>Old reasoning is masked.</b> Questions answered only in the model's reasoning: 3 exact + 1 partial of 5 with it, 2 of 5 without — and the model presented later values as the original ones instead of saying it did not know.</li>
