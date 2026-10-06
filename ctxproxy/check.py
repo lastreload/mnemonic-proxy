@@ -173,7 +173,7 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 rep.add(OK if cfg.window == eng.n_ctx else WARN, "context window",
                         "config window=%d, engine n_ctx=%d" % (cfg.window, eng.n_ctx),
                         "" if cfg.window == eng.n_ctx else "window smaller than n_ctx wastes context")
-        elif eng.kind == "llama.cpp":
+        elif eng.kind in ("llama.cpp", "ds4"):   # come engines.apply: finestra da n_ctx / context_length
             probe = Config.from_dict(raw_cfg)
             engines.apply(probe, eng, None, explicit, log=None)
             rep.add(OK, "context window", "window from engine n_ctx=%d; thresholds scaled: mask at %d -> %d tokens, "
@@ -187,7 +187,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                         "remove them from the config: unset thresholds scale with n_ctx")
             if eng.n_ctx < 8192:
                 rep.add(WARN, "context window", "n_ctx=%d is very small for an agent (its system prompt and tool "
-                        "definitions take 2-5K tokens)" % eng.n_ctx, "start the engine with -c 8192 or more")
+                        "definitions take 2-5K tokens)" % eng.n_ctx, "start the engine with -c 8192 or more "
+                        "(ds4-server: --ctx)")
         else:
             rep.add(INFO, "context window", "engine n_ctx=%d, proxy window=%d" % (eng.n_ctx, cfg.window))
     elif eng.kind == "openai":

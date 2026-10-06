@@ -142,6 +142,21 @@ class TestCheckNoSlotSave(CheckBase):
         self.assertIn("--slot-save-path", warn["fix"])
 
 
+class TestCheckDs4(CheckBase):
+    """0.3.0: check riconosce ds4-server e prende la finestra da context_length, come il server."""
+    flavor = "ds4"
+
+    def test_ds4_example_config(self):
+        code, st, items = self.check(cfg=os.path.join(ROOT, "examples", "config.ds4.json"))
+        self.assertIn(("engine type", "ok"), st)
+        self.assertIn(("saved state", "info"), st)
+        win = [i for i in items if i["check"] == "context window"][0]
+        self.assertEqual(win["status"], "ok", items)
+        self.assertIn("n_ctx=8192", win["evidence"])
+        self.assertNotIn(("slot_dir", "fail"), st)
+        self.assertNotEqual(code, 1, items)
+
+
 class TestCheckUnreachable(unittest.TestCase):
     def test_engine_down(self):
         out = io.StringIO()
