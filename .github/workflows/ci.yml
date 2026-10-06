@@ -44,13 +44,18 @@ jobs:
       - name: mnemonic-proxy check against the fake engine
         run: |
           cd /tmp
-          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 8192 --port 18095 &
-          for i in $(seq 1 50); do curl -sf localhost:18095/health > /dev/null && break; sleep 0.2; done
+          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 32768 --port 18095 &
+          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 8192 --port 18097 &
+          for i in $(seq 1 50); do curl -sf localhost:18095/health > /dev/null && curl -sf localhost:18097/health > /dev/null && break; sleep 0.2; done
           mkdir -p slots
           cp "$GITHUB_WORKSPACE/examples/config.llama-server.json" .
           /tmp/venv/bin/mnemonic-proxy check --json --upstream http://127.0.0.1:18095 --port 18096 \
             --data ./data --config config.llama-server.json | tee check.json || true
           /tmp/venv/bin/python -c "import json; d = json.load(open('check.json')); assert d['ready'] and d['exit_code'] == 0, d"
+          # windows below 16K are refused (0.3.0)
+          /tmp/venv/bin/mnemonic-proxy check --json --upstream http://127.0.0.1:18097 --port 18096 \
+            --data ./data --config config.llama-server.json > check8k.json || true
+          /tmp/venv/bin/python -c "import json; d = json.load(open('check8k.json')); assert not d['ready'] and d['exit_code'] == 1, d"
 
   llama-cpu:
     if: github.event_name == 'workflow_dispatch' && inputs.llama
@@ -92,7 +97,7 @@ jobs:
       - name: engine
         run: |
           mkdir -p slots data
-          llama.cpp/build/bin/llama-server -m models/model.gguf -c 8192 --parallel 1 --jinja \
+          llama.cpp/build/bin/llama-server -m models/model.gguf -c 32768 --parallel 1 --jinja \
             --slot-save-path ./slots --port 8095 > engine.log 2>&1 &
           for i in $(seq 1 120); do curl -sf localhost:8095/health > /dev/null && break; sleep 1; done
           curl -sf localhost:8095/health

@@ -756,9 +756,14 @@ def main(argv=None):
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"))
     counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
-    from .engines import setup as setup_engine
+    from .engines import setup as setup_engine, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, flush=True))
+    small = window_problems(cfg, engine, set(raw_cfg))
+    if small:
+        journal.log("refused_small_window", problems=[e for e, _ in small])
+        raise SystemExit("mnemonic-proxy: refusing to start, the context window is too small.\n" + "\n".join(
+            "  %s\n  -> %s" % p for p in small))
     proxy = Proxy(cfg, up, Store(os.path.join(a.data, "archive.sqlite")), journal, counter, mode=a.mode)
     proxy.engine = engine
     if cfg.autosave:

@@ -48,9 +48,42 @@ SCALED = ("mask_trigger", "mask_target", "keep_recent_tokens", "min_batch_tokens
           "pins_max_tokens", "recall_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens",
           "response_floor")
 BASE_WINDOW = 131072
-# floors when scaling down (8K windows): below these a recall result or a handoff note is too short to be useful
+# floors when scaling down (small windows): below these a recall result or a handoff note is too short to be useful
 SCALED_MIN = {"recall_max_tokens": 1024, "recall_struct_max_tokens": 1024, "notes_max_tokens": 1024,
               "default_response": 1024, "auto_recall_max_tokens": 512, "pins_max_tokens": 512}
+# 0.3.0: finestra minima del motore. Sotto 16K il proxy non parte (8K provato dal vivo una sola volta, dopo la
+# correzione della recall: escluso finché non è provato su più corse). Consigliata >= 32K.
+MIN_WINDOW = 16384
+RECOMMENDED_WINDOW = 32768
+# solo per sviluppo (test interni, prove su finestre piccole): non documentata nel README
+ALLOW_SMALL_WINDOW_ENV = "MNEMONIC_PROXY_ALLOW_SMALL_WINDOW"
+
+
+def small_window_allowed() -> bool:
+    return os.environ.get(ALLOW_SMALL_WINDOW_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+ENGINE_FIX = ("restart the engine with a bigger window, e.g. `llama-server ... -c %d` or `ds4-server ... --ctx %d`"
+              % (RECOMMENDED_WINDOW, RECOMMENDED_WINDOW))
+
+
+def window_problems(cfg, engine: Engine | None, explicit=()) -> list[tuple[str, str]]:
+    """Finestre sotto il minimo -> [(evidence, fix)]: `window` scritta in configurazione e n_ctx del motore.
+    Vuota se tutto va bene o se MNEMONIC_PROXY_ALLOW_SMALL_WINDOW=1."""
+    if small_window_allowed():
+        return []
+    out = []
+    w = int(getattr(cfg, "window", 0) or 0)
+    if "window" in set(explicit or ()) and w and w < MIN_WINDOW:
+        out.append(("config window=%d: the minimum is %d tokens, recommended %d or more"
+                    % (w, MIN_WINDOW, RECOMMENDED_WINDOW),
+                    "remove \"window\" from the config (it is read from the engine) or set it to %d or more; "
+                    "the engine window must be at least as big: %s" % (MIN_WINDOW, ENGINE_FIX)))
+    n = int(getattr(engine, "n_ctx", 0) or 0) if engine is not None else 0
+    if n and n < MIN_WINDOW:
+        out.append(("engine window n_ctx=%d: the minimum is %d tokens, recommended %d or more"
+                    % (n, MIN_WINDOW, RECOMMENDED_WINDOW), ENGINE_FIX))
+    return out
 
 
 @dataclasses.dataclass

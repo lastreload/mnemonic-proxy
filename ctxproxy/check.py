@@ -185,16 +185,15 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 rep.add(WARN, "context window", "fields written for a bigger window: %s (n_ctx %d)"
                         % (", ".join("%s=%d" % (k, getattr(probe, k)) for k in bad), eng.n_ctx),
                         "remove them from the config: unset thresholds scale with n_ctx")
-            if eng.n_ctx < 8192:
-                rep.add(WARN, "context window", "n_ctx=%d is very small for an agent (its system prompt and tool "
-                        "definitions take 2-5K tokens)" % eng.n_ctx, "start the engine with -c 8192 or more "
-                        "(ds4-server: --ctx)")
         else:
             rep.add(INFO, "context window", "engine n_ctx=%d, proxy window=%d" % (eng.n_ctx, cfg.window))
     elif eng.kind == "openai":
         rep.add(WARN if "window" not in explicit else OK, "context window",
                 "generic engine: n_ctx unknown, proxy window=%d" % cfg.window,
                 "" if "window" in explicit else "set \"window\" in the config to the engine's real context size")
+    # --- minimum window (0.3.0): the server refuses to start below it, so this is a failure, not a warning
+    for evidence, fix in engines.window_problems(cfg, eng, explicit):
+        rep.add(FAIL, "context window", evidence + " (the proxy refuses to start)", fix)
     # --- saved state: supported / configured / verified
     configured = [k for k in SAVED_STATE if getattr(cfg, k, False)]
     if eng.slot_save and configured:

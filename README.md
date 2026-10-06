@@ -145,6 +145,18 @@ old tool argument into a file (see [What we have not proven](#what-we-have-not-p
 16K to 122K tokens of prompt: **151/160 exact, 0 wrong** — every miss is an omitted line, all at 64K and above.
 Prefill stays at ~2.5K tok/s up to 122K, VRAM flat at 11.6 GB. Same report, section 4.
 
+## Requirements
+
+- **Engine window: at least 16K tokens (16384), 32K or more (32768) recommended.** Below 16K the proxy refuses to
+  start, and `mnemonic-proxy check` reports NOT READY, with the command to restart the engine (`llama-server -c
+  32768`, `ds4-server --ctx 32768`). Why: at 32K the recall trap of the ds4 runs (an error line removed from the
+  prompt, asked for later) was answered right with both ds4 builds; at 8K it passed **once**, after the 0.3.0 recall
+  fix, and failed before it. Small windows stay excluded until they are proven on more runs. Reports (Italian):
+  [DS4-QWEN-COMPARE-RESULT.md](docs/dev-notes/DS4-QWEN-COMPARE-RESULT.md),
+  [RECALL-8K-030-RESULT.md](docs/dev-notes/RECALL-8K-030-RESULT.md).
+- Python ≥ 3.10 (`kv_archive`: ≥ 3.14). An OpenAI-compatible engine; saved state needs llama-server with
+  `--slot-save-path`, or Strata's session-files branch (see [Engines](#engines)).
+
 ## Quick start
 
 Three levels. Each one stands on its own.
@@ -152,7 +164,7 @@ Three levels. Each one stands on its own.
 | | what you see | needs | time |
 |---|---|---|---|
 | **T0 — see it work** | archive, masking, exact recall, with a scripted fake model | Python ≥ 3.10, git | 1 minute |
-| **T1 — real model on CPU** | a real agent (pi) writing code through the proxy, masking, recall, resume after an engine restart | + cmake, a C++ compiler, Node.js ≥ 22.19, ~4 GB RAM, 2.5 GB disk | ~30 minutes |
+| **T1 — real model on CPU** | a real agent (pi) writing code through the proxy, masking, recall, resume after an engine restart | + cmake, a C++ compiler, Node.js ≥ 22.19, ~9 GB RAM (the engine at `-c 32768`), 3.5 GB disk | ~45 minutes |
 | **T2 — real use (GPU)** | your own model and agent, long sessions | a GPU engine | — |
 
 Commands are for Linux; see [Platforms](#platforms) for macOS and Windows (WSL).
@@ -194,7 +206,7 @@ mkdir mnemonic-trial && cd mnemonic-trial
 git clone --depth 1 https://github.com/lastreload/mnemonic-proxy
 python3 -m venv .venv && . .venv/bin/activate
 pip install ./mnemonic-proxy
-cp mnemonic-proxy/examples/config.llama-server-8k.json .
+cp mnemonic-proxy/examples/config.llama-server-32k.json .
 mkdir -p slots data
 ```
 
@@ -222,27 +234,28 @@ sha256sum models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 
 ```sh
 llama.cpp/build/bin/llama-server -m models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
-  -c 8192 --parallel 1 --jinja --slot-save-path ./slots --port 8095
+  -c 32768 --parallel 1 --jinja --slot-save-path ./slots --port 8095
 ```
 
 Wait for the line `listening on http://127.0.0.1:8095` (about 2 s once the model file is cached; `curl -s
 localhost:8095/health` answers `{"status":"ok"}`). `--slot-save-path ./slots` is what makes saved state
 possible, and it must be the same folder as `slot_dir` in the config (`./slots`). `--jinja` is already the default in
-this build; it is written out because tool calling depends on it. `-c 8192` keeps memory small and makes the proxy
-work early: a window of 8K fills up after a few tool outputs.
+this build; it is written out because tool calling depends on it. `-c 32768` is the recommended window (the minimum
+is 16384, see [Requirements](#requirements)); the example config starts masking at 14K tokens, so the proxy is at
+work after a few long tool outputs.
 
 **5. Check, then start the proxy** (terminal 2, inside `mnemonic-trial`, venv active: `. .venv/bin/activate`):
 
 ```sh
-mnemonic-proxy check --live --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-8k.json
-mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-8k.json
+mnemonic-proxy check --live --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-32k.json
+mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-32k.json
 ```
 
 `check` must end with `READY` (exit 0): engine recognised as llama.cpp, model loaded, window taken from `n_ctx`
-(8192) with the thresholds scaled to it, saved state supported and configured, and — because of `--live` — one
+(32768) with the thresholds scaled to it, saved state supported and configured, and — because of `--live` — one
 real generation, one tool call, one save/restore whose file appeared in `./slots`. Each failing line says how to fix
 it; see also [Troubleshooting](#troubleshooting). The proxy then prints
-`[mnemonic-proxy] 127.0.0.1:8096 -> http://127.0.0.1:8095 (engine llama.cpp, saved state yes) ... window=8192`.
+`[mnemonic-proxy] 127.0.0.1:8096 -> http://127.0.0.1:8095 (engine llama.cpp, saved state yes) ... window=32768`.
 
 **6. pi, the coding agent** (terminal 3). Install the tested version:
 
@@ -280,8 +293,9 @@ and `~/.pi/agent/settings.json` (if it exists, add these three keys):
 ```
 
 `compaction.enabled: false` matters: pi's own auto-compaction would summarise the history the proxy is managing.
-`contextWindow` is the *virtual* window the client sees (131072), not the engine's 8192: pi subtracts the prompt size
-from it to choose `max_tokens`, and with 8192 it asks for 1 token as soon as the history grows. Fitting the history
+`contextWindow` is the *virtual* window the client sees (131072), not the engine's 32768: pi subtracts the prompt size
+from it to choose `max_tokens`, and with the engine's real window it would ask for fewer and fewer tokens as the
+history grows, down to 1. Fitting the history
 into the engine's real window is the proxy's job. `apiKey` is a placeholder (the proxy does not check it); the model
 id is any name, llama-server serves its loaded model.
 
@@ -289,7 +303,7 @@ id is any name, llama-server serves its loaded model.
 
 ```sh
 mkdir -p ~/mnemonic-exercise && cd ~/mnemonic-exercise
-python3 -c "for i in range(150): print('[%04d] compiling module_%03d.c ... ok (%d ms)' % (i, i, 80 + i * 7 % 61) if i != 97 else '[0097] build id: BUILD-7f3a9c-ORCHID-42')" > build.log
+python3 -c "for i in range(650): print('[%04d] compiling module_%03d.c ... ok (%d ms)' % (i, i, 80 + i * 7 % 61) if i != 397 else '[0397] build id: BUILD-7f3a9c-ORCHID-42')" > build.log
 pi
 ```
 
@@ -298,10 +312,12 @@ Type these requests one at a time and wait for each answer (or non-interactively
 
 1. `Run python3 -c "import uuid; print(uuid.uuid4())" and tell me the value.` — a `bash` tool call; pi repeats the
    value.
-2. `Run cat build.log and tell me whether every module compiled.` — a long output (≈3K tokens).
+2. `Run cat build.log and tell me whether every module compiled.` — a long output (≈13K tokens; on CPU the 4B model
+   needs a few minutes to read it).
 3. `Write primes.py with a function first_primes(n) that returns the first n prime numbers, and test_primes.py with
-   three unittest tests. Run the tests.` — `write` calls, then `bash`. The 8K window is now full: the proxy hides
-   the oldest outputs behind a receipt. Nothing is printed; check with
+   three unittest tests. Run the tests.` — `write` calls, then `bash`. The prompt is now past the masking threshold
+   (14K tokens with the 32K config): as soon as enough newer messages follow the log, the proxy hides it behind a
+   receipt (here during step 4). Nothing is printed; check with
    `grep -c '"event": "mask"' ~/mnemonic-trial/data/journal.jsonl` (≥ 1).
 4. `Add a function is_prime(n) to primes.py and a test for it in test_primes.py, then run the tests.`
 5. `What build id is written in build.log? Do not run commands and do not read files.` — the log is no longer in the
@@ -448,20 +464,34 @@ engine. The proxy's own:
 
 ## Tested combinations
 
-Run literally as written in T1, in a clean `ubuntu:24.04` container (12 CPU cores, no GPU, user without sudo),
-llama.cpp `b11430` CPU build, pi 1.0.3, Node 22.23.3, Python 3.12, `config.llama-server-8k.json`, engine `-c 8192`
-(2026-10-06).
+**0.3.0, engine `-c 32768`** (2026-10-06): T1 run as written above, on the CPU of a Ryzen 7 5700G (16 threads, no
+GPU, llama-server at `nice 19`), in a fresh folder with its own `HOME`: llama.cpp `b11430` CPU build, pi 1.0.3,
+Node 24.14, Python 3.14, `config.llama-server-32k.json`. Requests sent with `pi -p` / `pi -c -p`, one at a time.
+
+| model | `check --live` | tool calls | masking | recall (step 5) | engine restart |
+|---|---|---|---|---|---|
+| Qwen3-4B-Instruct-2507 Q4_K_M (Unsloth) | READY (exit 0) | yes; steps 1–4 done, 4/4 tests pass | yes: 1 mask (the 13.4K-token log, prompt 17.3K → 4.0K) | **no**: answered "cannot determine" instead of calling `recall` | autorestore 4112 tokens in 349 ms; next prompt 4157/4176 reused |
+
+Times on this CPU: steps 2–4 took 7, 5 and 10 minutes (reading 13K tokens of log, then generating at a 16K prompt);
+the whole exercise about 25 minutes. Memory: llama-server RSS 8.9 GB at `-c 32768`; one saved state of 4.1K tokens
+is 600 MB in `./slots`. A first run with a 150-line log (≈3K tokens, the 0.2.1 exercise) never reached
+the masking threshold at 32K (largest prompt 10K): step 5 was answered right from the prompt, not tested. Hence the
+650-line log above.
+
+**0.2.1, engine `-c 8192`** (windows below 16K are refused since 0.3.0): run literally as written in T1 at the time,
+in a clean `ubuntu:24.04` container (12 CPU cores, no GPU, user without sudo), llama.cpp `b11430` CPU build, pi
+1.0.3, Node 22.23.3, Python 3.12, the 8K example config of 0.2.1 (2026-10-06).
 
 | model | `check --live` | tool calls | masking | recall (step 5) | engine restart |
 |---|---|---|---|---|---|
 | Qwen3-4B-Instruct-2507 Q4_K_M (Unsloth) | READY | yes | yes: 5 masks, 4 segment switches | **no**: answered "cannot determine" instead of calling `recall` | autorestore 2450 tokens in 42 ms; next prompt 2486/2505 reused |
 | Qwen2.5-Coder-7B-Instruct Q4_K_M (Qwen) | READY with warnings (no tool call) | **no**: writes the call as JSON text, same straight to llama-server | — | — | autorestore 3698 tokens in 17 ms |
 
-What T1 proves: the proxy in front of a real llama-server — window read from the engine, thresholds scaled to 8K,
-masking and segment switches under a real agent, state saved when idle and restored after an engine restart without
-re-reading. What it does not prove: that a 4B model on 8K uses `recall` reliably (it did not, here), or that the
-agent finishes the task — in step 4 the 4B model looped on read/edit until the timeout. Those depend on the model;
-use T2 for real work.
+What T1 proves: the proxy in front of a real llama-server — window read from the engine, thresholds scaled to it,
+masking under a real agent (and, at 8K, segment switches), state saved when idle and restored after an engine
+restart without re-reading. What it does not prove: that a 4B model uses `recall` reliably (it did not, at 8K or at
+32K), or that the agent always finishes the task — at 8K, in step 4 the 4B model looped on read/edit until the
+timeout. Those depend on the model; use T2 for real work.
 
 Found while testing, fixed in 0.2.1: with the extended recall tool (`recall_struct`, `recall_multi`) in the tool
 list, Qwen3-4B made 0/6 tool calls (4–6/6 without): the example configs keep the short `recall` tool.
@@ -475,7 +505,8 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 | `check`: port … is in use | another proxy (or another program) on that port | stop it, or pass a different `--port` (and change the client's base URL) |
 | `check`: engine answers 503 / `GET /health` says `loading` | llama-server is still loading the model | wait for `listening on …` in its log |
 | `check`: engine not reachable | wrong `--upstream`, or the engine is not running | start the engine; `curl http://127.0.0.1:8095/health` must answer |
-| llama-server: `failed to allocate` / killed | not enough memory for model + context | a smaller `-c`, a smaller quantisation, or a smaller model |
+| proxy exits at startup: `refusing to start, the context window is too small` / `check`: context window … minimum is 16384 | engine started with a window below 16K (`-c 8192`), or `"window"` below 16384 in the config | restart the engine with `-c 32768` (ds4-server: `--ctx 32768`); remove `"window"` from the config (it is read from the engine). See [Requirements](#requirements) |
+| llama-server: `failed to allocate` / killed | not enough memory for model + context | a smaller quantisation or a smaller model; the window can go down to 16384 (`-c 16384`), not below |
 | HTTP 400 `exceeds the available context size` | the client asked for more than the window | proxy started with a config whose `window` is larger than the engine's `-c`? The proxy reads `n_ctx` from llama-server at startup: restart the proxy after changing `-c` |
 | the model describes the command instead of calling a tool, or says it "cannot run commands" | chat template without tools, or a model weak at tool calling | llama-server with `--jinja`; `check --live` shows whether a tool call works; try a stronger model (see [Tested combinations](#tested-combinations)) |
 | `check`: saved state supported by the engine, disabled in the proxy | config without `slot_save` | use `examples/config.llama-server.json` |
@@ -581,6 +612,8 @@ prompt). AI395: Ryzen AI Max+ 395 "Strix Halo", 128 GB unified memory, ROCm gfx1
 | Qwen3.8 Flash Next Q2, ds4 local ROCm port | 32K | ok | **right** (still in the prompt, no masking) | 0 | 3 min 30 s |
 | same, **proxy 0.3.0**, first prompt forcing a plain `cat server.log` | 8K | ok | **right**, exact line (no invented detail) | 1 (id + query) | 7 min 07 s |
 
+The 8K rows were measured to stress recall; since 0.3.0 the proxy refuses windows below 16K (see
+[Requirements](#requirements)).
 - GLM: after each `recall` ds4 read only the new tokens (614–634), never the whole prompt again: it resumes by
   tool-call id. Prompt reading 24–29 tok/s, generation ~6 tok/s — enough to verify the mechanism, too slow for work.
 - Qwen3.8 at 8K: the model used `recall` correctly (by id, then by offset), but 0.2's proxy cut the 2nd–4th results
@@ -656,6 +689,8 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
 
 ## What we have not proven
 
+- Engine windows below 16K: refused since 0.3.0. At 8K the recall trap passed once (Qwen3.8 on ds4, after the
+  0.3.0 fix) and failed in the runs before it; small windows stay excluded until they are proven on more runs.
 - Long-range quality is not free. Of six questions about the first hour of a 3-hour session, four were answered
   exactly, two partially (one value missed, one timeline mixed up). None were invented.
 - The model does not attend to 448K tokens. It sees at most one window; the rest is recallable, not "in context".

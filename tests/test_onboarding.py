@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -51,6 +52,10 @@ class CheckBase(unittest.TestCase):
     flavor, slot_save, n_ctx = "llama", True, 8192
 
     def setUp(self):
+        # 0.3.0: windows < 16K are refused; these tests check other things on an 8K fake engine (development switch)
+        p = mock.patch.dict(os.environ, {"MNEMONIC_PROXY_ALLOW_SMALL_WINDOW": "1"})
+        p.start()
+        self.addCleanup(p.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.eng = FakeEngine(flavor=self.flavor, slot_save=self.slot_save, n_ctx=self.n_ctx)
@@ -186,19 +191,23 @@ class TestConfigPaths(unittest.TestCase):
     def test_starter_config_keeps_recall_tool_small(self):
         # first-run 2026-10-05: with recall_struct/recall_multi (recall tool 2.4K chars, 12 params) Qwen3-4B on
         # llama-server b11430 called pi's bash 0/6 times; plain recall 4-6/6. The starter config stays plain.
-        for fn in ("config.llama-server.json", "config.llama-server-8k.json"):
+        for fn in ("config.llama-server.json", "config.llama-server-32k.json"):
             with open(os.path.join(ROOT, "examples", fn)) as f:
                 raw = json.load(f)
             for k in ("recall_struct", "recall_multi", "tools_paging"):
                 self.assertFalse(raw.get(k, False), (fn, k))
 
-    def test_8k_config_masks_within_8k(self):
-        # T1 runs the engine with -c 8192: masking must start well before the window is full.
-        a = build_parser().parse_args(["--config", os.path.join(ROOT, "examples", "config.llama-server-8k.json")])
+    def test_32k_config_masks_within_32k(self):
+        # T1 runs the engine with -c 32768: masking must start well before the window is full.
+        a = build_parser().parse_args(["--config", os.path.join(ROOT, "examples", "config.llama-server-32k.json")])
         raw, cfg = load_config(a)
-        self.assertLess(cfg.mask_trigger, 8192 // 2)
+        self.assertLess(cfg.mask_trigger, 32768 // 2)
         self.assertLess(cfg.mask_target, cfg.mask_trigger)
         self.assertTrue(cfg.slot_save and cfg.autosave)
+
+    def test_no_8k_example_config(self):
+        # 0.3.0: engine windows below 16K are refused; no example config for them
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "examples", "config.llama-server-8k.json")))
 
     def test_no_args_namespace(self):
         a = SimpleNamespace(config=None, engine=None)

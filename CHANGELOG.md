@@ -4,6 +4,14 @@
 
 ds4-server as an engine, Claude Code and Codex measured live, and two fixes found in those live runs.
 
+- **Breaking — engine windows below 16K are refused.** If the engine's window (`n_ctx` / `context_length`) or a
+  `window` written in the config is below 16384 tokens, the proxy exits at startup (exit 1) with the window found,
+  the minimum (16384), the recommended size (≥ 32768) and the command to restart the engine (`llama-server -c 32768`,
+  `ds4-server --ctx 32768`); `check` and `check --live` report it as a failure (NOT READY). Reason: at 32K the ds4
+  recall trap was answered right with both ds4 builds, at 8K it passed once, after the recall fix below; small windows
+  stay excluded until proven on more runs. `examples/config.llama-server-8k.json` is replaced by
+  `config.llama-server-32k.json` and the T1 quick start uses `-c 32768`. For development only (internal tests, small
+  window experiments): `MNEMONIC_PROXY_ALLOW_SMALL_WINDOW=1` lets a smaller window through.
 - **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)): detected from `GET /v1/models` (`owned_by: "ds4.c"`),
   window from `context_length`; `--engine ds4`. The proxy does not save engine state (ds4 has `--kv-disk-dir`),
   passes tool-call ids through unchanged in all three protocols (ds4 resumes by id) and turns `mask_tool_args` off.

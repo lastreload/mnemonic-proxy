@@ -4,12 +4,12 @@
   "mask_anchor": true,
   "autosave": true,
   "autosave_idle_s": 60,
-  "autosave_min_tokens": 1024,
+  "autosave_min_tokens": 4096,
   "mask_tool_args": true,
   "engine_tokenize": true,
-  "mask_trigger": 3500,
-  "mask_target": 2000,
-  "keep_recent_tokens": 400,
-  "min_batch_tokens": 500,
+  "mask_trigger": 14000,
+  "mask_target": 8000,
+  "keep_recent_tokens": 1600,
+  "min_batch_tokens": 2000,
   "min_age_turns": 1
 }

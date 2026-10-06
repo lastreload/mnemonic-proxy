@@ -198,7 +198,7 @@ footer b{color:var(--cy)}
 
 <section id="run">
   <h2>Run it</h2>
-  <p class="sub">Python ≥ 3.10, standard library only (optional: <code>tokenizers</code> for exact counts). Point it at any OpenAI-compatible engine; with llama-server you also get saved state.</p>
+  <p class="sub">Python ≥ 3.10, standard library only (optional: <code>tokenizers</code> for exact counts). Point it at any OpenAI-compatible engine; with llama-server you also get saved state. <b>Engine window: at least 16K, 32K or more recommended</b> — below 16K the proxy refuses to start.</p>
 <pre><span class="c"># 1. an engine — llama.cpp with slot saving</span>
 <span class="p">$</span> llama-server -m model.gguf -c 131072 --slot-save-path ./slots --port 8095
 
@@ -218,12 +218,13 @@ footer b{color:var(--cy)}
     <tr><td>Codex (Responses)</td><td class="y">tested live</td><td class="w">experimental</td><td class="w">experimental</td><td class="w">experimental</td></tr>
     <tr><td>MCP recall server (Claude Code, Codex, Hermes)</td><td colspan="4" class="w">tested read-only on a real archive</td></tr>
   </table>
-  <p class="cap">ds4-server (<a href="https://github.com/antirez/ds4">antirez/ds4</a>) with pi on a Ryzen AI Max+ 395, 8K window: GLM 5.3 Flash Q2 recalled an error line removed from the prompt (right id and shard, plus an invented timestamp), and after each recall ds4 read only the new 614–634 tokens. mnemonic-proxy is a separate tool, compatible with ds4-server; it is not part of the ds4 project.</p>
+  <p class="cap">ds4-server (<a href="https://github.com/antirez/ds4">antirez/ds4</a>) with pi on a Ryzen AI Max+ 395, 8K window: GLM 5.3 Flash Q2 recalled an error line removed from the prompt (right id and shard, plus an invented timestamp), and after each recall ds4 read only the new 614–634 tokens. The 8K window was chosen to stress recall; the proxy now requires at least 16K. mnemonic-proxy is a separate tool, compatible with ds4-server; it is not part of the ds4 project.</p>
 </section>
 
 <section id="honest">
   <h2>What we have not proven</h2>
   <ul class="honest">
+    <li><b>Engine windows below 16K are refused.</b> At 8K the recall trap passed once (after the 0.3.0 fix) and failed in the runs before it; small windows stay excluded until proven on more runs.</li>
     <li><b>Long-range quality is not free.</b> Of six questions about the first hour of a 3-hour session, four were answered exactly, two partially (one value missed, one timeline mixed up). None were invented.</li>
     <li><b>The model does not attend to 448K tokens.</b> It sees at most one window; the rest is recallable, not "in context".</li>
     <li><b>Segment switches cost ≈2 minutes</b> of note-writing on a 12 GB GPU.</li>
