@@ -579,17 +579,21 @@ prompt). AI395: Ryzen AI Max+ 395 "Strix Halo", 128 GB unified memory, ROCm gfx1
 | GLM 5.3 Flash Q2, ds4 `0aaea5a`, SSD streaming, MTP | 8K | ok | **right**, plus an invented timestamp | 5, by id + offset | 10 min 34 s |
 | Qwen3.8 Flash Next Q2, ds4 local ROCm port | 8K | ok | not found; said so, invented nothing (0.2 recall budget: fixed in 0.3.0) | 5 | 6 min 05 s |
 | Qwen3.8 Flash Next Q2, ds4 local ROCm port | 32K | ok | **right** (still in the prompt, no masking) | 0 | 3 min 30 s |
+| same, **proxy 0.3.0**, first prompt forcing a plain `cat server.log` | 8K | ok | **right**, exact line (no invented detail) | 1 (id + query) | 7 min 07 s |
 
 - GLM: after each `recall` ds4 read only the new tokens (614–634), never the whole prompt again: it resumes by
   tool-call id. Prompt reading 24–29 tok/s, generation ~6 tok/s — enough to verify the mechanism, too slow for work.
 - Qwen3.8 at 8K: the model used `recall` correctly (by id, then by offset), but 0.2's proxy cut the 2nd–4th results
   to almost nothing (`room` < 0) and the third error, at character 6,183 of 9,282, never arrived. 0.3.0 fixes the
-  two causes (see the changelog); the fix is tested against a fake ds4 with the same log and the same calls.
+  two causes (see the changelog). With 0.3.0 one `recall` by id + query brought the line back (360 tokens). One
+  successful live run, with a stricter first prompt: in two runs with the original prompt the model ran
+  `cat server.log | grep -c ERROR` instead, never saw the lines, and said so.
 - Qwen3.8 runs on a local ROCm port of ds4's Qwen path (not the ds4 release, which supports Qwen3.8 on Metal/CUDA
   only); prompt reading ~81 tok/s and generation 16–19 tok/s at 1.6K–7.8K tokens without MTP.
 
 Reports (Italian): [DS4-GLM-RESULT.md](docs/dev-notes/DS4-GLM-RESULT.md),
 [DS4-QWEN-COMPARE-RESULT.md](docs/dev-notes/DS4-QWEN-COMPARE-RESULT.md) (also Qwen3.8 quality on ds4 vs Strata),
+[RECALL-8K-030-RESULT.md](docs/dev-notes/RECALL-8K-030-RESULT.md) (the 0.3.0 run),
 [DS4-RESULT.md](docs/dev-notes/DS4-RESULT.md) (the adapter).
 
 `GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](docs/dev-notes/ENGINES-RESULT.md) (Italian).

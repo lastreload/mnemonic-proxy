@@ -18,7 +18,8 @@ ds4-server as an engine, Claude Code and Codex measured live, and two fixes foun
   almost nothing and the data never arrived). `recall` with `id` + `query` now returns the lines of that output that
   contain the query (one line of context, line number and character offset) instead of ignoring the query; before
   cutting a recall result the proxy first lowers the space reserved for the answer, down to `default_response`
-  (journal event `response_shrunk`).
+  (journal event `response_shrunk`). Live (Qwen3.8, ds4, 8K): one `recall` by id + query brought the right line
+  back; one run, with a first prompt that forces a plain `cat`.
 - README and project page: Claude Code and Codex tested live on Strata (1 h 41 min, 92.6% / 93.9% of prompt tokens
   from the engine cache), ds4 measurements, what is not proven (reasoning masking, scattered facts at ≥ 64K).
 - Reports in `docs/dev-notes/`: LIVE020-RESULT.md, DS4-RESULT.md, DS4-GLM-RESULT.md, DS4-QWEN-COMPARE-RESULT.md.
