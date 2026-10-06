@@ -1,0 +1,12 @@
+{
+  "_comment": "mnemonic-proxy in front of ds4-server (--kv-disk-dir). Maurizio Verde — LastReload",
+  "engine": "ds4",
+  "mask_reasoning": true,
+  "recall_struct": true,
+  "recall_flex": true,
+  "recall_multi": true,
+  "auto_recall_hint": true,
+  "tools_paging": true,
+  "checkpoint_align_tokens": 0,
+  "live_dump": true
+}

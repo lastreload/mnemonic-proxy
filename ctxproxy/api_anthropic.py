@@ -7,8 +7,10 @@ riconvertita (anche in streaming).
 
 Il cuore (Proxy.chat) non sa da che client arriva la richiesta: qui si converte solo il formato.
 Scelte:
-- id degli strumenti: in ingresso restano come sono (la conversione è una funzione pura del contenuto, così la
-  catena di hash è stabile da un turno all'altro); in uscita un id interno «call_x» diventa «toolu_call_x».
+- id degli strumenti: passano INTATTI in entrambe le direzioni (l'id generato dal motore arriva al client e torna
+  al motore uguale: ds4-server lo usa per riprendere senza rileggere). Solo un id con caratteri non ammessi da
+  Anthropic viene ripulito in uscita («a.b» -> «toolu_a_b»); in ingresso nessuna conversione (la catena di hash
+  resta stabile da un turno all'altro).
 - `thinking` <-> `reasoning_content`. La firma (`signature`) non è verificabile in locale: in uscita se ne genera
   una fittizia (hash del testo), in ingresso è ignorata.
 - `cache_control` ignorato. Immagini nei messaggi utente: errore 400 chiaro. Immagini dentro un `tool_result`:
@@ -37,9 +39,13 @@ class BadRequest(ValueError):
 
 # ---------------------------------------------------------------- id
 def out_tool_id(cid: str | None) -> str:
-    """id interno -> id Anthropic (toolu_…, solo [A-Za-z0-9_-])."""
+    """id interno -> id Anthropic (solo [A-Za-z0-9_-]). Un id già valido resta INTATTO: motori come ds4-server
+    riconoscono la chiamata dal suo id (testo campionato esatto, ripresa senza rileggere il prefisso) e il client
+    lo rimanda così com'è. Solo un id con caratteri non ammessi viene ripulito (e marcato toolu_)."""
     if not cid:
         return "toolu_" + uuid.uuid4().hex[:24]
+    if not _ID_BAD.search(cid):
+        return cid
     cid = _ID_BAD.sub("_", cid)
     return cid if cid.startswith("toolu_") else "toolu_" + cid
 

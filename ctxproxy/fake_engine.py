@@ -32,7 +32,9 @@ class FakeEngine:
     def __init__(self, policy=None, cpt: float = 3.5, flavor: str = "strata", slot_save: bool = True,
                  n_slots: int = 1, n_ctx: int = 131072):
         """flavor: strata (/v1/status) | llama (llama-server: /props, /slots, /tokenize, 400 per file mancante,
-        id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | openai
+        id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | ds4
+        (ds4-server: /v1/models con owned_by "ds4.c", niente slot, id `call_<hex>` generati dal motore, 400 su un
+        risultato di strumento con id sconosciuto, conteggio delle chiamate rimandate con id noto/sconosciuto) | openai
         (solo /v1/chat/completions)."""
         self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
         self.id_task = 0
@@ -48,6 +50,10 @@ class FakeEngine:
         self.started = 1000
         self.n_requests = 0
         self.busy = False
+        self.ds4_memory: dict = {}      # flavor ds4: id -> argomenti campionati (exact DSML tool replay)
+        self.ds4_live_ids: set = set()
+        self.ds4_replay = {"mem": 0, "canonical": 0, "missing_ids": []}
+        self.rejected: list = []
 
     def restart(self):
         """Come un riavvio di Strata: la conversazione in memoria si perde, i file di sessione restano."""
@@ -65,6 +71,42 @@ class FakeEngine:
         return {"service": "strata", "loaded": True, "started": self.started,
                 "activity": {"requests": self.n_requests, "in_flight": int(self.busy)}}
 
+    # ---- ds4-server (flavor="ds4"): comportamento verificato su ds4_server.c ----
+    def ds4_check(self, body: dict) -> str | None:
+        """Come anthropic_validate_tool_results / responses_validate_tool_outputs: un risultato di strumento con un
+        id che non è né nella storia rimandata (chiamata assistant precedente) né nello stato vivo -> errore
+        «replay full history». (Il vero ds4 lo fa su /v1/messages e /v1/responses; qui anche su chat, più severo.)"""
+        seen = set()
+        for m in body.get("messages") or []:
+            if m.get("role") == "assistant":
+                seen.update(c.get("id") for c in m.get("tool_calls") or [])
+            elif m.get("role") == "tool":
+                cid = m.get("tool_call_id")
+                if cid not in seen and cid not in self.ds4_live_ids:
+                    return ("continuation state is not available for tool_call_id %s; retry by replaying the full "
+                            "messages history" % cid)
+        return None
+
+    def ds4_after(self, body: dict, msg: dict) -> dict:
+        """Ripresa per id: per ogni tool call rimandata, id noto = testo campionato esatto (mem), id sconosciuto =
+        rendering canonico (il prefisso può cambiare). Poi id nuovi `call_<hex>` alle chiamate del modello."""
+        for m in body.get("messages") or []:
+            for c in (m.get("tool_calls") or []) if m.get("role") == "assistant" else []:
+                if c.get("id") in self.ds4_memory:
+                    self.ds4_replay["mem"] += 1
+                else:
+                    self.ds4_replay["canonical"] += 1
+                    self.ds4_replay["missing_ids"].append(c.get("id"))
+        calls = []
+        for c in msg.get("tool_calls") or []:
+            c = dict(c)
+            if not c.get("id"):
+                c["id"] = "call_" + uuid.uuid4().hex
+            self.ds4_memory[c["id"]] = (c.get("function") or {}).get("arguments")
+            calls.append(c)
+        self.ds4_live_ids = {c["id"] for c in calls}
+        return {**msg, "tool_calls": calls} if calls else msg
+
     def handle_chat(self, body: dict) -> dict:
         p = render(body)
         common = 0
@@ -77,6 +119,8 @@ class FakeEngine:
         self.n_requests += 1
         self.id_task += 3
         msg = self.policy(body)
+        if self.flavor == "ds4":
+            msg = self.ds4_after(body, msg)
         self.live = p
         pt = int(len(p) / self.cpt)
         cached = int(common / self.cpt)
@@ -121,6 +165,15 @@ class FakeEngine:
                     if self.path.startswith("/v1/models"):
                         return self._send(200, {"data": [{"id": "fake"}]})
                     return self._send(404, {"error": {"message": "not found"}})
+                if eng.flavor == "ds4":
+                    if self.path == "/v1/models":
+                        mk = lambda i: {"id": i, "object": "model", "created": 1767225600, "owned_by": "ds4.c",  # noqa
+                                        "name": "Qwen3.8-Flash-Next", "context_length": eng.n_ctx,
+                                        "top_provider": {"context_length": eng.n_ctx}}
+                        return self._send(200, {"object": "list", "data": [
+                            mk("qwen3.8-flash-next"), mk("qwen3.8-flash-next-chat"),
+                            mk("qwen3.8-flash-next-reasoner")]})
+                    return self._send(404, {"error": {"message": "unknown endpoint"}})
                 if self.path.startswith("/v1/status"):
                     return self._send(200, eng.status())
                 self._send(200, {"status": "ok", "fake": True})
@@ -130,6 +183,14 @@ class FakeEngine:
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if eng.flavor == "openai" and not self.path.startswith("/v1/chat"):
                     return self._send(404, {"error": {"message": "not found"}})
+                if eng.flavor == "ds4":
+                    if not self.path.startswith("/v1/chat/completions"):
+                        eng.slots.append(("unexpected", self.path, len(eng.live)))
+                        return self._send(404, {"error": {"message": "unknown endpoint"}})
+                    err = eng.ds4_check(body)
+                    if err:
+                        eng.rejected.append(err)
+                        return self._send(400, {"error": {"message": err, "type": "invalid_request_error"}})
                 if eng.flavor == "llama" and self.path.startswith("/tokenize"):
                     return self._send(200, {"tokens": list(range(int(len(body.get("content") or "") / eng.cpt)))})
                 if eng.flavor == "llama" and self.path.startswith("/slots/"):
@@ -228,7 +289,7 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="fake OpenAI-compatible engine (Strata stand-in) for smoke tests")
     ap.add_argument("--port", type=int, default=18095)
-    ap.add_argument("--flavor", choices=["strata", "llama", "openai"], default="strata",
+    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai"], default="strata",
                     help="engine to imitate (llama = llama-server with --slot-save-path)")
     ap.add_argument("--n-ctx", type=int, default=131072)
     ap.add_argument("--no-slot-save", action="store_true", help="llama flavor: as if started without --slot-save-path")

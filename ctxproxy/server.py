@@ -704,7 +704,7 @@ def build_parser(prog="mnemonic-proxy", description=None):
     ap.add_argument("--config", help="JSON file with Config fields (window, thresholds, feature flags)")
     ap.add_argument("--tokenizer", help="HF tokenizer.json for exact token counts (optional; default chars/3.5)")
     ap.add_argument("--api-key", default="", help="API key sent to the upstream engine (optional)")
-    ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "openai"], default=None,
+    ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "ds4", "openai"], default=None,
                     help="engine type (default: from the config file, otherwise auto-detected)")
     ap.add_argument("--version", action="version", version="mnemonic-proxy " + __version__)
     return ap

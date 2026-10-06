@@ -168,7 +168,7 @@ class TestAnthropicConvert(unittest.TestCase):
         self.assertTrue(r["messages"][2]["content"].startswith("[system]\n"))
 
     def test_tool_id(self):
-        self.assertEqual(A.out_tool_id("call_a1"), "toolu_call_a1")
+        self.assertEqual(A.out_tool_id("call_a1"), "call_a1")  # id valido: intatto (ds4 lo riconosce)
         self.assertEqual(A.out_tool_id("toolu_x"), "toolu_x")
         self.assertEqual(A.out_tool_id("a.b:c"), "toolu_a_b_c")
 
@@ -196,21 +196,21 @@ class TestAnthropicHTTP(Base):
         st, _, raw = self.post("/v1/messages", self.req("fai due comandi"))
         r = json.loads(raw)
         tu = [b for b in r["content"] if b["type"] == "tool_use"]
-        self.assertEqual([b["id"] for b in tu], ["toolu_call_a1", "toolu_call_a2"])
+        self.assertEqual([b["id"] for b in tu], ["call_a1", "call_a2"])
         self.assertEqual(tu[1]["input"], {"command": "pwd"})
         self.assertEqual(r["stop_reason"], "tool_use")
-        # giro successivo con i tool_result: stessa conversazione, id toolu_ passati al motore
+        # giro successivo con i tool_result: stessa conversazione, id intatti passati al motore
         msgs = [{"role": "user", "content": "fai due comandi"}, {"role": "assistant", "content": r["content"]},
                 {"role": "user", "content": [
-                    {"type": "tool_result", "tool_use_id": "toolu_call_a1", "content": "x"},
-                    {"type": "tool_result", "tool_use_id": "toolu_call_a2", "content": [{"type": "text",
+                    {"type": "tool_result", "tool_use_id": "call_a1", "content": "x"},
+                    {"type": "tool_result", "tool_use_id": "call_a2", "content": [{"type": "text",
                                                                                         "text": "/tmp"}]}]}]
         st, _, raw = self.post("/v1/messages", {**self.req(""), "messages": msgs})
         self.assertEqual(st, 200, raw)
         self.assertEqual(json.loads(raw)["content"][-1]["text"], "fatto: /tmp")
         sent = self.eng.requests[-1]["messages"]
         self.assertEqual([m.get("tool_call_id") for m in sent if m["role"] == "tool"],
-                         ["toolu_call_a1", "toolu_call_a2"])
+                         ["call_a1", "call_a2"])
         convs = {e.get("conv") for e in self.proxy.journal.mem if e.get("event") == "request"}
         self.assertEqual(len(convs), 1)
 
@@ -224,7 +224,7 @@ class TestAnthropicHTTP(Base):
         self.assertEqual(names[-2:], ["message_delta", "message_stop"])
         starts = [d["content_block"] for e, d in ev if e == "content_block_start"]
         self.assertEqual([b["type"] for b in starts], ["thinking", "text", "tool_use", "tool_use"])
-        self.assertEqual(starts[2]["id"], "toolu_call_a1")
+        self.assertEqual(starts[2]["id"], "call_a1")
         # indici consecutivi, ogni blocco aperto e chiuso
         self.assertEqual([d["index"] for e, d in ev if e == "content_block_stop"], [0, 1, 2, 3])
         js = {}
