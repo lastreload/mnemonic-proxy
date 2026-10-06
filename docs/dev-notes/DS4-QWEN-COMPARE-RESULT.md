@@ -76,4 +76,4 @@ Schema: pi → mnemonic-proxy `feature/ds4` (`~/ds4/proxy-cf91`, `examples/confi
 ## File
 - MVLINNA (questa cartella): `ds4-answers.json`, `COMPARE-RESULT.md` e `ds4-logs/`. Quest'ultima contiene `kld_ds4.py`, `kld-eval.log`, `kld-ds4.json`, `xcheck.*`, `ppl-*`, `run-quality.log`, le sessioni e i riassunti del journal per 8K, 10K, 12K e 32K, `pi-calls.txt`, `glm-journal-summary.txt`, `pi-qwen.sh` e `srv.sh`.
 - AI395 `~/ds4/qcompare/`: tutto il materiale sopra più `server-quality.log`, `trace-quality.json`, `corpus.txt`, `bf16.kld` (copia da 4 GB), `ds4-tokens.txt`, e per ogni corsa pi i dati del proxy, le sessioni, `trace.json` e `server.log`.
-- Stato finale: nessun ds4-server e nessun proxy acceso (porte 8120 e 8121 libere). Non ho toccato i servizi di Maurizio né GLM, non ho modificato `/home/mverde/src/ds4`, e su PC4070TI ho fatto solo letture.
+- Stato finale: nessun ds4-server e nessun proxy acceso (porte 8120 e 8121 libere). Non ho toccato i servizi di Maurizio né GLM, non ho modificato `~/src/ds4`, e su PC4070TI ho fatto solo letture.

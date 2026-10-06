@@ -3,7 +3,7 @@
 Maurizio Verde — LastReload. File non tracciato.
 
 ## In breve
-- Parte A fatta: ramo `feature/ds4` (worktree `/home/mverde/src/vcp-wt/ds4`), 2 commit locali (334d7d9, cf91eb3), niente push. Suite completa: 181 test OK, 5 saltati.
+- Parte A fatta: ramo `feature/ds4` (worktree `~/src/vcp-wt/ds4`), 2 commit locali (334d7d9, cf91eb3), niente push. Suite completa: 181 test OK, 5 saltati.
 - Parte B: Qwen3.8 su PC4070TI non fattibile (codice e doc ds4) e PC4070TI comunque escluso dall'orchestratore. Prova fatta su AI395 con GLM 5.3 Flash Q2 (ROCm, SSD streaming).
 - Decodifica: 2,0 tok/s senza MTP, 2,4–4,3 tok/s con MTP; nella sessione reale con pi ~2,4–2,6 tok/s, cioè sotto la soglia di ~3 tok/s. Prefill 9–17 tok/s. Utilizzabile solo per la verifica funzionale, non per lavorare.
 - La sessione pi → proxy → ds4 è partita. Verificati: ripresa per id dopo uno strumento e cache su disco dopo il riavvio. Da lì è uscito un bug reale del proxy, corretto. La sessione lunga (mascheramento + `recall`) non è finita: il server ds4 è stato sostituito due volte da altri (vedi "Interferenze").
@@ -22,13 +22,13 @@ Test nuovi: `tests/test_ds4.py` (15). Aggiornati 3 test di `test_clients.py` che
 
 ## Parte B — fattibilità
 - Qwen3.8 Flash Next Q2 su RTX 4070 Ti 12 GB: NO. `docs/QWEN38_FLASH_NEXT.md` alla commit fissata dice: «Tensor parallelism, pipeline execution and SSD expert streaming are not implemented for this model yet. ROCm is not supported.» Nel codice `ds4.c` (~71417) i percorsi di cache derivata CUDA escludono `ds4_model_is_qwen4()`. I pesi principali sono 41,73 GiB residenti e non c'è streaming, quindi non entrano in 12 GB. Su AI395 (ROCm) Qwen non è supportato.
-- Un download `qwen38-q2` su PC4070TI era partito prima dell'indicazione dell'orchestratore; l'ho fermato. Restano 33 GB parziali in `/mnt/mneme-nvme/ds4/ds4/gguf/.cache/...incomplete`, da cancellare (rm bloccato in questa sessione). Anche la build CUDA lì (ds4, ds4-server) è rimasta, ma non è mai stata eseguita: GPU non usata, Strata non toccato.
+- Un download `qwen38-q2` su PC4070TI era partito prima dell'indicazione dell'orchestratore; l'ho fermato. Restano 33 GB parziali in `/data/ds4/ds4/gguf/.cache/...incomplete`, da cancellare (rm bloccato in questa sessione). Anche la build CUDA lì (ds4, ds4-server) è rimasta, ma non è mai stata eseguita: GPU non usata, Strata non toccato.
 - Variante su AI395: GLM 5.3 Flash Q2 (96,5 GB) con `--ssd-streaming`, supportata su ROCm (`docs/STRIX_HALO.md`, `docs/MODELS.md`).
 
 ## Parte B — setup su AI395
-- Clone in `/home/mverde/ds4/ds4` a 0aaea5a. Build `make strix-halo` (ROCm 7.2.1, gfx1151). Mancava `libxml2.so.2` per `lld`; l'ho risolto con un link privato in `/home/mverde/ds4/compat-lib` via LD_LIBRARY_PATH solo per la build. Il sistema non è stato toccato.
-- Modello: `download_model.sh glm53-q2` in `/home/mverde/ds4/ds4/gguf/` (96,5 GB). Dopo restano 167 GB liberi su `/`.
-- Le mie corse: `systemd-run --user --scope -p MemoryMax=56G nice -n 19 ionice -c3`, `-t 12`, porta 8110, `--kv-disk-dir /home/mverde/ds4/kv`. Proxy su 8111, pi isolato (`PI_CODING_AGENT_DIR=/home/mverde/ds4/pi-agent`).
+- Clone in `~/ds4/ds4` a 0aaea5a. Build `make strix-halo` (ROCm 7.2.1, gfx1151). Mancava `libxml2.so.2` per `lld`; l'ho risolto con un link privato in `~/ds4/compat-lib` via LD_LIBRARY_PATH solo per la build. Il sistema non è stato toccato.
+- Modello: `download_model.sh glm53-q2` in `~/ds4/ds4/gguf/` (96,5 GB). Dopo restano 167 GB liberi su `/`.
+- Le mie corse: `systemd-run --user --scope -p MemoryMax=56G nice -n 19 ionice -c3`, `-t 12`, porta 8110, `--kv-disk-dir ~/ds4/kv`. Proxy su 8111, pi isolato (`PI_CODING_AGENT_DIR=~/ds4/pi-agent`).
 
 ## Misure (GLM 5.3 Flash Q2, ds4 0aaea5a, ROCm, SSD streaming)
 | corsa | cache esperti | prompt | TTFT | prefill | decodifica |
@@ -47,12 +47,12 @@ Memoria del processo (cgroup): picco ~1,2 GB RSS. Gli esperti stanno in memoria 
 - Non verificati sul vero: mascheramento, `recall` interna e ripresa per id dopo `recall`, effetto di `checkpoint_align_tokens`, confronto senza proxy. Alla velocità misurata, un compito abbastanza lungo da superare la soglia di mascheramento (10000 token con finestra 16K) richiede ore.
 
 ## Interferenze (da sapere)
-- Alle 00:57 e alle 01:11 il mio ds4-server è stato fermato da altri e sostituito con `ds4-glm-61g.service` e poi `ds4-glm-76g.service` (script `/home/mverde/ds4/ds4-61g.sh`, commento «richiesta Maurizio», cache esperti 61 e poi 76 GB, senza MemoryMax). Queste corse mandano richieste di misura (999 e 7484 token) che si alternano alla mia sessione e si sfrattano la cache a vicenda (`live kv cache miss … common=0`).
+- Alle 00:57 e alle 01:11 il mio ds4-server è stato fermato da altri e sostituito con `ds4-glm-61g.service` e poi `ds4-glm-76g.service` (script `~/ds4/ds4-61g.sh`, commento «richiesta Maurizio», cache esperti 61 e poi 76 GB, senza MemoryMax). Queste corse mandano richieste di misura (999 e 7484 token) che si alternano alla mia sessione e si sfrattano la cache a vicenda (`live kv cache miss … common=0`).
 - Alle 01:18 su AI395 la RAM disponibile era ~7 GB (114/122 usati), con un llama-server qwen2.5-coder, jest e altro attivi. Per non sovrapporre carico ho fermato il mio client pi e il mio proxy. Il server 76G non l'ho toccato perché non è mio.
 
 ## Stato finale
-- AI395: nessun mio processo attivo (pi e proxy fermati). Restano il modello (96,5 GB), la build, i log e le tracce in `/home/mverde/ds4/`, e `ds4-glm-76g.service` di altri.
-- PC4070TI: GPU mai usata, Strata e lock non toccati. Da pulire: 33 GB di download Qwen parziale in `/mnt/mneme-nvme/ds4/ds4/gguf/.cache/`.
+- AI395: nessun mio processo attivo (pi e proxy fermati). Restano il modello (96,5 GB), la build, i log e le tracce in `~/ds4/`, e `ds4-glm-76g.service` di altri.
+- PC4070TI: GPU mai usata, Strata e lock non toccati. Da pulire: 33 GB di download Qwen parziale in `/data/ds4/ds4/gguf/.cache/`.
 
 ## Cosa resta
 1. Sessione lunga pi → proxy (cf91eb3) → ds4 con un server dedicato: mascheramento, `recall`, ripresa per id dopo `recall`, `checkpoint_align_tokens`. Alla velocità attuale conviene una finestra più piccola (es. `--ctx 8192`) per far scattare il mascheramento prima.

@@ -1,7 +1,7 @@
 # LIVE020 — mnemonic-proxy 0.2.0 dal vivo su PC4070TI + verifiche di qualità su GPU
 
 Card t_7f685153, notte 5→6/10/2026. Tutti i numeri qui sotto vengono da run reali (giornali e output in `live020/`
-in questa cartella e in `/mnt/mneme-nvme/mnemonic-proxy/` su PC4070TI).
+in questa cartella e in `/data/mnemonic-proxy/` su PC4070TI).
 
 ## In breve
 - 0.2.0 è installato dal tag `v0.2.0` (f97a9ef) ed è **acceso su 8096** come servizio utente `mnemonic-proxy`
@@ -22,21 +22,21 @@ in questa cartella e in `/mnt/mneme-nvme/mnemonic-proxy/` su PC4070TI).
 ## 1. Installazione
 | voce | valore |
 |---|---|
-| sorgente | `git clone --branch v0.2.0 https://github.com/lastreload/mnemonic-proxy` → `/mnt/mneme-nvme/mnemonic-proxy/src` (f97a9ef) |
-| venv | `/mnt/mneme-nvme/mnemonic-proxy/venv`, Python 3.14.6 (uv), `pip install ./src[exact]`. `compression.zstd` e `tokenizers` OK |
-| config | `/mnt/mneme-nvme/mnemonic-proxy/cfg.json`: quella del README per llama-server/Strata con salvataggi (window 131072, mask_reasoning/tool_args, mask_anchor, slot_save+seal, notes 12288, response_floor 16384, autosave, recall_struct/flex/multi, auto_recall_hint, tools_paging). In più `tools_core` include anche i nomi di Claude Code e Codex |
-| dati | `/mnt/mneme-nvme/mnemonic-proxy/data` (nuova). Slot di Strata: la cartella esistente `/mnt/mneme-nvme/strata-0138-live/sessions` (è quella di `--slot-save-path`, non ce n'è un'altra) |
+| sorgente | `git clone --branch v0.2.0 https://github.com/lastreload/mnemonic-proxy` → `/data/mnemonic-proxy/src` (f97a9ef) |
+| venv | `/data/mnemonic-proxy/venv`, Python 3.14.6 (uv), `pip install ./src[exact]`. `compression.zstd` e `tokenizers` OK |
+| config | `/data/mnemonic-proxy/cfg.json`: quella del README per llama-server/Strata con salvataggi (window 131072, mask_reasoning/tool_args, mask_anchor, slot_save+seal, notes 12288, response_floor 16384, autosave, recall_struct/flex/multi, auto_recall_hint, tools_paging). In più `tools_core` include anche i nomi di Claude Code e Codex |
+| dati | `/data/mnemonic-proxy/data` (nuova). Slot di Strata: la cartella esistente `/data/strata-0138-live/sessions` (è quella di `--slot-save-path`, non ce n'è un'altra) |
 | servizio | `~/.config/systemd/user/mnemonic-proxy.service` (MemoryMax 8G, Nice 5, `--tokenizer` sulla cartella tokenizer del pack: conteggio esatto) |
 | `check` | non esiste nella 0.2.0 (arriva con la 0.2.1, card t_9eaa630b). Verifica a mano: `/v1/strata/engine` → `kind strata, slot_save true, detected true`; `/v1/messages` di prova → risposta in 2,5 s |
 | `kv_archive` | **spento di proposito**. Nella cartella slot ci sono i file della sessione di Maurizio (`caeaa81de2522-*`) e l'archiviatore li comprimerebbe cancellando l'originale (`kvarchive.candidates`). Si può riaccendere solo con una cartella slot dedicata |
 
 Backup (nulla è stato cancellato):
-- `/mnt/mneme-nvme/ctx-proxy/cfg.json.bak-mnemonic020-20261005`
-- `/mnt/mneme-nvme/ctx-proxy/data/archive.sqlite.bak-mnemonic020-20261005` (copia coerente)
-- `/mnt/mneme-nvme/ctx-proxy-bak-mnemonic020-20261005/` (13 MB: data, proxy, cfg, unità systemd)
+- `/data/ctx-proxy/cfg.json.bak-mnemonic020-20261005`
+- `/data/ctx-proxy/data/archive.sqlite.bak-mnemonic020-20261005` (copia coerente)
+- `/data/ctx-proxy-bak-mnemonic020-20261005/` (13 MB: data, proxy, cfg, unità systemd)
 - `.../sessions-hardlinks/` con i 3 file `caeaa81de2522-seg2-*.bin` (3,1 GB) protetti come hard link.
 
-Lock GPU: `/mnt/mneme-nvme/.flash-next-gpu.lock` è tenuto con flock dal server Strata stesso (PID 3672155, per
+Lock GPU: `/data/.flash-next-gpu.lock` è tenuto con flock dal server Strata stesso (PID 3672155, per
 tutta la sua vita). Copre quindi ogni richiesta a Strata e non ho preso un secondo lock. Ho mandato un solo
 client alla volta, sempre in sequenza: Claude Code → Codex → 2a → 2b.
 
@@ -44,7 +44,7 @@ client alla volta, sempre in sequenza: Claude Code → Codex → 2a → 2b.
 **Montaggio.** Claude Code 2.1.284 su PC4070TI, `claude -p --resume` per 9 passi in fila (`cc_live.sh`, prompt in
 `live020/prompts/`). Variabili: `ANTHROPIC_BASE_URL=http://127.0.0.1:8096`, `DISABLE_AUTO_COMPACT=1`,
 `--max-turns 60`. Il progetto `magazzino` (libreria + CLI Python per un magazzino ricambi) sta in
-`/mnt/mneme-nvme/mnemonic-proxy/work/cc1`.
+`/data/mnemonic-proxy/work/cc1`.
 
 Per far scattare i segmenti in un'ora e mezza ho usato una **config di prova** (`cfg-livetest.json`, finestra
 64000, mask_trigger 36000, mask_target 26000) su un'istanza a parte con dati separati (`data-livetest/`). La
@@ -175,7 +175,7 @@ sempre il ragionamento. Temperatura 0, una domanda per richiesta. Le risposte at
 
 ## 7. Stato finale e come tornare indietro
 - Acceso: `mnemonic-proxy.service` (utente) su 127.0.0.1:8096 → Strata 8095, config di produzione
-  `/mnt/mneme-nvme/mnemonic-proxy/cfg.json`, dati `/mnt/mneme-nvme/mnemonic-proxy/data`.
+  `/data/mnemonic-proxy/cfg.json`, dati `/data/mnemonic-proxy/data`.
 - Fermi: `ctx-proxy.service` (vecchio, disabilitato), `mnemonic-livetest` (prova). Dashboard 8097: invariata.
 - Strata: PID 3672161 e 3672155 attivi da oltre un giorno e mai riavviati. `/health` ok. Il lock GPU resta al
   server Strata.
@@ -184,14 +184,14 @@ sempre il ragionamento. Temperatura 0, una domanda per richiesta. Le risposte at
   systemctl --user disable --now mnemonic-proxy
   systemctl --user enable --now ctx-proxy
   ```
-  Usa la stessa porta 8096 e i dati vecchi in `/mnt/mneme-nvme/ctx-proxy/data`, che non sono stati toccati
+  Usa la stessa porta 8096 e i dati vecchi in `/data/ctx-proxy/data`, che non sono stati toccati
   (archivio e sessione `caeaa81de2522` intatti; backup nei `*.bak-mnemonic020-20261005`).
 
 ## File
 - In questa cartella `live020/`: `cfg.json`, `cfg-livetest.json`, `cc_live.sh`, `prompts/`, `steps.log`,
   `cc-journal.jsonl` (giornale della sessione Claude Code), `journal-summary.txt`, `facts_bench.py`,
   `reasoning_bench.py`, `jsum.py`.
-- Su PC4070TI `/mnt/mneme-nvme/mnemonic-proxy/`: `logs/cc1/step*.jsonl` (stream di Claude Code),
+- Su PC4070TI `/data/mnemonic-proxy/`: `logs/cc1/step*.jsonl` (stream di Claude Code),
   `results/facts-think0/results.jsonl`, `results/reasoning-76/results.jsonl`, `work/cc1` (progetto),
   `data-livetest/` (archivio della prova), `data/` (produzione, con dentro la sessione Codex).
 - Su MVLINNA `~/.hermes/cache/scratch/live020/`: `codex-logs/`, `codex-work/`, `codex_live.sh`.
