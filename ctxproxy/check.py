@@ -139,13 +139,13 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     try:
         eng = engines.detect(up, cfg.engine, int(cfg.slot_id or 0))
     except ValueError as e:
-        rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp" or "openai"')
+        rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp", "ds4" or "openai"')
         return rep
     how = "detected" if eng.detected else "forced by config/--engine"
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
             "" if eng.kind != "openai" or cfg.engine != "auto" else
-            "llama-server and Strata are recognised; anything else runs in base mode (no saved state)")
+            "llama-server, Strata and ds4-server are recognised; anything else runs in base mode (no saved state)")
     # --- model loaded
     if st_h == 503:
         rep.add(FAIL, "model loaded", "/health answers 503: the engine is still loading the model",
@@ -206,9 +206,14 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         hint = {"llama.cpp": "start llama-server with --slot-save-path DIR (same folder as slot_dir)",
                 "strata": "official Strata has no session files: build the session-files branch (README, Engines), "
                           "or use examples/config.official-strata.json",
-                "openai": "this engine cannot save state: drop the saved-state fields (the proxy turns them off)"}
+                "openai": "this engine cannot save state: drop the saved-state fields (the proxy turns them off)",
+                "ds4": "ds4-server saves its own state with --kv-disk-dir: drop the saved-state fields "
+                       "(use examples/config.ds4.json)"}
         rep.add(WARN, "saved state", "configured in the proxy (%s) but not supported by the engine: the proxy will "
                 "turn them off" % ", ".join(configured), hint.get(eng.kind, ""))
+    elif eng.kind == "ds4":
+        rep.add(INFO, "saved state", "ds4-server keeps its own state (start it with --kv-disk-dir DIR); the proxy "
+                "does not save or restore it")
     else:
         rep.add(INFO, "saved state", "not supported by the engine and not configured: base mode (masking, archive, "
                 "recall, segments)")
