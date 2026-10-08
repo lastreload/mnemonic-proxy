@@ -5,4 +5,4 @@ Verbatim archive, structured recall, segments with handoff notes, saved engine s
 (llama-server), ds4-server or any OpenAI-compatible engine; speaks Chat Completions, Anthropic Messages and OpenAI Responses.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"

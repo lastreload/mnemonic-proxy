@@ -648,6 +648,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `response_floor` | 0 | minimum response size assumed in the window check | **16384** |
 | `inject_recall`, `max_recall_rounds`, `recall_max_tokens` | true, 4, 6000 | the `recall` tool | default |
 | `recall_tool_name` / `tools_tool_name` | "recall" / "tools" | names of the proxy's tools for new conversations | default |
+| `prompt_language` | "en" | language of the texts the proxy writes into the prompt, for NEW conversations: `"en"` or `"it"`; stored per conversation at first use; conversations from before 0.3.1 stay Italian | default |
 | `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** |
 | `auto_recall` / `auto_recall_hint` | false / false | on each new user message, add relevant hidden pieces / only a one-line hint with ids | false / **true** |
 | `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls | tools on demand: only core tools + `recall` + `tools` in the prompt | **true** |
@@ -747,10 +748,13 @@ counting (a tokenizer in `./tok` or `CTX_TOKDIR`, plus `tokenizers`), Strata moc
 `jinja2`), and `kv_archive` (Python ≥ 3.14). `tools/replay_dry.py` and `tools/replay_exact.py` replay a pi session
 through the context manager offline.
 
-Partly in Italian: code comments, the dashboard UI, the developer notes in `docs/dev-notes/`, and some text the model
-reads — receipts and placeholders of hidden content, the handoff-note request, recall result headers. Those strings
-are part of the stable prompt prefix of existing conversations, so they were not translated in 0.2.0. Tool
-definitions for new conversations, the MCP tools, the CLI, startup logs and this README are in English.
+Partly in Italian: code comments, the dashboard UI and the developer notes in `docs/dev-notes/`. Since 0.3.1 every
+text the proxy writes into the model's prompt — receipts and placeholders of hidden content, the handoff-note
+request, the segment and pinned-points blocks, automatic recall, recall results, guard and limit messages — is in
+English for new conversations (`prompt_language`, default `"en"`). Conversations that already existed before 0.3.1
+keep the Italian texts they were born with: those strings are part of their stable prompt prefix (archive, session
+files, KV cache), so changing them would invalidate saved sessions. The language is stored per conversation at its
+first request; the proxy recognizes its own markers in both languages in every conversation.
 
 ## Credits & license
 

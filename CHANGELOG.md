@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 — 2026-10-08
+
+The texts the model reads are in English for new conversations.
+
+- **`prompt_language` (default `"en"`).** Everything the proxy writes into the prompt — placeholders and typed
+  receipts of hidden outputs, the «disposable» exchange note, the note on shortened call arguments, the handoff-note
+  request, the segment block (archived messages, first request, handoff notes, archive index), the pinned-points
+  block, automatic recall, recall results (simple and structured, MCP server included), the receipt guard, the recall
+  limit, tools paging results, the image note and the description of Codex custom-tool input — has an English text.
+  `"it"` keeps the Italian texts of 0.3.0.
+- **Existing conversations are unchanged.** The language is stored per conversation at its first request (like the
+  tool names in 0.2.0). A conversation already in the archive without a stored language was born before 0.3.1 and
+  keeps Italian: its physical prompt is byte-identical to 0.3.0, so saved sessions, anchors and KV caches stay
+  valid. Checked on a long fake-engine session (26 engine requests, `tests/test_lang.py`, `tools/lang_e2e.py`).
+- **Markers recognized in both languages** in every conversation: placeholders, receipts, automatic recall,
+  handoff-note request, tools results, shortened arguments, the guard on copied receipts.
+- HTTP/API error messages of the Anthropic and Responses layers, of `kvarchive` and of the MCP server are in English.
+- Recall `order` accepts `relevance`/`time` besides `pertinenza`/`tempo`.
+
+Maurizio Verde — LastReload
+
 ## 0.3.0 — 2026-10-06
 
 ds4-server as an engine, Claude Code and Codex measured live, and two fixes found in those live runs.
