@@ -33,13 +33,17 @@ TOOLS_NAME = "tools"                 # 0.2.0 (era strata_tools: resta per le con
 LEGACY_TOOLS_NAME = "strata_tools"
 TOOLS_HEAD_TPL = "[%s: definizioni caricate: "
 TOOLS_HEAD = TOOLS_HEAD_TPL % TOOLS_NAME
-_TOOLS_HEAD_RE = re.compile(r"^\[([A-Za-z0-9_.-]+): definizioni caricate: ([^\]]*)\]", re.M)
+TOOLS_HEAD_TPL_EN = "[%s: definitions loaded: "      # 0.3.1, conversations in English
+TOOLS_HEAD_EN = TOOLS_HEAD_TPL_EN % TOOLS_NAME
+_TOOLS_HEAD_RE = re.compile(r"^\[([A-Za-z0-9_.-]+): (?:definizioni caricate|definitions loaded): ([^\]]*)\]", re.M)
 
 
 def is_tools_result(text: str) -> bool:
     """Risultato del caricatore di strumenti (con qualunque nome: tools, strata_tools, alternativo)."""
     return isinstance(text, str) and _TOOLS_HEAD_RE.match(text) is not None
 AUTO_HEAD = "[gestore del contesto: richiamo automatico]"
+AUTO_HEAD_EN = "[context manager: automatic recall]"
+AUTO_HEADS = (AUTO_HEAD, AUTO_HEAD_EN)
 
 
 # ---------------------------------------------------------------- strumenti su richiesta
@@ -171,21 +175,25 @@ class ToolPager:
 
     @staticmethod
     def result(catalog: dict, names: list[str], loaded: set, query: str = "", note: str = "",
-               name: str = TOOLS_NAME) -> str:
+               name: str = TOOLS_NAME, lang: str = "it") -> str:
         """Testo del risultato dello strumento tools. La prima riga (TOOLS_HEAD) dice quali definizioni contiene: è ciò che
         loaded_in() rilegge. Strumenti già caricati: non si ripetono."""
         new = [n for n in names if n not in loaded]
         again = [n for n in names if n in loaded]
+        en = lang != "it"
         if not names:
-            return ("[%s: nessuno strumento trovato per %r. Caricabili: %s]"
+            return ((("[%s: no tool found for %r. Loadable: %s]") if en else
+                     "[%s: nessuno strumento trovato per %r. Caricabili: %s]")
                     % (name, query, ", ".join(sorted(catalog))))
-        lines = [TOOLS_HEAD_TPL % name + ", ".join(new) + "]"]
+        lines = [(TOOLS_HEAD_TPL_EN if en else TOOLS_HEAD_TPL) % name + ", ".join(new) + "]"]
         if note:
             lines.append(note)
         if again:
-            lines.append("Già caricati più sopra (usali direttamente): %s." % ", ".join(again))
+            lines.append(("Already loaded above (use them directly): %s." if en else
+                          "Già caricati più sopra (usali direttamente): %s.") % ", ".join(again))
         if new:
-            lines.append("Ora puoi chiamare questi strumenti normalmente. Definizioni complete:")
+            lines.append("You can now call these tools normally. Full definitions:" if en else
+                         "Ora puoi chiamare questi strumenti normalmente. Definizioni complete:")
             for n in new:
                 lines.append(json.dumps(catalog[n], ensure_ascii=False))
         return "\n".join(lines)
@@ -273,8 +281,10 @@ def last_lines(text: str, n: int = 4, max_chars: int = 320) -> str:
 # write/edit/bash di pi; Write/Edit/MultiEdit/NotebookEdit/Bash di Claude Code; apply_patch/exec_command/shell di
 # Codex (il confronto ignora maiuscole e minuscole, vedi is_guarded)
 GUARD_NAMES = ("write", "edit", "bash", "multiedit", "notebookedit", "apply_patch", "exec_command", "shell")
-_GUARD_RE = re.compile(r"\u27eactx-archive id=[rta][0-9a-f]{12}|\u27eb Ricevuta: |"
-                       r"\[gestore del contesto: richiamo automatico\] Pezzi|nascosta per spazio \(\d+ token\)")
+_GUARD_RE = re.compile(r"\u27eactx-archive id=[rta][0-9a-f]{12}|\u27eb Ricevuta: |\u27eb Receipt: |"
+                       r"\[gestore del contesto: richiamo automatico\] Pezzi|"
+                       r"\[context manager: automatic recall\] Pieces|"
+                       r"nascosta per spazio \(\d+ token\)|hidden to save space \(\d+ tokens?\)")
 # 0.3.0 (LIVE020, problema 3): l'argomento voluminoso di una chiamata vecchia è accorciato a "prime righe" + una riga
 # fatta solo di "…" (core.masked_calls). Il modello a volte la ricopia in una scrittura nuova: una riga che contiene
 # solo "…" dentro un valore di testo è quel segno, non codice vero.
@@ -284,6 +294,15 @@ GUARD_MSG = ("[gestore del contesto: chiamata NON eseguita. I suoi argomenti con
              "oppure la forma accorciata di una chiamata vecchia: prime righe seguite da una riga con solo \"\u2026\"): "
              "non è contenuto vero del file. Rileggi il file (read) o recupera il testo esatto con {rn}, "
              "poi ripeti la chiamata con il contenuto vero.]")
+GUARD_MSG_EN = ("[context manager: call NOT executed. Its arguments contain the text of a receipt or of a placeholder "
+                "of the context manager (e.g. \u27eactx-archive \u2026\u27eb, \"hidden to save space\", or the "
+                "shortened form of an old call: first lines followed by a line with only \"\u2026\"): it is not real "
+                "file content. Re-read the file (read) or retrieve the exact text with {rn}, then repeat the call "
+                "with the real content.]")
+
+
+def guard_msg(lang: str = "it") -> str:
+    return GUARD_MSG if lang == "it" else GUARD_MSG_EN
 
 
 def is_guarded(name: str | None) -> bool:
@@ -342,8 +361,11 @@ def receipt_kind(info: dict | None, text: str, failed: bool) -> str:
 
 
 def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | None = None,
-                  rn: str = "recall") -> tuple[str, str]:
-    """-> (tipo, testo della ricevuta) per un'uscita nascosta. Funzione pura di (chiamata, uscita, esito)."""
+                  rn: str = "recall", lang: str = "it") -> tuple[str, str]:
+    """-> (tipo, testo della ricevuta) per un'uscita nascosta. Funzione pura di (chiamata, uscita, esito, lingua).
+    Il tipo (scrittura, lettura...) è interno; solo il testo cambia lingua."""
+    if lang != "it":
+        return _typed_receipt_en(info, text, failed, rid_args, rn)
     kind = receipt_kind(info, text, failed)
     args = (info or {}).get("args") or {}
     if kind in ("scrittura", "modifica"):
@@ -393,6 +415,60 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
         last = _q(lines[-1], 120) if lines else ""
         return kind, "comando riuscito: codice d'uscita 0, %d righe di uscita%s" % (
             len(lines), (". Ultima riga: \u00ab%s\u00bb" % last) if last else "")
+    return kind, ""
+
+
+def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
+    """English receipts (0.3.1): same structure and information as the Italian ones."""
+    kind = receipt_kind(info, text, failed)
+    args = (info or {}).get("args") or {}
+    if kind in ("scrittura", "modifica"):
+        res = "FAILED (content NOT applied)" if failed else "succeeded"
+        if kind == "scrittura":
+            c = args.get("content")
+            c = c if isinstance(c, str) else ""
+            s = "write: %s, %d bytes, sha256 %s of the written content" % (res, len(c.encode("utf-8")), sha12(c))
+        else:
+            ed = args.get("edits")
+            nb = len(ed) if isinstance(ed, list) else (1 if args.get("oldText") or args.get("old_string") else 0)
+            s = "edit: %s, %d blocks" % (res, nb)
+        if rid_args:
+            s += ", original arguments: %s id=%s" % (rn, rid_args)
+        if failed:
+            s += ". Error: \u00ab%s\u00bb" % last_lines(text, 2, 200)
+        return kind, s
+    if kind == "lettura":
+        off, lim = args.get("offset"), args.get("limit")
+        rng = ("lines %s\u2013%s" % (off or 1, (int(off or 1) + int(lim) - 1) if isinstance(lim, int) else "end")
+               if (off or lim) else "whole file")
+        n = len((text or "").splitlines())
+        if failed:
+            return kind, "read FAILED (%s): \u00ab%s\u00bb" % (rng, last_lines(text, 2, 200))
+        return kind, "read: %s, %d lines returned, sha256 %s of the text read" % (rng, n, sha12(text))
+    if kind == "test":
+        t = test_summary((info or {}).get("cmd") or "", text) or {}
+        code = exit_code(text)
+        parts = ["exit code %s" % (code if code is not None else 0)]
+        if t.get("pass") is not None:
+            parts.append("passed %d" % t["pass"])
+        if t.get("fail") is not None:
+            parts.append("failed %d" % t["fail"])
+        s = "test: " + ", ".join(parts)
+        if t.get("failed_names"):
+            s += " (%s%s)" % (", ".join(t["failed_names"]),
+                              ", \u2026" if t["n_failed_names"] > len(t["failed_names"]) else "")
+        elif code not in (None, 0):
+            s += ". Last lines: \u00ab%s\u00bb" % last_lines(text, 3, 240)
+        return kind, s
+    if kind == "shell_errore":
+        code = exit_code(text)
+        return kind, "command FAILED: exit code %s. Last lines: \u00ab%s\u00bb" % (
+            code if code is not None else "not given", last_lines(text))
+    if kind == "shell_ok":
+        lines = [l for l in (text or "").splitlines() if l.strip()]
+        last = _q(lines[-1], 120) if lines else ""
+        return kind, "command succeeded: exit code 0, %d output lines%s" % (
+            len(lines), (". Last line: \u00ab%s\u00bb" % last) if last else "")
     return kind, ""
 
 

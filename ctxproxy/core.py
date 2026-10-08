@@ -23,7 +23,10 @@ import threading
 import time
 import uuid
 
-from .paging import AUTO_HEAD, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result, query_terms, typed_receipt
+from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, CUSTOM_INPUT_DESC_IT, norm as \
+    norm_lang, outcome_text
+from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
+                     query_terms, typed_receipt)
 from .render import message_piece, render_pieces, template_kwargs
 from .tooldefs import ToolShortener
 
@@ -56,11 +59,44 @@ DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb conclus
 PIN_HEAD = "[strata-context: punti fermi]"
 NOTES_MARK = "[strata-context: richiesta note di passaggio]"
 SEG_MARK = "[strata-context: segmento {seg}]"
+# 0.3.1: English texts for new conversations (prompt_language, see lang.py). The Italian ones above stay verbatim
+# for conversations born before 0.3.1 (byte-identical prefix). Recognition always accepts both.
+PLACEHOLDER_EN = "[tool output omitted: {n} tokens \u2014 recall:{rid}]"   # recognition only
+THINK_PLACEHOLDER_EN = "[reasoning omitted: {n} tokens \u2014 recall:{rid}]"
+OUT_PLACEHOLDER_EN = ("[context manager: output of {origin} hidden to save space ({n} tokens). Start: \u00ab{head}\u00bb. "
+                      "Exact text: {rn} id={rid}. For the CURRENT state re-read the file or re-run the command.]")
+OUT_PREFIX_EN = "[context manager: output of "
+OUT_PREFIXES = (OUT_PREFIX, OUT_PREFIX_EN)
+OUT_RECEIPT_EN = ("\u27eactx-archive id={rid} \u00b7 output of {origin} \u00b7 this agent \u00b7 hidden to save space "
+                  "({n} tokens)\u27eb Receipt: {receipt}. Exact text: {rn} id={rid}. For the CURRENT state "
+                  "re-read the file or re-run the command.")
+DROP_NOTE_EN = ("\n\n[context manager: \u00abdisposable\u00bb exchange finished and hidden ({n} tokens). Effects: {fx}. "
+                "Full text: {rn} id={rid}.]")
+PIN_HEAD_EN = "[strata-context: pinned points]"
+PIN_HEADS = (PIN_HEAD, PIN_HEAD_EN)
+NOTES_MARK_EN = "[strata-context: handoff notes request]"
+NOTES_MARKS = (NOTES_MARK, NOTES_MARK_EN)
+SEG_MARK_EN = "[strata-context: segment {seg}]"
+OMITTED_PREFIXES = ("[uscita strumento omessa:", "[tool output omitted:")
+THINK_OMITTED_PREFIXES = ("[ragionamento omesso:", "[reasoning omitted:")
 
-def recall_tool_def(name: str = RECALL_NAME) -> dict:
-    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome). Conversazioni
-    nate prima della 0.2.0 (nome strata_recall): testo italiano di allora, byte per byte (prefisso invariato); nomi
-    nuovi: testo inglese."""
+
+def is_notes_request(text) -> bool:
+    """Request for handoff notes (either language)."""
+    return isinstance(text, str) and text.startswith(NOTES_MARKS)
+
+
+def is_placeholder(text) -> bool:
+    """Tool result already replaced by the proxy (placeholder or receipt, either language, any version)."""
+    return isinstance(text, str) and (text.startswith(OMITTED_PREFIXES) or any(p in text for p in OUT_PREFIXES)
+                                      or RECEIPT_OPEN in text)
+
+
+def recall_tool_def(name: str = RECALL_NAME, lang: str = "it") -> dict:
+    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome e della lingua).
+    Conversazioni nate prima della 0.2.0 (nome strata_recall): testo italiano di allora, byte per byte (prefisso
+    invariato); nomi nuovi: testo inglese (fino alla 0.3.0 con l'avviso che risultati e ricevute possono essere in
+    italiano; dalla 0.3.1, lang="en", senza avviso: risultati e ricevute sono in inglese)."""
     if name != LEGACY_RECALL_NAME:
         return {"type": "function", "function": {
             "name": name,
@@ -70,7 +106,7 @@ def recall_tool_def(name: str = RECALL_NAME) -> dict:
                 "archive index; use `query` to search (words, path, function name, error message) across "
                 "everything archived; use `path` for the history of operations on a file (reads, writes, edits, "
                 "with outcome and id). Runs on the server and is cheap: use it instead of guessing or re-running "
-                "commands. Results and receipts may be in Italian."),
+                "commands." + (" Results and receipts may be in Italian." if lang == "it" else "")),
             "parameters": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "id of the archived block, e.g. r1a2b3c4d5e6"},
                 "query": {"type": "string", "description": "text to search in the archive (words or substring)"},
@@ -116,6 +152,19 @@ brevi (al massimo ~2500 token), fattuali, con questa struttura fissa:
 ## Fatti puntuali da non perdere (percorsi, valori, nomi, id recall:<id> quando utili)
 
 Non chiamare strumenti. Non inventare: se non sei sicuro, scrivi l'id recall da consultare."""
+NOTES_INSTRUCTION_EN = NOTES_MARK_EN + """
+The context is about to be compacted: the oldest messages will be archived (retrievable with {rn}) and
+after this point you will see only these notes plus the recent part of the conversation. Write the handoff notes NOW,
+short (at most ~2500 tokens), factual, with this fixed structure:
+
+## Goal (almost verbatim, as the user asked)
+## Explicit user constraints and preferences
+## Decisions taken (what, why, alternatives discarded)
+## Current state (files touched, commands run, results, numbers)
+## Open problems / next steps
+## Specific facts not to lose (paths, values, names, recall:<id> ids when useful)
+
+Do not call tools. Do not invent: if you are not sure, write the recall id to check."""
 
 
 @dataclasses.dataclass
@@ -230,6 +279,10 @@ class Config:
     # multiplo di N token (meno token da rileggere dopo l'ultimo checkpoint). Ha senso solo con --tokenizer esatto.
     checkpoint_align_tokens: int = 0
     checkpoint_align_slack: float = 0.25   # spreco accettato: frazione di N dopo il multiplo
+    # 0.3.1: language of the texts the proxy writes into the prompt (placeholders, receipts, notes, recall results)
+    # for NEW conversations: "en" (default) | "it". Saved per conversation at first use; conversations born before
+    # 0.3.1 keep Italian (byte-identical prefix). Markers are recognized in both languages everywhere.
+    prompt_language: str = "en"
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
@@ -336,7 +389,9 @@ def args_text(m: dict) -> str:
 
 ARGS_KEEP_CHARS = 160
 _FAKE_OMIT = re.compile(r"\[(?:contenuto|argomenti|uscita strumento|ragionamento) omess[oaie][^\]]*\]"
-                        r"|\[gestore del contesto:[^\]]*\]")
+                        r"|\[gestore del contesto:[^\]]*\]"
+                        r"|\[(?:content|arguments|tool output|reasoning) omitted[^\]]*\]"
+                        r"|\[context manager:[^\]]*\]")
 
 
 def masked_calls(m: dict, rid: str, n: int) -> list:
@@ -385,10 +440,22 @@ def call_notes(m: dict, rid: str) -> dict:
     return notes
 
 
-def call_note_text(name: str, path: str, rid: str, result: str, rn: str = RECALL_NAME) -> str:
+def call_note_text(name: str, path: str, rid: str, result: str, rn: str = RECALL_NAME, lang: str = "it") -> str:
     """GPT-ANSWER3 §game.js: operazione, file, esito accertato o no, accesso allo storico, niente 'modifiche
     esterne' inventate."""
     esito = outcome(name, result)
+    if lang != "it":
+        what = "%s%s" % (name, (" on " + path) if path else "")
+        if esito == "riuscito":
+            e = "outcome: succeeded (see the result below)"
+        elif esito == "fallito":
+            e = "outcome: FAILED (see the result below): that content was NOT applied"
+        else:
+            e = "outcome not verified"
+        return ("(context manager note: call %s made by you in this session, %s. The large arguments are "
+                "shortened in the prompt to save space; original text: %s id=%s. For the current state of the "
+                "file re-read it; if it differs from what you remember, it is because of your later edits or a "
+                "failed outcome: no external change was detected.)\n" % (what, e, rn, rid))
     what = "%s%s" % (name, (" su " + path) if path else "")
     if esito == "riuscito":
         e = "esito: riuscito (vedi il risultato qui sotto)"
@@ -455,10 +522,10 @@ def outcome(name: str, result: str, is_error: bool | None = None) -> str:
     return "riuscito" if name in ("read",) and r.strip() else "non verificato"
 
 
-def origin_text(info: dict | None) -> str:
+def origin_text(info: dict | None, lang: str = "it") -> str:
     """Descrizione breve dell'origine di un'uscita: «read src/game.js», «bash `npm test`»."""
     if not info:
-        return "uno strumento"
+        return "uno strumento" if lang == "it" else "a tool"
     if info["path"]:
         return "%s %s" % (info["name"], info["path"])
     if info["cmd"]:
@@ -473,11 +540,11 @@ def head_text(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
-def receipt(info: dict | None, result: str, is_error=None) -> str:
+def receipt(info: dict | None, result: str, is_error=None, lang: str = "it") -> str:
     """Ricevuta di una riga degli effetti di una chiamata: «write src/a.js: riuscito»."""
     if not info:
         return "?"
-    return "%s: %s" % (origin_text(info), outcome(info["name"], result, is_error))
+    return "%s: %s" % (origin_text(info, lang), outcome_text(outcome(info["name"], result, is_error), lang))
 
 
 class TokenCounter:
@@ -894,6 +961,7 @@ class Prepared:
     invalidated: dict = dataclasses.field(default_factory=dict)  # token di cache invalidati e causa
     recall_name: str = RECALL_NAME     # nomi degli strumenti del proxy in questa conversazione
     tools_name: str = TOOLS_NAME
+    lang: str = "it"                   # 0.3.1: lingua dei testi del proxy in questa conversazione
     recall_aliases: frozenset = frozenset((RECALL_NAME, LEGACY_RECALL_NAME))  # chiamate risolte come recall
     tools_aliases: frozenset = frozenset((TOOLS_NAME, LEGACY_TOOLS_NAME))
 
@@ -911,7 +979,25 @@ class Manager:
                                                         cfg.recall_tool_name, cfg.tools_tool_name))
         # nomi degli strumenti del proxy nella conversazione corrente (impostati da prepare)
         self.rn, self.tn = cfg.recall_tool_name or RECALL_NAME, cfg.tools_tool_name or TOOLS_NAME
+        # lingua dei testi del proxy nella conversazione corrente (impostata da prepare; 0.3.1)
+        self.lang = norm_lang(cfg.prompt_language)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
+
+    def L(self, it: str, en: str) -> str:
+        """Testo nella lingua della conversazione corrente."""
+        return it if self.lang == "it" else en
+
+    def prompt_lang(self, conv: str, existed: bool) -> str:
+        """Lingua dei testi del proxy per la conversazione (0.3.1). Scelta alla prima richiesta e ricordata (kv), come i
+        nomi degli strumenti: conversazione già nell'archivio senza lingua registrata = nata prima della 0.3.1 ->
+        italiano (prefisso identico byte per byte); conversazione nuova -> Config.prompt_language."""
+        key = LANG_KEY + conv
+        v = self.store.kv_get(key)
+        if v in ("it", "en"):
+            return v
+        lang = "it" if existed else norm_lang(self.cfg.prompt_language)
+        self.store.kv_set(key, lang)
+        return lang
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -962,11 +1048,13 @@ class Manager:
         riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
-            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn)
+            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang)
             if rec:
-                return OUT_RECEIPT.format(origin=origin_text(info), n=n, rid=rid, receipt=rec, rn=self.rn)
-        return OUT_PLACEHOLDER.format(origin=origin_text(info), n=n, rid=rid, rn=self.rn,
-                                      head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
+                return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
+                                                                  receipt=rec, rn=self.rn)
+        return self.L(OUT_PLACEHOLDER, OUT_PLACEHOLDER_EN).format(
+            origin=origin_text(info, self.lang), n=n, rid=rid, rn=self.rn,
+            head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
     def _segment_for(self, conv: str, hs: list[str]):
         segs = self.store.segments(conv) if conv else []
         for seg, cut_idx, cut_h, notes_msg, kind in segs:
@@ -1003,14 +1091,17 @@ class Manager:
             dk = masks.get(hs[i] + DROP_SUFFIX)
             if dk and is_human_user(m):
                 end = self.exchange_end(msgs, i)
-                fx = self.exchange_receipts(msgs, i, end)
+                fx = self.exchange_receipts(msgs, i, end, self.lang)
                 n_hidden = sum(self.msg_tokens(x, False) for x in msgs[i + 1:end])
-                m = {**m, "content": content_text(m.get("content")) +
-                     DROP_NOTE.format(n=n_hidden, fx=fx or "nessuna chiamata", rid=dk[0], rn=self.rn)}
+                m = {**m, "content": self._image_note(content_text(m.get("content"))) +
+                     self.L(DROP_NOTE, DROP_NOTE_EN).format(n=n_hidden, fx=fx or self.L("nessuna chiamata", "no calls"),
+                                                            rid=dk[0], rn=self.rn)}
                 phys.append(m); origin.append(i)
                 hidden_to = end
                 strip = None
                 continue
+            if self.lang != "it" and m.get("role") in ("user", "tool"):
+                m = self._image_note_msg(m)
             mk = masks.get(hs[i])
             if mk and m.get("role") == "tool":
                 info = calls.get(m.get("tool_call_id"))
@@ -1021,7 +1112,7 @@ class Manager:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
                 res = content_text(msgs[i].get("content"))
-                m = {**m, "content": call_note_text(name, path, rid, res, self.rn) +
+                m = {**m, "content": call_note_text(name, path, rid, res, self.rn, self.lang) +
                      (c0 if isinstance(c0, str) else content_text(c0))}
             tk = masks.get(hs[i] + THINK_SUFFIX)
             if tk and m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str):
@@ -1029,7 +1120,7 @@ class Manager:
                 # il ragionamento vecchio sparisce e basta, resta in archivio
                 m = {**m, "reasoning_content": ""}
             if m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str) \
-                    and m["reasoning_content"].lstrip().startswith("[ragionamento omesso:"):
+                    and m["reasoning_content"].lstrip().startswith(THINK_OMITTED_PREFIXES):
                 m = {**m, "reasoning_content": ""}   # segnaposti finti scritti dal modello per imitazione
             ak = masks.get(hs[i] + ARGS_SUFFIX)
             if ak and m.get("role") == "assistant" and m.get("tool_calls"):
@@ -1061,6 +1152,36 @@ class Manager:
                 strip = ins
         return phys, origin
 
+    def _image_note(self, text: str) -> str:
+        """Nota immagine dello strato API (sempre il testo 0.3.0, parte della storia con hash) nella lingua della
+        conversazione: in inglese solo nel prompt fisico."""
+        if self.lang == "it" or not isinstance(text, str) or IMAGE_NOTE_IT not in text:
+            return text
+        return text.replace(IMAGE_NOTE_IT, IMAGE_NOTE_EN)
+
+    def _image_note_msg(self, m: dict) -> dict:
+        c = m.get("content")
+        if isinstance(c, str) and IMAGE_NOTE_IT in c:
+            return {**m, "content": self._image_note(c)}
+        return m
+
+    def _custom_desc(self, tools: list) -> list:
+        """Descrizione del parametro `input` degli strumenti custom (api_responses) in inglese nel prompt fisico delle
+        conversazioni inglesi (lo strato API scrive sempre il testo 0.3.0: è nella lista strumenti con hash)."""
+        if self.lang == "it":
+            return tools
+        out = []
+        for t in tools:
+            f = t.get("function") if isinstance(t, dict) else None
+            inp = (((f or {}).get("parameters") or {}).get("properties") or {}).get("input") \
+                if isinstance(f, dict) else None
+            if isinstance(inp, dict) and inp.get("description") == CUSTOM_INPUT_DESC_IT:
+                p = dict(f["parameters"])
+                p["properties"] = {**p["properties"], "input": {**inp, "description": CUSTOM_INPUT_DESC_EN}}
+                t = {**t, "function": {**f, "parameters": p}}
+            out.append(t)
+        return out
+
     @staticmethod
     def exchange_end(msgs: list, i: int) -> int:
         """Fine (esclusa) dello scambio che inizia col messaggio utente i: fino al prossimo messaggio utente umano."""
@@ -1070,16 +1191,16 @@ class Manager:
         return len(msgs)
 
     @staticmethod
-    def exchange_receipts(msgs: list, i: int, end: int) -> str:
+    def exchange_receipts(msgs: list, i: int, end: int, lang: str = "it") -> str:
         """Ricevute di una riga per le chiamate di uno scambio: «bash `node serve.mjs`: riuscito; write a.js: …»."""
         calls, out = {}, []
         for m in msgs[i:end]:
             if m.get("role") == "assistant":
                 calls.update(call_info(m))
             elif m.get("role") == "tool":
-                out.append(receipt(calls.get(m.get("tool_call_id")), content_text(m.get("content"))))
+                out.append(receipt(calls.get(m.get("tool_call_id")), content_text(m.get("content")), lang=lang))
         if len(out) > 8:
-            out = out[:7] + ["altre %d chiamate" % (len(out) - 7)]
+            out = out[:7] + [("altre %d chiamate" if lang == "it" else "%d more calls") % (len(out) - 7)]
         return "; ".join(out)
 
     # ---------- passo principale ----------
@@ -1115,13 +1236,14 @@ class Manager:
 
         names = self.tool_names(conv, client_tools, legacy=existed)
         self.rn, self.tn = names["recall"], names["tools"]
-        tools = list(self.shorten_tools(client_tools) or [])
+        self.lang = self.prompt_lang(conv, existed)
+        tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == self.rn for t in tools):
             from .recall2 import recall_tool
-            tools.append(recall_tool(cfg, recall_tool_def(self.rn)))
+            tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang), self.lang))
         if catalog:
             tools.append(self.pager.tools_tool(catalog, self.tn))
 
@@ -1194,7 +1316,7 @@ class Manager:
                         virtual_tokens=virtual, events=events, masked=len(masks),
                         masked_tokens=sum(n for _, n in masks.values()),
                         masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
-                        invalidated=inv, recall_name=self.rn, tools_name=self.tn,
+                        invalidated=inv, recall_name=self.rn, tools_name=self.tn, lang=self.lang,
                         recall_aliases=self.call_aliases("recall", client_tools),
                         tools_aliases=self.call_aliases("tools", client_tools))
 
@@ -1273,7 +1395,7 @@ class Manager:
 
         def kind(m):
             c = content_text((m or {}).get("content"))
-            if c.startswith(AUTO_HEAD):
+            if c.startswith(AUTO_HEADS):
                 return "richiamo_automatico"
             if m and m.get("role") == "tool" and is_tools_result(c):
                 return "strumenti"
@@ -1364,7 +1486,9 @@ class Manager:
         testo dell'archivio). -> (testo, scelti)."""
         cfg = self.cfg
         what = {"tool": "uscita", "assistant-reasoning": "ragionamento", "assistant-tool-args": "argomenti",
-                "user": "utente", "assistant": "risposta"}
+                "user": "utente", "assistant": "risposta"} if self.lang == "it" else \
+            {"tool": "output", "assistant-reasoning": "reasoning", "assistant-tool-args": "arguments",
+             "user": "user", "assistant": "answer"}
         chosen = [{"rid": c[0], "idx": c[1], "role": c[2], "score": round(c[6], 2), "matched": c[7][:6]}
                   for c in cands[:cfg.auto_recall_hint_k]]
         if not chosen:
@@ -1374,8 +1498,13 @@ class Manager:
             for t in c["matched"]:
                 if t not in words:
                     words.append(t)
-        text = (AUTO_HEAD + " Nell'archivio NASCOSTO di questa conversazione ci sono pezzi su: %s (%s). Se servono "
-                "per la richiesta, usa %s id=<id> (testo intero) o query=...; non ricostruirli a memoria."
+        if self.lang == "it":
+            text = (AUTO_HEAD + " Nell'archivio NASCOSTO di questa conversazione ci sono pezzi su: %s (%s). Se servono "
+                    "per la richiesta, usa %s id=<id> (testo intero) o query=...; non ricostruirli a memoria.")
+        else:
+            text = (AUTO_HEAD_EN + " The HIDDEN archive of this conversation has pieces about: %s (%s). If they are "
+                    "needed for the request, use %s id=<id> (full text) or query=...; do not rebuild them from memory.")
+        text = (text
                 % (", ".join(words[:8]),
                    "; ".join("id=%s msg %d %s" % (c["rid"], c["idx"] + 1, what.get(c["role"], c["role"]))
                              for c in chosen),
@@ -1407,7 +1536,7 @@ class Manager:
         already = set()
         for m in phys:
             c = content_text(m.get("content"))
-            if c.startswith(AUTO_HEAD) or c.startswith("[recall:"):
+            if c.startswith(AUTO_HEADS) or c.startswith("[recall:"):
                 already.update(re.findall(r"id=([rta][0-9a-f]{12})", c))
         t0 = time.time()
         cands = self.auto_candidates(conv, terms, hidden, already, i)
@@ -1422,10 +1551,24 @@ class Manager:
                                     pieces=chosen, budget=budget, ms=round((time.time() - t0) * 1000, 1),
                                     last_user=user[:300])
         n_args = 0
-        head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
-                "richiesta qui sopra (trovati dal gestore del contesto, non scritti dall'utente). Testo vero, "
-                "eventualmente estratto; testo intero con %s id=<id>. Lo stato attuale dei file può "
-                "essere diverso: se serve, rileggili." % self.rn)
+        if self.lang == "it":
+            head = (AUTO_HEAD + " Pezzi della parte NASCOSTA di questa conversazione che potrebbero servire per la "
+                    "richiesta qui sopra (trovati dal gestore del contesto, non scritti dall'utente). Testo vero, "
+                    "eventualmente estratto; testo intero con %s id=<id>. Lo stato attuale dei file può "
+                    "essere diverso: se serve, rileggili." % self.rn)
+            whatmap = {"tool": "uscita di strumento", "assistant-reasoning": "ragionamento",
+                       "assistant-tool-args": "argomenti di chiamata", "user": "messaggio dell'utente",
+                       "assistant": "risposta dell'assistente"}
+            excerpt = " · estratto"
+        else:
+            head = (AUTO_HEAD_EN + " Pieces of the HIDDEN part of this conversation that may be useful for the request "
+                    "above (found by the context manager, not written by the user). Real text, possibly an "
+                    "excerpt; full text with %s id=<id>. The current state of the files may differ: re-read "
+                    "them if needed." % self.rn)
+            whatmap = {"tool": "tool output", "assistant-reasoning": "reasoning",
+                       "assistant-tool-args": "call arguments", "user": "user message",
+                       "assistant": "assistant answer"}
+            excerpt = " · excerpt"
         blocks, used, chosen = [], self.tc.count(head), []
         for rid, idx, role, name, content, tokens, score, matched in cands[:cfg.auto_recall_k * 3]:
             if len(chosen) >= cfg.auto_recall_k:
@@ -1437,11 +1580,10 @@ class Manager:
             low = content.lower()
             p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
             s = content[max(0, p - 300):p + 2400]
-            what = {"tool": "uscita di strumento", "assistant-reasoning": "ragionamento",
-                    "assistant-tool-args": "argomenti di chiamata", "user": "messaggio dell'utente",
-                    "assistant": "risposta dell'assistente"}.get(role, role)
-            b = "\n--- id=%s · messaggio %d (%s) · %d token%s\n" % (
-                rid, idx + 1, what, tokens, "" if len(s) >= len(content) else " · estratto")
+            what = whatmap.get(role, role)
+            b = "\n--- id=%s · %s %d (%s) · %d token%s%s\n" % (
+                rid, self.L("messaggio", "message"), idx + 1, what, tokens, self.L("", "s"),
+                "" if len(s) >= len(content) else excerpt)
             b += self.fit_tokens(s, cfg.auto_recall_piece_tokens) if self.tc.count(s) > cfg.auto_recall_piece_tokens \
                 else s
             t = self.tc.count(b)
@@ -1568,8 +1710,9 @@ class Manager:
                 if js and all(x not in protected for x in js) and after[end - 1] >= cfg.min_age_turns \
                         and not any(k in pinned for k in range(i, end)):
                     before = sum(per[x] for x in js)
-                    note = DROP_NOTE.format(n=before, fx=self.exchange_receipts(msgs, i, end) or "nessuna chiamata",
-                                            rid=rid_for(i, msgs[i]), rn=self.rn)
+                    note = self.L(DROP_NOTE, DROP_NOTE_EN).format(
+                        n=before, fx=self.exchange_receipts(msgs, i, end, self.lang) or
+                        self.L("nessuna chiamata", "no calls"), rid=rid_for(i, msgs[i]), rn=self.rn)
                     sv = before - self.tc.count(note)
                     if sv > 0:
                         cand.append((i, j, hs[i] + DROP_SUFFIX, rid_for(i, msgs[i]), before, sv,
@@ -1578,7 +1721,7 @@ class Manager:
                         continue
             if m.get("role") == "tool":
                 txt = content_text(m.get("content"))
-                if txt.startswith("[uscita strumento omessa:") or OUT_PREFIX in txt or RECEIPT_OPEN in txt:
+                if is_placeholder(txt):
                     continue
                 n = self.msg_tokens(m, False)
                 if n >= cfg.min_mask_tokens:
@@ -1604,7 +1747,7 @@ class Manager:
                         cand.append((i, j, hs[i] + THINK_SUFFIX, tid_for(i, msgs[i]), n, sv,
                                      {"tipo": "ragionamento", "eta": age}))
             if cfg.mask_tool_args and m.get("role") == "assistant" and m.get("tool_calls") \
-                    and '"_omesso"' not in args_text(m):
+                    and '"_omesso"' not in args_text(m) and '"_omitted"' not in args_text(m):
                 n = self.tc.count(args_text(m))
                 if n >= cfg.min_mask_tokens:
                     rid = aid_for(i, msgs[i])
@@ -1613,7 +1756,7 @@ class Manager:
                     # letto dal risultato vero: il testo della nota cambia con l'esito)
                     res = {x.get("tool_call_id"): content_text(x.get("content"))
                            for x in msgs[i + 1:i + 1 + len(m["tool_calls"]) + 2] if x.get("role") == "tool"}
-                    note_cost = sum(self.tc.count(call_note_text(nm, pa, rid, res.get(cid, ""), self.rn)) + 1
+                    note_cost = sum(self.tc.count(call_note_text(nm, pa, rid, res.get(cid, ""), self.rn, self.lang)) + 1
                                     for cid, (nm, pa, _) in call_notes(m, rid).items())
                     sv = self.msg_tokens(m, True) - self.msg_tokens(m2, True) - note_cost
                     if sv > 0:
@@ -1702,10 +1845,12 @@ class Manager:
             n = self.msg_tokens(m, False)
             if n < self.cfg.min_mask_tokens:
                 continue
-            line = "- recall:%s \u00b7 %s \u00b7 %d token" % (rid_for(i, m), calls.get(m.get("tool_call_id"), "?"), n)
+            line = "- recall:%s \u00b7 %s \u00b7 %d token%s" % (rid_for(i, m), calls.get(m.get("tool_call_id"), "?"), n,
+                                                            self.L("", "s"))
             t = self.tc.count(line)
             if used + t > self.cfg.index_max_tokens:
-                lines.append("- \u2026 (blocchi più vecchi: cerca con %s query)" % self.rn)
+                lines.append(self.L("- \u2026 (blocchi più vecchi: cerca con %s query)",
+                                    "- \u2026 (older blocks: search with %s query)") % self.rn)
                 break
             lines.append(line)
             used += t
@@ -1726,7 +1871,8 @@ class Manager:
         t0 = time.time()
         notes, usage, finish, timings = "", {}, None, None
         try:
-            r = upstream.chat({**params, "messages": phys + [{"role": "user", "content": NOTES_INSTRUCTION.replace("{rn}", self.rn)}],
+            r = upstream.chat({**params, "messages": phys + [{"role": "user", "content": self.L(
+                NOTES_INSTRUCTION, NOTES_INSTRUCTION_EN).replace("{rn}", self.rn)}],
                                "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False})
             notes = (r["choices"][0]["message"].get("content") or "").strip()
             usage = r.get("usage") or {}
@@ -1737,7 +1883,8 @@ class Manager:
                                        tokens=self.tc.count(notes), usage=usage, finish=finish, timings=timings,
                                        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens")))
         if not notes:
-            notes = "(note non disponibili: usa %s per ricostruire i dettagli)" % self.rn
+            notes = self.L("(note non disponibili: usa %s per ricostruire i dettagli)",
+                           "(notes not available: use %s to reconstruct the details)") % self.rn
         # 2) sigillo (sperimentale) + SAVE di A
         if cfg.slot_save:
             if cfg.seal_experimental:
@@ -1765,16 +1912,27 @@ class Manager:
                 events.append(self.journal.log("save_error", conv=conv, file=fn, error=str(e)[:300]))
         # 3) B = system + tool + [note + indice] + coda
         first_user = next((m for m in msgs if is_human_user(m)), None)
-        parts = [SEG_MARK.format(seg=seg + 1),
-                 "I messaggi 1\u2013%d di questa conversazione sono stati archiviati e non sono più nel contesto. "
-                 "Il loro testo esatto è recuperabile con lo strumento %s (per id o per ricerca)." % (c, self.rn)]
+        if self.lang == "it":
+            parts = [SEG_MARK.format(seg=seg + 1),
+                     "I messaggi 1\u2013%d di questa conversazione sono stati archiviati e non sono più nel contesto. "
+                     "Il loro testo esatto è recuperabile con lo strumento %s (per id o per ricerca)." % (c, self.rn)]
+            h_first, h_notes, h_index, tail = ("## Prima richiesta dell'utente (letterale)", "## Note di passaggio",
+                                               "## Indice dell'archivio (più recenti prima)",
+                                               "La conversazione prosegue qui sotto.")
+        else:
+            parts = [SEG_MARK_EN.format(seg=seg + 1),
+                     "Messages 1\u2013%d of this conversation have been archived and are no longer in the context. "
+                     "Their exact text can be retrieved with the %s tool (by id or by search)." % (c, self.rn)]
+            h_first, h_notes, h_index, tail = ("## First user request (verbatim)", "## Handoff notes",
+                                               "## Archive index (most recent first)",
+                                               "The conversation continues below.")
         if cfg.keep_first_user and first_user is not None and msgs.index(first_user) < c:
-            parts += ["", "## Prima richiesta dell'utente (letterale)", content_text(first_user.get("content"))]
-        parts += ["", "## Note di passaggio", notes]
+            parts += ["", h_first, self._image_note(content_text(first_user.get("content")))]
+        parts += ["", h_notes, notes]
         idx = self.archive_index(msgs, c, conv)
         if idx:
-            parts += ["", "## Indice dell'archivio (più recenti prima)", idx]
-        parts += ["", "La conversazione prosegue qui sotto."]
+            parts += ["", h_index, idx]
+        parts += ["", tail]
         notes_msg = "\n".join(parts)
         pins_msg, pins_ev = self.pins_block(conv, c)
         self.store.add_segment(conv, seg + 1, c, hs[c - 1], notes_msg, kind)
@@ -1795,7 +1953,7 @@ class Manager:
             return None, None
         lines, used, dropped = [], 0, 0
         for pid, idx, text, _, _ in reversed(rows):
-            line = "- (messaggio %d) %s" % (idx + 1, text)
+            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, text)
             t = self.tc.count(line)
             if used + t > self.cfg.pins_max_tokens:
                 dropped += 1
@@ -1803,11 +1961,18 @@ class Manager:
             lines.append(line)
             used += t
         lines.reverse()
-        head = [PIN_HEAD, "Punti fissati dall'utente nella parte archiviata della conversazione: valgono ancora, "
-                "testuali."]
-        if dropped:
-            head.append("(avviso: %d punti fermi più vecchi oltre il tetto di %d token: cercali con %s)"
-                        % (dropped, self.cfg.pins_max_tokens, self.rn))
+        if self.lang == "it":
+            head = [PIN_HEAD, "Punti fissati dall'utente nella parte archiviata della conversazione: valgono ancora, "
+                    "testuali."]
+            if dropped:
+                head.append("(avviso: %d punti fermi più vecchi oltre il tetto di %d token: cercali con %s)"
+                            % (dropped, self.cfg.pins_max_tokens, self.rn))
+        else:
+            head = [PIN_HEAD_EN, "Points pinned by the user in the archived part of the conversation: they still "
+                    "apply, verbatim."]
+            if dropped:
+                head.append("(warning: %d older pinned points over the limit of %d tokens: search them with %s)"
+                            % (dropped, self.cfg.pins_max_tokens, self.rn))
         ev = self.journal.log("pins_block", conv=conv, count=len(lines), dropped=dropped, tokens=used,
                               over_limit=bool(dropped))
         return "\n".join(head + lines), ev
@@ -1824,8 +1989,11 @@ class Manager:
                 lo = mid
             else:
                 hi = mid - 1
-        return text[:lo] + ("\n[recall troncato per spazio nel contesto: chiedi un id preciso o usa offset; con id e "
-                            "query ricevi solo le righe che contengono la query]")
+        return text[:lo] + self.L(
+            "\n[recall troncato per spazio nel contesto: chiedi un id preciso o usa offset; con id e "
+            "query ricevi solo le righe che contengono la query]",
+            "\n[recall truncated for space in the context: ask for a specific id or use offset; with id and "
+            "query you get only the lines that contain the query]")
 
     def _recall_lines(self, rid, r, text, q, meta, head_fn) -> str:
         lines = text.splitlines()
@@ -1835,15 +2003,18 @@ class Manager:
         if not hit and terms:
             hit = [i for i, l in enumerate(lines) if all(t in l.lower() for t in terms)]
         if not hit:
-            return ("[recall:%s \u2014 nessuna riga contiene %r; il testo ha %d righe, %d caratteri: usa offset]"
+            return (self.L("[recall:%s \u2014 nessuna riga contiene %r; il testo ha %d righe, %d caratteri: usa offset]",
+                           "[recall:%s \u2014 no line contains %r; the text has %d lines, %d characters: use offset]")
                     % (rid, q, len(lines), len(text)))
         keep = sorted({j for i in hit for j in (i - 1, i, i + 1) if 0 <= j < len(lines)})
         starts, pos = [], 0
         for l in lines:
             starts.append(pos)
             pos += len(l) + 1
-        out = ["[recall:%s \u2014 messaggio %d (%s%s): %d righe su %d contengono %r (con una riga di contesto; "
-               "numero di riga e carattere iniziale; per il testo intorno usa offset)]"
+        out = [self.L("[recall:%s \u2014 messaggio %d (%s%s): %d righe su %d contengono %r (con una riga di contesto; "
+                      "numero di riga e carattere iniziale; per il testo intorno usa offset)]",
+                      "[recall:%s \u2014 message %d (%s%s): %d lines of %d contain %r (with one line of context; "
+                      "line number and starting character; for the surrounding text use offset)]")
                % (rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", len(hit), len(lines), q)]
         prev = None
         for j in keep:
@@ -1885,8 +2056,10 @@ class Manager:
         if rid:
             r = self.store.get(rid, conv) or self.store.get(rid)
             if r is None:
-                return ("recall: id %s non trovato nell'archivio (gli id validi sono quelli scritti dal gestore del "
-                        "contesto; prova con query o path)" % rid)
+                return self.L("recall: id %s non trovato nell'archivio (gli id validi sono quelli scritti dal gestore "
+                              "del contesto; prova con query o path)",
+                              "recall: id %s not found in the archive (valid ids are the ones written by the context "
+                              "manager; try query or path)") % rid
             text = r[5] or ""
             q = str(args.get("query") or "").strip()
             if q:
@@ -1896,33 +2069,39 @@ class Manager:
                 return self._recall_lines(rid, r, text, q, meta, head_fn)
             chunk = text[off:off + lim]
             chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
-            if chunk.endswith("usa offset]"):
-                chunk = chunk[:chunk.rfind("\n[recall troncato")]
+            if chunk.endswith("usa offset]") or chunk.endswith("use offset]"):
+                chunk = chunk[:max(chunk.rfind("\n[recall troncato"), chunk.rfind("\n[recall truncated"))]
             if meta is not None:
                 meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": off, "chars": len(chunk)})
-            head = "[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n" % (
+            head = self.L("[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n",
+                          "[recall:%s \u2014 message %d (%s%s), %d tokens, characters %d\u2013%d of %d]\n") % (
                 rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", r[6], off, off + len(chunk), len(text))
             if head_fn is not None:
                 head = head_fn(r, off, len(chunk), len(text))
             tail = "" if off + len(chunk) >= len(text) else \
-                "\n[continua: %s id=%s offset=%d]" % (self.rn, rid, off + len(chunk))
+                self.L("\n[continua: %s id=%s offset=%d]", "\n[continues: %s id=%s offset=%d]") % (
+                    self.rn, rid, off + len(chunk))
             return head + chunk + tail
         path = str(args.get("path") or "").strip()
         if path:
             ops = self.store.fileops(conv, path, max_idx=max_idx)
             if not ops:
-                return "recall: nessuna operazione registrata sul file %r" % path
-            out = ["[recall: storia del file %r, %d operazioni, dalla più vecchia; per lo stato attuale rileggilo]"
-                   % (path, len(ops))]
+                return self.L("recall: nessuna operazione registrata sul file %r",
+                              "recall: no operation recorded on the file %r") % path
+            out = [self.L("[recall: storia del file %r, %d operazioni, dalla più vecchia; per lo stato attuale "
+                          "rileggilo]", "[recall: history of the file %r, %d operations, oldest first; for the "
+                          "current state re-read it]") % (path, len(ops))]
             for k, (idx, op, p2, esito, ra, ro, head) in enumerate(ops):
-                out.append("- messaggio %d: %s %s \u2014 %s \u00b7 argomenti: id=%s \u00b7 risultato: id=%s \u00b7 %s"
-                           % (idx + 1, op, p2, esito, ra, ro, head))
+                out.append(self.L("- messaggio %d: %s %s \u2014 %s \u00b7 argomenti: id=%s \u00b7 risultato: id=%s "
+                                  "\u00b7 %s", "- message %d: %s %s \u2014 %s \u00b7 arguments: id=%s \u00b7 "
+                                  "result: id=%s \u00b7 %s")
+                           % (idx + 1, op, p2, outcome_text(esito, self.lang), ra, ro, head))
                 if meta is not None:
                     meta.append({"rid": ro, "idx": idx, "rank": k, "tokens": 0, "path": p2})
             return self.fit_tokens("\n".join(out), self.cfg.recall_max_tokens)
         q = str(args.get("query") or "").strip()
         if not q:
-            return "recall: serve id, path oppure query"
+            return self.L("recall: serve id, path oppure query", "recall: id, path or query is required")
         exact = self.store.search(conv, q, limit=6, max_idx=max_idx)
         fts = self.store.search_fts(conv, q, limit=12, max_idx=max_idx)
         hits, seen = [], set()
@@ -1931,26 +2110,29 @@ class Manager:
                 seen.add(h[0])
                 hits.append((h, h in exact))
         if not hits:
-            return "recall: nessun risultato per %r" % q
+            return self.L("recall: nessun risultato per %r", "recall: no results for %r") % q
         terms = [t.lower() for t in re.findall(r"\w+", q) if len(t) > 1]
-        out = ["[recall: %d risultati per %r (prima i testi che contengono la frase esatta, poi per pertinenza)]"
-               % (len(hits), q)]
+        out = [self.L("[recall: %d risultati per %r (prima i testi che contengono la frase esatta, poi per "
+                      "pertinenza)]", "[recall: %d results for %r (first the texts that contain the exact phrase, "
+                      "then by relevance)]") % (len(hits), q)]
         budget = self.cfg.recall_max_tokens - self.tc.count(out[0])
         for rank, ((rid2, idx, role, name, content, tokens), is_exact) in enumerate(hits):
             low = content.lower()
             p = low.find(q.lower()) if is_exact else min([x for x in (low.find(t) for t in terms) if x >= 0],
                                                          default=0)
             s = content[max(0, p - 400):p + len(q) + 1200]
-            block = "\n--- id=%s \u00b7 messaggio %d (%s%s) \u00b7 %d token%s\n%s" % (
-                rid2, idx + 1, role, (" " + name) if name and role == "tool" else "", tokens,
-                "" if len(s) >= len(content) else " \u00b7 estratto, testo intero con id", s)
+            block = "\n--- id=%s \u00b7 %s %d (%s%s) \u00b7 %d token%s%s\n%s" % (
+                rid2, self.L("messaggio", "message"), idx + 1, role, (" " + name) if name and role == "tool" else "",
+                tokens, self.L("", "s"), "" if len(s) >= len(content) else
+                self.L(" \u00b7 estratto, testo intero con id", " \u00b7 excerpt, full text with id"), s)
             t = self.tc.count(block)
             if t > budget:
                 if rank < 2 and budget > 300:
                     block = self.fit_tokens(block, budget)
                     t = budget
                 else:
-                    out.append("\n[altri %d risultati non mostrati: affina la query]" % (len(hits) - rank))
+                    out.append(self.L("\n[altri %d risultati non mostrati: affina la query]",
+                                      "\n[%d more results not shown: refine the query]") % (len(hits) - rank))
                     break
             out.append(block)
             budget -= t

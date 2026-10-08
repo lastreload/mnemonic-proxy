@@ -15,8 +15,8 @@ from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ctxproxy.core import AUTO_SUFFIX, OUT_PREFIX, RECEIPT_OPEN, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter  # noqa
-from ctxproxy.paging import (AUTO_HEAD, TOOLS_HEAD, TOOLS_NAME, ToolPager, query_terms, receipt_kind,  # noqa: E402
+from ctxproxy.core import AUTO_SUFFIX, OUT_PREFIX_EN as OUT_PREFIX, RECEIPT_OPEN, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter  # noqa
+from ctxproxy.paging import (AUTO_HEAD_EN as AUTO_HEAD, TOOLS_HEAD_EN as TOOLS_HEAD, TOOLS_NAME, ToolPager, query_terms, receipt_kind,  # noqa: E402
                              typed_receipt)
 from ctxproxy.render import render_pieces  # noqa: E402
 from ctxproxy.server import make_handler  # noqa: E402
@@ -134,7 +134,7 @@ class TestGuardProxy(Base):
             return {"role": "assistant", "content": "", "tool_calls": [
                 call("w1", "write", path="a.js", content="// " + OUT_RECEIPT_EX)]}
         if last.get("role") == "tool" and last.get("tool_call_id") == "w1":
-            assert "chiamata NON eseguita" in last["content"]
+            assert "call NOT executed" in last["content"]   # 0.3.1: new conversation -> English
             return {"role": "assistant", "content": "", "tool_calls": [call("r1", "read", path="a.js")]}
         return {"role": "assistant", "content": "ok"}
 
@@ -183,12 +183,12 @@ class TestReceiptsInManager(unittest.TestCase):
         p1 = mgr.prepare({"messages": msgs, "max_tokens": 100})
         ph = [m["content"] for m in p1.messages if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
         self.assertTrue(ph)
-        self.assertTrue(any("Ricevuta: test:" in x and "urto0" in x for x in ph), ph)
-        self.assertTrue(any("Ricevuta: lettura:" in x for x in ph), ph)
-        self.assertTrue(any("comando FALLITO: codice d'uscita 1" in x and "ReferenceError" in x for x in ph), ph)
+        self.assertTrue(any("Receipt: test:" in x and "urto0" in x for x in ph), ph)   # 0.3.1: English
+        self.assertTrue(any("Receipt: read:" in x for x in ph), ph)
+        self.assertTrue(any("command FAILED: exit code 1" in x and "ReferenceError" in x for x in ph), ph)
         for m in p1.messages:   # mai ricevute dove scrive il modello
             if m.get("role") == "assistant":
-                self.assertNotIn("Ricevuta", json.dumps(m))
+                self.assertNotIn("Receipt", json.dumps(m))
         p2 = mgr.prepare({"messages": msgs + [{"role": "assistant", "content": "ok"}, {"role": "user", "content": "e"}],
                           "max_tokens": 100})
         n = len(p1.messages)
@@ -199,7 +199,7 @@ class TestReceiptsInManager(unittest.TestCase):
         mgr = self.mk(typed_receipts=False)
         p = mgr.prepare({"messages": self.session(), "max_tokens": 100})
         ph = [m["content"] for m in p.messages if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
-        self.assertTrue(ph and all("Inizio:" in x for x in ph))
+        self.assertTrue(ph and all("Start:" in x for x in ph))   # 0.3.1: English
         self.tmp.cleanup()
 
 
@@ -227,13 +227,13 @@ class TestPager(unittest.TestCase):
     def test_result_and_loaded(self):
         pg = ToolPager(())
         _, cat = pg.split(PI_TOOLS)
-        out = pg.result(cat, ["todo", "bg_run"], set())
+        out = pg.result(cat, ["todo", "bg_run"], set(), lang="en")   # 0.3.1: English texts
         self.assertTrue(out.startswith(TOOLS_HEAD + "todo, bg_run]"))
         self.assertIn('"name": "todo"', out)
         phys = [{"role": "tool", "tool_call_id": "x", "content": out}]
         self.assertEqual(pg.loaded_in(phys), {"todo", "bg_run"})
-        out2 = pg.result(cat, ["todo"], {"todo"})
-        self.assertIn("Già caricati", out2)
+        out2 = pg.result(cat, ["todo"], {"todo"}, lang="en")
+        self.assertIn("Already loaded", out2)
         self.assertNotIn('"name": "todo"', out2)
 
 
@@ -262,7 +262,7 @@ class TestPagingProxy(Base):
             # chiamata diretta a uno strumento mai caricato
             return {"role": "assistant", "content": "", "tool_calls": [call("d1", "bg_logs", id="7")]}
         if last.get("role") == "tool" and last.get("tool_call_id") == "d1":
-            assert "NON è stata eseguita" in last["content"]
+            assert "was NOT executed" in last["content"]   # 0.3.1: English
             return {"role": "assistant", "content": "", "tool_calls": [call("d2", "bg_logs", id="7")]}
         return {"role": "assistant", "content": "ok"}
 

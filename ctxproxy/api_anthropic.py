@@ -70,13 +70,13 @@ def _text_of(blocks, where: str, allow_images: bool) -> str:
             out.append(b.get("text") or "")
         elif t in ("image", "document"):
             if not allow_images:
-                raise BadRequest("%s: blocchi '%s' non supportati da questo proxy (il motore riceve solo testo); "
-                                 "togli l'immagine/il documento dal messaggio" % (where, t))
+                raise BadRequest("%s: '%s' blocks are not supported by this proxy (the engine receives text only); "
+                                 "remove the image/document from the message" % (where, t))
             out.append(IMAGE_NOTE)
         elif t in ("search_result",):
             out.append(_text_of(b.get("content"), where, allow_images))
         else:
-            raise BadRequest("%s: tipo di blocco non supportato: %r" % (where, t))
+            raise BadRequest("%s: unsupported block type: %r" % (where, t))
     return "".join(out)
 
 
@@ -135,7 +135,7 @@ def to_chat_messages(system, messages: list) -> list[dict]:
                                   "function": {"name": b.get("name"),
                                                "arguments": json.dumps(b.get("input") or {}, ensure_ascii=False)}})
                 else:
-                    raise BadRequest("%s: tipo di blocco assistant non supportato: %r" % (where, t))
+                    raise BadRequest("%s: unsupported assistant block type: %r" % (where, t))
             am: dict = {"role": "assistant", "content": "".join(text)}
             if think:
                 am["reasoning_content"] = "".join(think)

@@ -210,7 +210,7 @@ def decode_block(blob: bytes) -> bytes:
         raise CorruptArchive("blocco troncato")
     magic, codec, ts, _lvl, raw_len = BLOCK_HDR.unpack_from(blob)
     if magic != BLOCK_MAGIC:
-        raise CorruptArchive("magic del blocco errato")
+        raise CorruptArchive("wrong block magic")
     body = memoryview(blob)[BLOCK_HDR.size:]
     if codec == CODEC_RAW:
         raw = bytes(body)
@@ -221,7 +221,7 @@ def decode_block(blob: bytes) -> bytes:
     else:
         raise CorruptArchive("codec sconosciuto %d" % codec)
     if len(raw) != raw_len:
-        raise CorruptArchive("lunghezza del blocco errata")
+        raise CorruptArchive("wrong block length")
     return raw
 
 
@@ -303,7 +303,7 @@ class KvArchive:
             with open(self.manifest_path(name), encoding="utf-8") as f:
                 m = json.load(f)
         except FileNotFoundError:
-            raise KvaError("nessun archivio per %r" % name) from None
+            raise KvaError("no archive for %r" % name) from None
         except ValueError as e:
             raise CorruptArchive("manifest illeggibile per %r: %s" % (name, e)) from None
         if m.get("version") != VERSION:
@@ -450,7 +450,7 @@ class KvArchive:
         try:
             vsha, vsize = self._verify_entries(entries)
             if vsha != man["sha256"] or vsize != size:
-                raise CorruptArchive("verifica fallita per %s: sha256 della ricostruzione diverso" % name)
+                raise CorruptArchive("verification failed for %s: sha256 of the reconstruction differs" % name)
             os.replace(tmp, mp)
             self._fsync_dir(os.path.dirname(mp))
         except BaseException:
@@ -481,11 +481,11 @@ class KvArchive:
             with open(self.block_path(h), "rb") as f:
                 blob = f.read()
         except FileNotFoundError:
-            raise MissingBlock("blocco %d mancante: %s (archivio incompleto, ricostruzione impossibile)"
+            raise MissingBlock("block %d missing: %s (incomplete archive, reconstruction impossible)"
                                % (idx, h)) from None
         raw = decode_block(blob)
         if len(raw) != ln:
-            raise CorruptArchive("blocco %d (%s): %d byte invece di %d" % (idx, h, len(raw), ln))
+            raise CorruptArchive("block %d (%s): %d bytes instead of %d" % (idx, h, len(raw), ln))
         return raw
 
     def _iter_raw(self, entries, check_hash: bool = True):

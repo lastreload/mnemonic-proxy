@@ -320,7 +320,8 @@ class TestMcp(unittest.TestCase):
         self.assertIn("Ho scritto", self.call("recall", {"id": "r00000000003"}))
         self.assertIn("src/game.js", self.call("recall", {"path": "src/game.js", "mode": "timeline"}) +
                       self.call("recall", {"query": "game.js"}))
-        self.assertIn("mappa della sessione", self.call("recall", {"mode": "tree"}))
+        # 0.3.1: the MCP server answers in English (Config.prompt_language default; its descriptions were already English)
+        self.assertIn("map of the session", self.call("recall", {"mode": "tree"}))
         self.assertIn("parser", self.call("recall", {"conversation": "convB", "query": "parser"}))
         self.assertIn("convB", self.call("recall", {"id": "rzzzzzzzzzzz"}), "con id: la conversazione del pezzo")
 

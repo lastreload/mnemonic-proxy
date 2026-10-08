@@ -47,11 +47,11 @@ def _parts_text(content, where: str, allow_images: bool) -> str:
             out.append(p.get("text") or p.get("refusal") or "")
         elif t in ("input_image", "input_file", "image_url"):
             if not allow_images:
-                raise BadRequest("%s: contenuti '%s' non supportati da questo proxy (il motore riceve solo testo)"
+                raise BadRequest("%s: '%s' content is not supported by this proxy (the engine receives text only)"
                                  % (where, t))
             out.append(IMAGE_NOTE)
         else:
-            raise BadRequest("%s: tipo di contenuto non supportato: %r" % (where, t))
+            raise BadRequest("%s: unsupported content type: %r" % (where, t))
     return "".join(out)
 
 
@@ -127,7 +127,7 @@ def to_chat_messages(instructions, items, custom_names=()) -> list[dict]:
                                                 else json.dumps(o, ensure_ascii=False))
             out.append({"role": "tool", "tool_call_id": it.get("call_id"), "content": txt})
         elif t in ("item_reference",):
-            raise BadRequest("%s: item_reference non supportato (il proxy non conserva stato: rimanda la storia)"
+            raise BadRequest("%s: item_reference not supported (the proxy keeps no state: resend the history)"
                              % where)
         else:
             # web_search_call, local_shell_call, compaction… : non rappresentabili per il motore, ignorati
@@ -157,7 +157,7 @@ def to_chat_tools(tools) -> tuple[list | None, set]:
 
 def to_chat_request(r: dict) -> tuple[dict, set]:
     if r.get("previous_response_id"):
-        raise BadRequest("previous_response_id non supportato: il proxy non conserva stato, rimanda tutta la storia")
+        raise BadRequest("previous_response_id not supported: the proxy keeps no state, resend the whole history")
     if r.get("input") is None:
         raise BadRequest("input: campo obbligatorio")
     tools, custom = to_chat_tools(r.get("tools"))

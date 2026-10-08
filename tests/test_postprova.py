@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ctxproxy.core import (DROP_SUFFIX, OUT_PREFIX, RECEIPT_OPEN, PIN_HEAD, Config, Journal, Manager, Store,  # noqa: E402
+from ctxproxy.core import (DROP_SUFFIX, OUT_PREFIX, RECEIPT_OPEN, PIN_HEAD_EN, Config, Journal, Manager, Store,  # noqa: E402
                            TokenCounter, call_note_text, chain, is_disposable, outcome, pin_texts)
 from ctxproxy.render import render_pieces  # noqa: E402
 
@@ -90,15 +90,15 @@ class TestManager(unittest.TestCase):
         ph = [m for m in p.messages if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
         self.assertTrue(ph)
         for m in ph:
-            self.assertRegex(m["content"], r"uscita di (read src/f\d\.js|bash `node test\.js)")
-            self.assertRegex(m["content"], r"Inizio: «|Ricevuta: ")
+            self.assertRegex(m["content"], r"output of (read src/f\d\.js|bash `node test\.js)")   # 0.3.1: English
+            self.assertRegex(m["content"], r"Start: «|Receipt: ")
         for m in p.messages:
             if m.get("role") == "assistant":
                 # mai segnaposti dove scrive il modello
-                self.assertNotIn("omess", m.get("reasoning_content") or "")
-                self.assertNotIn("gestore del contesto", m.get("content") or "")
+                self.assertNotIn("omitted", m.get("reasoning_content") or "")
+                self.assertNotIn("context manager", m.get("content") or "")
                 for c in m.get("tool_calls") or []:
-                    self.assertNotIn("gestore del contesto", c["function"]["arguments"])
+                    self.assertNotIn("context manager", c["function"]["arguments"])
         # il punto fermo del primo messaggio è registrato e il messaggio non è mai nascosto
         self.assertEqual([r[2] for r in mgr.store.pins(p.conv)], ["usa solo canvas, niente librerie"])
         tmp.cleanup()
@@ -127,12 +127,12 @@ class TestManager(unittest.TestCase):
         self.assertIn("ZETA5", out)
         out = mgr.recall(p.conv, {"path": "src/f0.js"})
         self.assertIn("write src/f0.js", out)
-        self.assertIn("riuscito", out)
+        self.assertIn("succeeded", out)   # 0.3.1: English
         self.assertIn("id=a", out)
         # filtro di catena: niente risultati dalla domanda corrente in poi
-        self.assertIn("nessun risultato", mgr.recall(p.conv, {"query": "ZETA11"}, max_idx=3))
+        self.assertIn("no results", mgr.recall(p.conv, {"query": "ZETA11"}, max_idx=3))
         # id di un'altra conversazione: non trovato prima di cercare nella propria
-        self.assertIn("non trovato", mgr.recall(p.conv, {"id": "r0000000000"}))
+        self.assertIn("not found", mgr.recall(p.conv, {"id": "r0000000000"}))
         tmp.cleanup()
 
     def test_reread_and_failed_edit_events(self):
@@ -162,7 +162,7 @@ class TestManager(unittest.TestCase):
         ev = [e for e in p.events if e["event"] == "mask"]
         self.assertTrue(any(x["tipo"] == "scambio" for e in ev for x in e["pieces"]))
         u = [m for m in p.messages if m.get("role") == "user" and "avvia il server" in m["content"]][0]
-        self.assertIn("usa e getta", u["content"])
+        self.assertIn("disposable", u["content"])   # 0.3.1: English
         self.assertIn("bash `node tools/serve.mjs 8123`: ", u["content"])
         self.assertFalse(any(m.get("tool_call_id") == "s1" for m in p.messages))
         self.assertTrue(mgr.store.masks_for([chain(msgs, TOOLS)[1] + DROP_SUFFIX]))
@@ -174,12 +174,12 @@ class TestManager(unittest.TestCase):
         self.prep(mgr, msgs)
         conv = mgr.store.find_conv(chain(msgs, TOOLS))[0]
         txt, ev = mgr.pins_block(conv, cut=10)
-        self.assertTrue(txt.startswith(PIN_HEAD))
+        self.assertTrue(txt.startswith(PIN_HEAD_EN))   # 0.3.1: English
         self.assertIn("usa solo canvas, niente librerie", txt)
         mgr.cfg.pins_max_tokens = 5
         txt, ev = mgr.pins_block(conv, cut=10)
         self.assertTrue(ev["over_limit"])
-        self.assertIn("avviso", txt)
+        self.assertIn("warning", txt)
         tmp.cleanup()
 
 

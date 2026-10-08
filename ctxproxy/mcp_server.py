@@ -102,7 +102,7 @@ def open_readonly(path: str) -> Store:
     st.lock = threading.RLock()
     names = {r[0] for r in st.db.execute("SELECT name FROM sqlite_master")}
     if "archive" not in names:
-        raise ValueError("%s non è un archivio del proxy (tabella archive assente)" % path)
+        raise ValueError("%s is not a proxy archive (no archive table)" % path)
     st.fts = "archive_fts" in names
     for tbl, ddl in (("fileops", "CREATE TEMP TABLE fileops(conv TEXT, idx INT, call_id TEXT, op TEXT, path TEXT, "
                                  "outcome TEXT, rid_args TEXT, rid_out TEXT, head TEXT)"),

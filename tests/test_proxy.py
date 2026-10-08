@@ -11,7 +11,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from ctxproxy.core import (NOTES_MARK, OUT_PREFIX, RECEIPT_OPEN, RECALL_NAME, Config, Journal, Manager, Store,  # noqa: E402
+from ctxproxy.core import (NOTES_MARK_EN as NOTES_MARK, OUT_PREFIX_EN as OUT_PREFIX, RECEIPT_OPEN, RECALL_NAME, Config, Journal, Manager, Store,  # noqa: E402
                            TokenCounter, chain, is_human_user)
 from ctxproxy.server import Proxy, make_handler  # noqa: E402
 from ctxproxy.upstream import Upstream  # noqa: E402
@@ -157,7 +157,7 @@ class TestMasking(Base):
         self.assertGreater(len(ph), 5)
         # provenienza: comando di origine + inizio vero dell'uscita + istruzione
         self.assertIn("bash `", ph[0]["content"])
-        self.assertRegex(ph[0]["content"], r"Inizio:|Ricevuta:")
+        self.assertRegex(ph[0]["content"], r"Start:|Receipt:")   # 0.3.1: English
         self.assertIn("recall id=", ph[0]["content"])
         self.assertFalse(last[-1]["content"].startswith("[uscita"))
         assert_tool_pairs(self, last)
@@ -175,7 +175,7 @@ class TestRecall(Base):
     def policy(self, body):
         msgs = body["messages"]
         last = msgs[-1]
-        if last.get("role") == "tool" and last["content"].startswith("recall: limite"):
+        if last.get("role") == "tool" and last["content"].startswith("recall: search limit"):
             return {"role": "assistant", "content": "rispondo con quello che ho"}
         if any(m.get("role") == "user" and "insistente" in str(m.get("content")) for m in msgs[-12:]):
             return {"role": "assistant", "content": "", "tool_calls": [
@@ -249,8 +249,8 @@ class TestRecall(Base):
         from ctxproxy.core import rid_for
         rid = rid_for(3, h[3])
         out = mgr.recall(p.conv, {"id": rid})
-        self.assertIn("[continua: recall id=%s offset=100]" % rid, out)
-        self.assertIn("non trovato", mgr.recall(p.conv, {"id": "rnonesiste"}))
+        self.assertIn("[continues: recall id=%s offset=100]" % rid, out)   # 0.3.1: English
+        self.assertIn("not found", mgr.recall(p.conv, {"id": "rnonesiste"}))
         self.assertNotIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
 
 
@@ -283,7 +283,7 @@ class TestSegments(Base):
                 self.assertEqual(self.eng.slots[0][0], "save")
                 b = reqs[2]["messages"]
                 self.assertEqual(b[0], SYSTEM)
-                self.assertIn("## Note di passaggio", b[1]["content"])
+                self.assertIn("## Handoff notes", b[1]["content"])   # 0.3.1: English
                 self.assertIn("creare snake", b[1]["content"])
                 self.assertIn("recall:", b[1]["content"])  # indice dell'archivio
                 assert_tool_pairs(self, b)
@@ -393,17 +393,17 @@ class TestReasoningArgsMasking(Base):
         # chiavi piccole e nascondono solo i valori voluminosi
         th = [m for m in last if m.get("role") == "assistant" and m.get("tool_calls") and
               m.get("reasoning_content") == ""]
-        self.assertFalse([m for m in last if "[ragionamento omesso:" in str(m.get("reasoning_content", ""))])
+        self.assertFalse([m for m in last if "[reasoning omitted:" in str(m.get("reasoning_content", ""))])
         ar = [m for m in last if m.get("role") == "assistant" and m.get("tool_calls") and
               "\u2026" in m["tool_calls"][0]["function"]["arguments"]]
         self.assertTrue(th and ar)
         # nessuna formula imitabile negli argomenti; la nota con recall sta nel risultato dello strumento
-        self.assertNotIn("omess", ar[0]["tool_calls"][0]["function"]["arguments"])
+        self.assertNotIn("omitted", ar[0]["tool_calls"][0]["function"]["arguments"])
         # la coppia chiamata/risultato resta integra (id e nome invariati)
         self.assertEqual(ar[0]["tool_calls"][0]["id"], "w1")
         self.assertEqual(ar[0]["tool_calls"][0]["function"]["name"], "bash")
         res = [m for m in last if m.get("role") == "tool" and m.get("tool_call_id") == "w1"][0]
-        self.assertIn("nota del gestore del contesto", res["content"])
+        self.assertIn("context manager note", res["content"])   # 0.3.1: English
         # recall esatto degli argomenti originali e del ragionamento (archivio)
         rid = res["content"].split("recall id=")[1].split(".")[0]
         conv = self.events("request")[-1]["conv"]

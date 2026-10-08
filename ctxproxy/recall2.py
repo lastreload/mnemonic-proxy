@@ -20,6 +20,8 @@ import json
 import re
 import sqlite3
 
+from .lang import outcome_text
+
 P_SCHEMA = """
 CREATE TABLE IF NOT EXISTS passages(pid INTEGER PRIMARY KEY, rid TEXT, conv TEXT, idx INT, role TEXT, off INT,
     len INT);
@@ -264,6 +266,8 @@ def seg_of(cuts: list[int], idx: int) -> int:
 
 ROLE_IT = {"tool": "uscita di strumento", "assistant-reasoning": "ragionamento", "assistant-tool-args":
            "argomenti di chiamata", "user": "utente", "assistant": "risposta", "system": "sistema"}
+ROLE_EN = {"tool": "tool output", "assistant-reasoning": "reasoning", "assistant-tool-args": "call arguments",
+           "user": "user", "assistant": "answer", "system": "system"}
 
 
 class Recall2:
@@ -280,36 +284,55 @@ class Recall2:
         """Nome dello strumento di recall nella conversazione corrente (per le indicazioni nei risultati)."""
         return getattr(self.mgr, "rn", None) or "recall"
 
+    @property
+    def en(self) -> bool:
+        """Conversazione corrente in inglese (0.3.1)."""
+        return getattr(self.mgr, "lang", "it") != "it"
+
+    def L(self, it: str, en: str) -> str:
+        return en if self.en else it
+
+    def role(self, role: str) -> str:
+        return (ROLE_EN if self.en else ROLE_IT).get(role, role)
+
     def _row(self, rid, conv):
         r = self.st.get(rid, conv) or self.st.get(rid)
         return r  # (rid, conv, idx, role, name, content, tokens)
 
     def head(self, rid, idx, role, tokens, conv, cuts, extra="", strong=None, span=None, total=None):
         by_out, _ = self.sx.calls(conv)
-        bits = ["id=%s" % rid, "messaggio %d" % (idx + 1), "segmento %d" % seg_of(cuts, idx), ROLE_IT.get(role, role)]
+        if self.en:
+            w = dict(msg="message %d", seg="segment %d", tool="tool %s", file="file %s", cmd="command %s",
+                     call="call id=%s (%s)", calls="calls %s", tok="%d tokens", chars="characters %d\u2013%d of %d",
+                     strong="strong", partial="partial")
+        else:
+            w = dict(msg="messaggio %d", seg="segmento %d", tool="strumento %s", file="file %s", cmd="comando %s",
+                     call="chiamata id=%s (%s)", calls="chiamate %s", tok="%d token", chars="caratteri %d\u2013%d di %d",
+                     strong="forte", partial="parziale")
+        bits = ["id=%s" % rid, w["msg"] % (idx + 1), w["seg"] % seg_of(cuts, idx), self.role(role)]
         info = by_out.get(rid)
         if role == "tool" and info:
             if info["name"]:
-                bits.append("strumento %s" % info["name"])
+                bits.append(w["tool"] % info["name"])
             if info["path"]:
-                bits.append("file %s" % info["path"])
+                bits.append(w["file"] % info["path"])
             elif info["cmd"]:
-                bits.append("comando %s" % _short(info["cmd"], 70))
+                bits.append(w["cmd"] % _short(info["cmd"], 70))
             if info["args_rid"]:
-                bits.append("chiamata id=%s (%s)" % (info["args_rid"], info["link"]))
+                bits.append(w["call"] % (info["args_rid"], info["link"]))
         elif role == "assistant-tool-args":
             row = self._row(rid, conv)
             names = [ln.split(" ", 1)[0] for ln in (row[5] if row else "").split("\n") if ln.strip()]
             if names:
-                bits.append("chiamate %s" % ",".join(names[:6]))
+                bits.append(w["calls"] % ",".join(names[:6]))
             paths = re.findall(r'"(?:path|file_path)"\s*:\s*"([^"]+)"', row[5] if row else "")
             if paths:
-                bits.append("file %s" % ",".join(dict.fromkeys(paths[:4])))
-        bits.append("%d token" % (tokens or 0))
+                bits.append(w["file"] % ",".join(dict.fromkeys(paths[:4])))
+        bits.append(w["tok"] % (tokens or 0))
         if span and total:
-            bits.append("caratteri %d\u2013%d di %d" % (span[0], span[1], total))
+            bits.append(w["chars"] % (span[0], span[1], total))
         if strong is not None:
-            bits.append("forte" if strong else "parziale")
+            bits.append(w["strong"] if strong else w["partial"])
         if extra:
             bits.append(extra)
         return "--- " + " \u00b7 ".join(bits)
@@ -445,8 +468,9 @@ class Recall2:
             qs = [str(args.get("query")).strip()] + [x for x in qs if x != str(args.get("query")).strip()]
         qs = qs[:6]
         if not qs:
-            return ("recall: serve id, path, query%s oppure mode=tree" %
-                    (" o queries" if getattr(self.cfg, "recall_multi", False) else ""))
+            return (self.L("recall: serve id, path, query%s oppure mode=tree", "recall: id, path, query%s or mode=tree "
+                           "is required") %
+                    (self.L(" o queries", " or queries") if getattr(self.cfg, "recall_multi", False) else ""))
         roles, lo, hi, cuts = self._filters(args, conv)
         hits, terms, stats = self.search_many(conv, qs, max_idx, roles, lo, hi)
         if not hits:
@@ -465,14 +489,18 @@ class Recall2:
     def render(self, conv, hits, qs, terms, stats, cuts, meta, by_time=False, limit=8):
         n_strong = sum(h["strong"] for h in hits)
         if len(qs) > 1:
-            top = "[recall: %d risultati per %d varianti (%s); %d forti]" % (
+            top = self.L("[recall: %d risultati per %d varianti (%s); %d forti]",
+                         "[recall: %d results for %d variants (%s); %d strong]") % (
                 len(hits), len(qs), "; ".join("%r: %d" % (q, n) for q, n, _ in stats), n_strong)
         else:
-            top = "[recall: %d risultati per %r; %d forti (tutte le parole nello stesso passaggio)]" % (
+            top = self.L("[recall: %d risultati per %r; %d forti (tutte le parole nello stesso passaggio)]",
+                         "[recall: %d results for %r; %d strong (all words in the same passage)]") % (
                 len(hits), qs[0], n_strong)
         if not n_strong:
-            top += ("\n[nessun pezzo contiene tutte le parole: risultati PARZIALI, verificali prima di usarli; "
-                    "prova parole diverse o mode=timeline sul file]")
+            top += self.L("\n[nessun pezzo contiene tutte le parole: risultati PARZIALI, verificali prima di usarli; "
+                          "prova parole diverse o mode=timeline sul file]",
+                          "\n[no piece contains all the words: PARTIAL results, check them before using them; "
+                          "try different words or mode=timeline on the file]")
         budget = int(getattr(self.cfg, "recall_struct_max_tokens", 3500))
         out, used = [top], self.tc.count(top)
         shown, seen_txt, dups = [], {}, {}
@@ -495,7 +523,8 @@ class Recall2:
         for rank, (h, r, a, b, s) in enumerate(shown):
             extra = ""
             if dups.get(h["rid"]):
-                extra = "stesso testo anche nei messaggi %s" % ",".join(map(str, dups[h["rid"]][:6]))
+                extra = self.L("stesso testo anche nei messaggi %s", "same text also in messages %s") % \
+                    ",".join(map(str, dups[h["rid"]][:6]))
             block = "\n%s\n%s" % (self.head(r[0], r[2], r[3], r[6], conv, cuts, extra, h["strong"], (a, b),
                                             len(r[5] or "")), s)
             t = self.tc.count(block)
@@ -503,8 +532,9 @@ class Recall2:
                 if rank < 2 and budget - used > 200:
                     block, t = self.fit(block, budget - used), budget - used
                 else:
-                    out.append("\n[altri %d risultati non mostrati: affina la query o usa i filtri role/seg/from/to]"
-                               % (len(shown) - rank))
+                    out.append(self.L("\n[altri %d risultati non mostrati: affina la query o usa i filtri "
+                                      "role/seg/from/to]", "\n[%d more results not shown: refine the query or use the "
+                                      "role/seg/from/to filters]") % (len(shown) - rank))
                     break
             out.append(block)
             used += t
@@ -512,7 +542,7 @@ class Recall2:
                 meta.append({"rid": r[0], "idx": r[2], "rank": rank, "tokens": r[6], "chars": b - a,
                              "strong": h["strong"]})
         if len(shown) > 1 and not by_time:
-            out.append("\n[in ordine di messaggio: %s]" % ", ".join(
+            out.append(self.L("\n[in ordine di messaggio: %s]", "\n[in message order: %s]") % ", ".join(
                 "%d%s" % (x[1][2] + 1, "" if x[0]["strong"] else "?") for x in sorted(shown, key=lambda x: x[1][2])))
         return "\n".join(out)
 
@@ -527,6 +557,20 @@ class Recall2:
             for p, in self.st.db.execute("SELECT path FROM fileops WHERE conv=? AND idx<? AND op IN ('write','edit') "
                                          "GROUP BY path ORDER BY count(*) DESC LIMIT 6", (conv, max_idx)):
                 files.append(p.rsplit("/", 2)[-2:] and "/".join(p.rsplit("/", 2)[-2:]))
+        if self.en:
+            s = ["recall: no results for %s." % ", ".join(repr(q) for q in qs), "Suggestions:"]
+            if with_hits:
+                s.append("- words with results on their own: %s; without: %s" % (", ".join(with_hits),
+                                                                                  ", ".join(without) or "-"))
+            else:
+                s.append("- none of these words appears: try synonyms, another language or the names used in the "
+                         "code")
+            if files:
+                s.append("- modified files: %s \u2192 %s path=<file> mode=timeline (or mode=first for the "
+                         "first write)" % (", ".join(files), self.rn))
+            s.append("- map of the session by turns: %s mode=tree" % self.rn)
+            s.append("If the information is not there, say so: do not reconstruct it.")
+            return "\n".join(s)
         s = ["recall: nessun risultato per %s." % ", ".join(repr(q) for q in qs), "Suggerimenti:"]
         if with_hits:
             s.append("- parole con risultati da sole: %s; senza: %s" % (", ".join(with_hits),
@@ -545,7 +589,9 @@ class Recall2:
     def file(self, conv, path, mode, args, max_idx, meta) -> str:
         ops = self.st.fileops(conv, path, max_idx=max_idx)
         if not ops:
-            return "recall: nessuna operazione registrata sul file %r (prova query=%r)" % (path, path.rsplit("/", 1)[-1])
+            return self.L("recall: nessuna operazione registrata sul file %r (prova query=%r)",
+                          "recall: no operation recorded on the file %r (try query=%r)") % (
+                path, path.rsplit("/", 1)[-1])
         cuts = seg_bounds(self.st, conv)
         q = str(args.get("query") or "").strip()
         flex = bool(getattr(self.cfg, "recall_flex", False))
@@ -557,15 +603,21 @@ class Recall2:
             rarg = self._row(ra, conv)
             if rarg:
                 idx = rarg[2]            # il registro file usa l'indice dell'uscita: il turno è quello degli argomenti
-            out = ["[recall: PRIMA scrittura di %r: messaggio %d (segmento %d), %s, esito %s. Collegamenti: argomenti "
-                   "id=%s e uscita id=%s (registrati, tool_call_id); ragionamento dello stesso messaggio id=%s "
-                   "(stesso turno: ciò che è SCRITTO negli argomenti vale più di ciò che è CONSIDERATO nel "
-                   "ragionamento)]" % (p2, idx + 1, seg_of(cuts, idx), op, esito, ra, ro, "t?")]
+            out = [self.L("[recall: PRIMA scrittura di %r: messaggio %d (segmento %d), %s, esito %s. Collegamenti: "
+                          "argomenti id=%s e uscita id=%s (registrati, tool_call_id); ragionamento dello stesso "
+                          "messaggio id=%s (stesso turno: ciò che è SCRITTO negli argomenti vale più di ciò che è "
+                          "CONSIDERATO nel ragionamento)]",
+                          "[recall: FIRST write of %r: message %d (segment %d), %s, outcome %s. Links: arguments "
+                          "id=%s and output id=%s (recorded, tool_call_id); reasoning of the same message id=%s "
+                          "(same turn: what is WRITTEN in the arguments counts more than what is CONSIDERED in the "
+                          "reasoning)]")
+                   % (p2, idx + 1, seg_of(cuts, idx), op, outcome_text(esito, "en" if self.en else "it"), ra, ro,
+                      "t?")]
             # ragionamento dello stesso messaggio
             with self.st.lock:
                 tr = self.st.db.execute("SELECT rid FROM archive WHERE conv=? AND idx=? AND role='assistant-reasoning'",
                                         (conv, idx)).fetchone()
-            out[0] = out[0].replace("id=t?", "id=%s" % tr[0] if tr else "(nessuno)")
+            out[0] = out[0].replace("id=t?", "id=%s" % tr[0] if tr else self.L("(nessuno)", "(none)"))
             used = self.tc.count(out[0])
             for rid, role in ((ra, "assistant-tool-args"), (tr[0] if tr else None, "assistant-reasoning")):
                 if not rid:
@@ -609,12 +661,15 @@ class Recall2:
                     if used >= budget:
                         break
             if q and len(out) == 1:
-                out.append("\n(nessun passaggio con %r nella prima scrittura né nel suo ragionamento: usa "
-                           "mode=timeline con query)" % q)
+                out.append(self.L("\n(nessun passaggio con %r nella prima scrittura né nel suo ragionamento: usa "
+                                  "mode=timeline con query)", "\n(no passage with %r in the first write nor in its "
+                                  "reasoning: use mode=timeline with query)") % q)
             return "\n".join(out)
         # timeline
-        out = ["[recall: cronologia di %r: %d operazioni (%d scritture/modifiche), in ordine; collegamenti "
-               "argomenti/uscita registrati (tool_call_id). Per lo stato attuale rileggi il file]" % (
+        out = [self.L("[recall: cronologia di %r: %d operazioni (%d scritture/modifiche), in ordine; collegamenti "
+                      "argomenti/uscita registrati (tool_call_id). Per lo stato attuale rileggi il file]",
+                      "[recall: timeline of %r: %d operations (%d writes/edits), in order; arguments/output links "
+                      "recorded (tool_call_id). For the current state re-read the file]") % (
                    path, len(ops), len(writes))]
         terms = []
         hits_by_rid = {}
@@ -631,13 +686,15 @@ class Recall2:
         first_w = next((o[0] for o in ops if o[1] in ("write", "create")), None)
         skipped = 0
         for k, (idx, op, p2, esito, ra, ro, hd) in enumerate(ops):
-            tag = " [PRIMA SCRITTURA]" if idx == first_w and op in ("write", "create") else ""
+            tag = self.L(" [PRIMA SCRITTURA]", " [FIRST WRITE]") if idx == first_w and op in ("write", "create") \
+                else ""
             hit_rid = ra if ra in hits_by_rid else (ro if ro in hits_by_rid else None)
             if q and not hit_rid and op == "read":
                 skipped += 1
                 continue
-            line = "- messaggio %d (segmento %d): %s%s \u2014 %s \u00b7 argomenti id=%s \u00b7 uscita id=%s" % (
-                idx + 1, seg_of(cuts, idx), op, tag, esito, ra, ro)
+            line = self.L("- messaggio %d (segmento %d): %s%s \u2014 %s \u00b7 argomenti id=%s \u00b7 uscita id=%s",
+                          "- message %d (segment %d): %s%s \u2014 %s \u00b7 arguments id=%s \u00b7 output id=%s") % (
+                idx + 1, seg_of(cuts, idx), op, tag, outcome_text(esito, "en" if self.en else "it"), ra, ro)
             if op in ("read",) and not q:
                 line += " \u00b7 " + _short(hd, 60)
             snippet = ""
@@ -653,27 +710,29 @@ class Recall2:
                 if r:
                     snippet = "\n    \u2502 " + _short(_edit_summary(r[5] or ""), 260)
             elif q:
-                line += " \u00b7 (senza %r)" % q
+                line += self.L(" \u00b7 (senza %r)", " \u00b7 (without %r)") % q
             if meta is not None and not snippet:
                 meta.append({"rid": ro, "idx": idx, "rank": k, "tokens": 0, "path": p2})
             t = self.tc.count(line + snippet)
             if used + t > budget:
-                out.append("[altre %d operazioni non mostrate: usa from/to (numeri di messaggio) o query]" %
+                out.append(self.L("[altre %d operazioni non mostrate: usa from/to (numeri di messaggio) o query]",
+                                  "[%d more operations not shown: use from/to (message numbers) or query]") %
                            (len(ops) - k))
                 break
             out.append(line + snippet)
             used += t
         if skipped:
-            out.append("[%d letture senza %r omesse]" % (skipped, q))
+            out.append(self.L("[%d letture senza %r omesse]", "[%d reads without %r omitted]") % (skipped, q))
         if q and not hits_by_rid:
-            out.append("(nessuna operazione su questo file contiene tutte le parole di %r)" % q)
+            out.append(self.L("(nessuna operazione su questo file contiene tutte le parole di %r)",
+                              "(no operation on this file contains all the words of %r)") % q)
         return "\n".join(out)
 
     # ------------------------------------------------------------ attorno a un id
     def around(self, conv, rid, mode, args, max_idx, meta) -> str:
         r = self._row(rid, conv)
         if not r:
-            return "recall: id %s non trovato" % rid
+            return self.L("recall: id %s non trovato", "recall: id %s not found") % rid
         conv = r[1]
         cuts = seg_bounds(self.st, conv)
         idx = r[2]
@@ -682,12 +741,15 @@ class Recall2:
             outs = by_args.get(rid, [])
             if r[3] == "tool":
                 info = by_out.get(rid) or {}
-                return ("[recall: l'uscita id=%s viene dalla chiamata id=%s del messaggio %s (%s)] -> %s "
-                        "id=%s" % (rid, info.get("args_rid"), (info.get("call_idx") or 0) + 1, info.get("link") or
-                                   "non collegata", self.rn, info.get("args_rid")))
+                return (self.L("[recall: l'uscita id=%s viene dalla chiamata id=%s del messaggio %s (%s)] -> %s id=%s",
+                               "[recall: output id=%s comes from call id=%s of message %s (%s)] -> %s id=%s")
+                        % (rid, info.get("args_rid"), (info.get("call_idx") or 0) + 1, info.get("link") or
+                           self.L("non collegata", "not linked"), self.rn, info.get("args_rid")))
             if not outs:
-                return "recall: nessuna uscita collegata agli argomenti id=%s" % rid
-            lines = ["[recall: uscite delle chiamate id=%s (messaggio %d)]" % (rid, idx + 1)]
+                return self.L("recall: nessuna uscita collegata agli argomenti id=%s",
+                              "recall: no output linked to arguments id=%s") % rid
+            lines = [self.L("[recall: uscite delle chiamate id=%s (messaggio %d)]",
+                            "[recall: outputs of calls id=%s (message %d)]") % (rid, idx + 1)]
             for o in outs:
                 ro = self._row(o, conv)
                 if ro:
@@ -705,11 +767,13 @@ class Recall2:
                 tr = self.st.db.execute("SELECT rid, idx, role, content, tokens FROM archive WHERE conv=? AND idx=? "
                                         "AND role=?", (conv, src_idx, want)).fetchone() if src_idx is not None else None
             if not tr:
-                return "recall: nessun %s nello stesso messaggio di id=%s" % (ROLE_IT[want], rid)
+                return self.L("recall: nessun %s nello stesso messaggio di id=%s",
+                              "recall: no %s in the same message as id=%s") % (self.role(want), rid)
             if meta is not None:
                 meta.append({"rid": tr[0], "idx": tr[1], "rank": 0, "tokens": tr[4]})
-            return self.fit("[recall: %s dello stesso messaggio %d (collegamento di protocollo: stesso turno)]\n%s\n%s"
-                            % (ROLE_IT[want], tr[1] + 1, self.head(tr[0], tr[1], tr[2], tr[4], conv, cuts), tr[3]),
+            return self.fit(self.L("[recall: %s dello stesso messaggio %d (collegamento di protocollo: stesso turno)]"
+                                   "\n%s\n%s", "[recall: %s of the same message %d (protocol link: same turn)]\n%s\n%s")
+                            % (self.role(want), tr[1] + 1, self.head(tr[0], tr[1], tr[2], tr[4], conv, cuts), tr[3]),
                             int(getattr(self.cfg, "recall_struct_max_tokens", 3500)))
         # vicini
         try:
@@ -721,8 +785,9 @@ class Recall2:
                                       "? AND ? AND idx < ? ORDER BY idx, CASE role WHEN 'assistant-reasoning' THEN 0 "
                                       "WHEN 'assistant' THEN 1 WHEN 'assistant-tool-args' THEN 2 ELSE 3 END",
                                       (conv, idx - n, idx + n, max_idx)).fetchall()
-        lines = ["[recall: messaggi vicini a id=%s (messaggio %d, \u00b1%d): adiacenza, NON un collegamento causale]"
-                 % (rid, idx + 1, n)]
+        lines = [self.L("[recall: messaggi vicini a id=%s (messaggio %d, \u00b1%d): adiacenza, NON un collegamento "
+                        "causale]", "[recall: messages near id=%s (message %d, \u00b1%d): adjacency, NOT a causal "
+                        "link]") % (rid, idx + 1, n)]
         for rr, i2, role, content, tok in rows:
             mark = " \u25c0" if rr == rid else ""
             lines.append("- %s%s: %s" % (self.head(rr, i2, role, tok, conv, cuts)[4:], mark,
@@ -751,8 +816,10 @@ class Recall2:
         starts = [i for i, _ in human] or [lo]
         if starts[0] > lo:
             starts = [lo] + starts
-        out = ["[recall: mappa della sessione per segmento e turno (messaggi %d\u2013%d); dati dell'archivio, nessun "
-               "riassunto. Dettagli: %s from=<msg> to=<msg> query=..., o path=<file> mode=timeline]"
+        out = [self.L("[recall: mappa della sessione per segmento e turno (messaggi %d\u2013%d); dati dell'archivio, "
+                      "nessun riassunto. Dettagli: %s from=<msg> to=<msg> query=..., o path=<file> mode=timeline]",
+                      "[recall: map of the session by segment and turn (messages %d\u2013%d); archive data, no "
+                      "summary. Details: %s from=<msg> to=<msg> query=..., or path=<file> mode=timeline]")
                % (lo + 1, hi + 1, self.rn)]
         cur_seg = None
         from .core import outcome
@@ -760,7 +827,7 @@ class Recall2:
             e = (starts[k + 1] - 1) if k + 1 < len(starts) else hi
             sg = seg_of(cuts, s)
             if sg != cur_seg:
-                out.append("segmento %d" % sg)
+                out.append(self.L("segmento %d", "segment %d") % sg)
                 cur_seg = sg
             utext = next((c for i, c in human if i == s), "")
             files = {}
@@ -781,6 +848,18 @@ class Recall2:
                             nfail += 1
                             if len(fails) < 2:
                                 fails.append(i + 1)
+            if self.en:
+                line = "  turn msg %d\u2013%d" % (s + 1, e + 1)
+                if utext:
+                    line += " \u00b7 user: %s" % _short(utext, 90)
+                if files:
+                    line += " \u00b7 files: %s" % ", ".join("%s\u00d7%d%s" % (p, n, " (%d failed)" % f if f else "")
+                                                            for p, (n, f) in list(files.items())[:6])
+                if ncmd:
+                    line += " \u00b7 commands %d (failed %d%s)" % (ncmd, nfail, (": msg " + ",".join(map(str, fails)))
+                                                                   if fails else "")
+                out.append(line)
+                continue
             line = "  turno msg %d\u2013%d" % (s + 1, e + 1)
             if utext:
                 line += " \u00b7 utente: %s" % _short(utext, 90)
@@ -851,21 +930,30 @@ def _edit_summary(args_text: str) -> str:
     return args_text[:200]
 
 
-def _recall_tool_en(cfg, f, props, desc) -> dict:
-    """Estensioni in inglese (conversazioni con i nomi della 0.2.0); stessa struttura di quelle italiane."""
+def _recall_tool_en(cfg, f, props, desc, lang: str = "it") -> dict:
+    """Estensioni in inglese (conversazioni con i nomi della 0.2.0); stessa struttura di quelle italiane.
+    lang="en" (0.3.1): anche i valori (order, forte/parziale) in inglese; quelli italiani restano accettati."""
+    en = lang != "it"
     if getattr(cfg, "recall_multi", False):
         props["queries"] = {"type": "array", "items": {"type": "string"},
-                            "description": "several search variants in ONE call (synonyms, Italian/English, names "
-                                           "used in the code): results merged without duplicates"}
+                            "description": ("several search variants in ONE call (synonyms, other languages, names "
+                                            "used in the code): results merged without duplicates") if en else
+                            ("several search variants in ONE call (synonyms, Italian/English, names "
+                             "used in the code): results merged without duplicates")}
     if getattr(cfg, "recall_struct", False):
         props["mode"] = {"type": "string", "enum": ["timeline", "first", "neighbors", "output", "reasoning", "tree"],
                          "description": "with path: timeline (history of the file) or first (first write + reasoning "
                                         "of the same turn); with id: neighbors (nearby messages), output (output of "
                                         "a call), reasoning (reasoning of the same turn); tree: map of the session "
                                         "by turns"}
-        props["order"] = {"type": "string", "enum": ["pertinenza", "tempo"],
-                          "description": "pertinenza = by relevance (default); tempo = OLDEST occurrences first "
-                                         "(first version, first outcome)"}
+        if en:
+            props["order"] = {"type": "string", "enum": ["relevance", "time"],
+                              "description": "relevance (default); time = OLDEST occurrences first "
+                                             "(first version, first outcome)"}
+        else:
+            props["order"] = {"type": "string", "enum": ["pertinenza", "tempo"],
+                              "description": "pertinenza = by relevance (default); tempo = OLDEST occurrences first "
+                                             "(first version, first outcome)"}
         props["role"] = {"type": "string", "description": "filter: user, assistant, reasoning, args, tool"}
         props["seg"] = {"type": "integer", "description": "filter: segment number"}
         props["from"] = {"type": "integer", "description": "filter: from message number"}
@@ -873,21 +961,23 @@ def _recall_tool_en(cfg, f, props, desc) -> dict:
         props["n"] = {"type": "integer", "description": "with mode=neighbors: how many messages before and after"}
         desc += (" For the FIRST version of something use path=<file> mode=first (or mode=timeline with query) and "
                  "cite id and message; tell values that were WRITTEN (arguments/outputs) from values only CONSIDERED "
-                 "in reasoning. 'forte' (strong) results contain all searched words; 'parziale' (partial) do not.")
+                 + ("in reasoning. 'strong' results contain all searched words; 'partial' do not." if en else
+                    "in reasoning. 'forte' (strong) results contain all searched words; 'parziale' (partial) do not."))
     f["parameters"] = dict(f["parameters"], properties=props)
     f["description"] = desc
     return {"type": "function", "function": f}
 
 
-def recall_tool(cfg, base: dict) -> dict:
-    """Definizione dello strumento: quella di serie, o quella estesa se recall_struct/recall_multi sono attivi."""
+def recall_tool(cfg, base: dict, lang: str = "it") -> dict:
+    """Definizione dello strumento: quella di serie, o quella estesa se recall_struct/recall_multi sono attivi.
+    lang: lingua della conversazione (0.3.1); con "en" i valori di order/strength sono descritti in inglese."""
     if not (getattr(cfg, "recall_struct", False) or getattr(cfg, "recall_multi", False)):
         return base
     f = dict(base["function"])
     props = dict(f["parameters"]["properties"])
     desc = f["description"]
     if f.get("name") != "strata_recall":
-        return _recall_tool_en(cfg, f, props, desc)
+        return _recall_tool_en(cfg, f, props, desc, lang)
     if getattr(cfg, "recall_multi", False):
         props["queries"] = {"type": "array", "items": {"type": "string"},
                             "description": "più varianti della ricerca in UNA chiamata (sinonimi, italiano/inglese, "

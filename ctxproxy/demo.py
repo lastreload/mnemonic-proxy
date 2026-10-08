@@ -143,7 +143,7 @@ def run(out=None, keep: str | None = None) -> bool:
         _p(out, "3. What the engine receives in place of build.log (%d chars instead of %d):"
            % (len(str((seen or {}).get("content"))), len(log)))
         _p(out, "     " + str((seen or {}).get("content"))[:400].replace("\n", " "))
-        _p(out, "   (the receipt text is partly Italian: it is part of the stable prompt prefix)")
+        _p(out, "   (receipts are in English for new conversations; conversations born before 0.3.1 keep Italian)")
         n0 = len(eng.requests)
         h += [{"role": "assistant", "content": "Tests pass."}, {"role": "user", "content": QUESTION}]
         r = send(h)

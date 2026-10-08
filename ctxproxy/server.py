@@ -25,11 +25,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
-from .paging import GUARD_MSG, is_guarded, receipt_contaminated
+from .paging import guard_msg, is_guarded, receipt_contaminated
 from .upstream import Upstream, UpstreamError
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
              "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
+LIMIT_MSG_EN = ("{rn}: search limit reached for this answer. Do not call {rn} again: answer now with the "
+                "information already retrieved (or say that you do not have it).")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_./\-]{4,}|\d[\d.,:]{2,}")
 
 
@@ -166,11 +168,13 @@ class Proxy:
                 cname = (c.get("function") or {}).get("name")
                 meta: list = []
                 if c in blocked:
-                    out = GUARD_MSG.replace("{rn}", p.recall_name)
+                    out = guard_msg(p.lang).replace("{rn}", p.recall_name)
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500])
                     if emit:
-                        info = "\n[gestore del contesto: chiamata %s bloccata (copia di una ricevuta)]\n" % cname
+                        info = ("\n[gestore del contesto: chiamata %s bloccata (copia di una ricevuta)]\n"
+                                if p.lang == "it" else
+                                "\n[context manager: call %s blocked (copy of a receipt)]\n") % cname
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_r[-1] += info
                     continue
@@ -184,7 +188,7 @@ class Proxy:
                     continue
                 if rnd == self.cfg.max_recall_rounds:
                     # ultimo giro: niente nuova ricerca, il modello deve rispondere con ciò che ha (G3)
-                    out = LIMIT_MSG.replace("{rn}", p.recall_name)
+                    out = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
                 else:
                     out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
                     # ricontrollo del budget: il risultato non deve far uscire il prompt dalla finestra
@@ -374,15 +378,19 @@ class Proxy:
         if name in p.tools_aliases:
             q = str(a.get("query") or "")
             names = pager.search(p.catalog, q, a.get("names"), limit=self.cfg.tools_load_max)
-            out = pager.result(p.catalog, names, loaded, q, name=p.tools_name)
+            out = pager.result(p.catalog, names, loaded, q, name=p.tools_name, lang=p.lang)
             self.journal.log("tools_search", conv=p.conv, round=rnd, query=q, names_asked=a.get("names"),
                              found=names, loaded_new=[n for n in names if n not in loaded],
                              tokens=self.tc.count(out))
             return out
         # chiamata diretta a uno strumento del catalogo non caricato: definizione + richiesta di ripetere
-        note = ("La chiamata a %s NON è stata eseguita: la sua definizione non era ancora caricata. Eccola: "
-                "ripeti la chiamata con i parametri corretti." % name)
-        out = pager.result(p.catalog, [name], loaded, name, note, name=p.tools_name)
+        if p.lang == "it":
+            note = ("La chiamata a %s NON è stata eseguita: la sua definizione non era ancora caricata. Eccola: "
+                    "ripeti la chiamata con i parametri corretti." % name)
+        else:
+            note = ("The call to %s was NOT executed: its definition was not loaded yet. Here it is: "
+                    "repeat the call with the correct parameters." % name)
+        out = pager.result(p.catalog, [name], loaded, name, note, name=p.tools_name, lang=p.lang)
         self.journal.log("tool_not_loaded", conv=p.conv, round=rnd, name=name, args=str(args)[:500],
                          tokens=self.tc.count(out))
         return out
@@ -411,7 +419,7 @@ class Proxy:
                 users = dict(self.store.user_messages(conv))
                 text = (users.get(idx) or "").strip()
             if not text:
-                return 400, {"error": {"message": "testo del punto fermo mancante"}}
+                return 400, {"error": {"message": "missing pin text"}}
             pid = self.store.add_pin(conv, idx, text)
             self.journal.log("pin", conv=conv, id=pid, index=idx, source="dashboard", text=text,
                              tokens=self.tc.count(text))
@@ -426,7 +434,7 @@ class Proxy:
             idx = int(d["index"])
             users = sorted(i for i, _ in self.store.user_messages(conv) if i <= idx)
             if not users:
-                return 400, {"error": {"message": "nessun messaggio utente prima dell'indice %d" % idx}}
+                return 400, {"error": {"message": "no user message before index %d" % idx}}
             u = users[-1]
             if act == "drop":
                 self.store.add_drop(conv, u)
@@ -569,7 +577,7 @@ def make_handler(proxy: Proxy):
             if parts[:3] == ["v1", "strata", "archive"] and len(parts) == 4:
                 r = proxy.store.get(parts[3])
                 if not r:
-                    return self._send(404, {"error": {"message": "id non trovato"}})
+                    return self._send(404, {"error": {"message": "id not found"}})
                 return self._send(200, dict(zip(("rid", "conv", "idx", "role", "name", "content", "tokens"), r)))
             if parts[:3] == ["v1", "strata", "conversations"] and len(parts) == 4:
                 c = parts[3]

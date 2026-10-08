@@ -52,7 +52,7 @@ class TestRecall2(unittest.TestCase):
     def test_first_write_shows_args_and_reasoning(self):
         m = self.mgr(recall_struct=True)
         out = m.recall("c", {"path": "src/config.js", "mode": "first", "query": "startGold"}, max_idx=10)
-        self.assertIn("PRIMA scrittura", out)
+        self.assertIn("FIRST write", out)   # 0.3.1: English
         self.assertIn("startGold: 265", out)
         self.assertIn("240 gold", out)
 
@@ -75,7 +75,7 @@ class TestRecall2(unittest.TestCase):
     def test_empty_gives_suggestions(self):
         m = self.mgr(recall_struct=True)
         out = m.recall("c", {"query": "zxqwv"}, max_idx=10)
-        self.assertIn("nessun risultato", out)
+        self.assertIn("no results", out)   # 0.3.1: English
         self.assertIn("config.js", out)
 
     def test_auto_hint_short_and_with_ids(self):
@@ -84,7 +84,7 @@ class TestRecall2(unittest.TestCase):
         cands = m.auto_candidates("c", ["startgold", "265"], hidden, set(), 10)
         self.assertTrue(cands)
         text, chosen = m.auto_hint(cands, ["startgold"])
-        self.assertTrue(text.startswith(core.AUTO_HEAD))
+        self.assertTrue(text.startswith(core.AUTO_HEAD_EN))   # 0.3.1: English
         self.assertIn("id=%s" % chosen[0]["rid"], text)
         self.assertNotIn("startLives", text)        # nessun testo dell'archivio
 

@@ -185,7 +185,7 @@ class TestErrors(Base):
         out = os.path.join(self.d, "out.bin")
         with self.assertRaises(K.MissingBlock) as cm:
             self.arc.restore("a.bin", out)
-        self.assertIn("mancante", str(cm.exception))
+        self.assertIn("missing", str(cm.exception))   # 0.3.1: error messages in English
         self.assertIn(h, str(cm.exception))
         self.assertFalse(os.path.exists(out))
         self.assertEqual([f for f in os.listdir(self.d) if "kva-tmp" in f], [])
