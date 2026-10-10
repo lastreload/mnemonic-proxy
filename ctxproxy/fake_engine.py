@@ -69,6 +69,7 @@ class FakeEngine:
 
     def status(self) -> dict:
         return {"service": "strata", "loaded": True, "started": self.started,
+                "context": {"native": self.n_ctx, "max_positions": self.n_ctx},
                 "activity": {"requests": self.n_requests, "in_flight": int(self.busy)}}
 
     # ---- ds4-server (flavor="ds4"): comportamento verificato su ds4_server.c ----

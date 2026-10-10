@@ -153,6 +153,12 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         e = Engine("strata", slot_save=True, slot_id=slot_id, status_kind="strata", detected=kind == "auto")
         if s is None:
             e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
+        else:
+            # Strata espone la finestra in context (native = max_positions = --max-context): la finestra
+            # del motore viene letta qui, come llama.cpp la legge da /slots
+            ctx = s.get("context")
+            if isinstance(ctx, dict):
+                e.n_ctx = int(ctx.get("native") or ctx.get("max_positions") or 0) or None
         return e
     models = _get_json(up, "/v1/models") if kind in ("auto", "ds4") else None
     ds4_models = [m for m in (models or {}).get("data") or [] if isinstance(m, dict)
@@ -230,7 +236,7 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         cfg.mask_tool_args = False
         warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
                     "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
-    if engine.n_ctx and "window" not in explicit and engine.kind in ("llama.cpp", "ds4") \
+    if engine.n_ctx and "window" not in explicit and engine.kind in ("llama.cpp", "ds4", "strata") \
             and engine.n_ctx != cfg.window:
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window

@@ -34,6 +34,18 @@ class TestDetect(unittest.TestCase):
         _, up = self.run_eng()
         e = engines.detect(up)
         self.assertEqual((e.kind, e.slot_save, e.status_kind, e.detected), ("strata", True, "strata", True))
+        self.assertEqual(e.n_ctx, 131072, "finestra da context.native di /v1/status")
+
+    def test_strata_window_from_status(self):
+        _, up = self.run_eng(n_ctx=65536)
+        e = engines.detect(up)
+        self.assertEqual(e.kind, "strata")
+        self.assertEqual(e.n_ctx, 65536)
+        cfg = Config()
+        engines.apply(cfg, e, None, log=None)
+        self.assertEqual(cfg.window, 65536, "la finestra di Strata viene dal motore")
+        self.assertEqual(cfg.mask_trigger, 40000, "soglie scalate x0.5 con la finestra")
+        self.assertEqual(cfg.keep_recent_tokens, 8000, "soglie scalate x0.5 con la finestra")
 
     def test_llama_with_slots(self):
         eng, up = self.run_eng(flavor="llama", n_ctx=16384)
