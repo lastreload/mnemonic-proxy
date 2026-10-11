@@ -157,9 +157,9 @@ fi
 # config.json e' locale (gitignored): se manca, nasce dall'esempio. Il slot_dir viene dal file
 # del motore identificato sopra (slot_save_path); se non c'e' si usa STRATA_DIR/sessions, che
 # e' la convenzione del Strata.
-if [ ! -f "$CONFIG" ] && [ -f examples/config.strata-saved-state.json ]; then
+if [ ! -f "$CONFIG" ] && [ -f examples/config.example.json ]; then
   [ -n "$SLOT" ] || SLOT="$STRATA_DIR/sessions"
-  cp examples/config.strata-saved-state.json "$CONFIG"
+  cp examples/config.example.json "$CONFIG"
   if [ -x "$VENV/bin/python" ]; then
     "$VENV/bin/python" - "$CONFIG" "$SLOT" "$KV_CAP" <<'PY'
 import json, sys
