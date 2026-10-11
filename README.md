@@ -146,6 +146,24 @@ old tool argument into a file (see [What we have not proven](#what-we-have-not-p
 16K to 122K tokens of prompt: **151/160 exact, 0 wrong** — every miss is an omitted line, all at 64K and above.
 Prefill stays at ~2.5K tok/s up to 122K, VRAM flat at 11.6 GB. Same report, section 4.
 
+## User reports
+
+Numbers measured by users on their own hardware and shared with permission. Not reproduced by us.
+
+| | [u/Swimming-Farmer7815](https://www.reddit.com/r/Qwen_AI/comments/1x26aj9/comment/pfb7uu7/) |
+|---|---|
+| hardware | RTX 5060 Ti 16 GB, Xeon E5-2699 v3, 64 GB DDR4 ECC |
+| engine / model | Strata, Swift-Qwen3.8-Flash-Next IQ3_XXS, 128K window |
+| client | Cline, with its automatic context compaction disabled |
+| session | 13 h; ~280K tokens of total history, ~77K in the last request |
+| saved state | ~58K tokens restored in under 4 s (about 1 min 15 s to re-read at the measured prefill rate) |
+| `recall` | 8 calls, all 8 results used by the model |
+
+The user reports no compaction pauses during the session. All 8 recalls happened in the last two minutes of the
+session, when the user asked for a summary of the day: during normal work the model never called `recall` on its
+own. We see the same in our own tests: recall is reliable when the model asks, but the model rarely realizes that
+something it needs was masked.
+
 ## Requirements
 
 - **Engine window: at least 16K tokens (16384), 32K or more (32768) recommended.** Below 16K the proxy refuses to
