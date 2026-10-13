@@ -212,6 +212,11 @@ class Config:
     recall_multi: bool = False      # queries: [...] in una sola chiamata (fusione per rango)
     recall_flex: bool = False       # indice normalizzato (identificatori spezzati, radice leggera it/en)
     recall_struct_max_tokens: int = 3500  # tetto in token del risultato strutturato
+    # selettore a sotto-blocco foglia (leafsel.py): con id o query su un'uscita strutturata (yaml, toml,
+    # xml, json, tabelle) consegna solo le righe-chiave degli antenati + i blocchi foglia scelti dalla query e/o
+    # dall'ultima domanda dell'utente, verbatim, con '⋮' e la riga per leggere tutto (offset). Parse incerto, offset
+    # esplicito, path o mode -> comportamento di serie. Spento di serie.
+    recall_leaf_select: bool = False
     # definizioni strumenti accorciate (tooldefs.py, TOOLDEFS-RESULT.md): 0 = spento (default). Testi deterministici
     # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (recall è del proxy: già corto)
     tooldefs_desc_max: int = 0      # caratteri massimi della description di uno strumento
@@ -982,6 +987,7 @@ class Manager:
         # lingua dei testi del proxy nella conversazione corrente (impostata da prepare; 0.3.1)
         self.lang = norm_lang(cfg.prompt_language)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
+        self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
     def L(self, it: str, en: str) -> str:
         """Testo nella lingua della conversazione corrente."""
@@ -2026,23 +2032,115 @@ class Manager:
             meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "query": q, "lines": len(hit)})
         return self.fit_tokens("\n".join(out), self.cfg.recall_max_tokens)
 
-    def recall(self, conv: str, args, max_idx: int | None = None, meta: list | None = None) -> str:
+    def recall(self, conv: str, args, max_idx: int | None = None, meta: list | None = None,
+               max_tokens: int | None = None) -> str:
         """id (testo esatto, solo della conversazione corrente), path (storia delle operazioni sul file), query
         (FTS5 bm25 + sottostringa esatta per percorsi/identificatori). Filtro di catena: max_idx esclude la domanda
         corrente e i rami successivi; l'archivio è per conversazione. Tetto: recall_max_tokens.
-        meta (facoltativo): riceve un dict per pezzo restituito {rid, idx, rank, tokens} (giornale recall)."""
+        meta (facoltativo): riceve un dict per pezzo restituito {rid, idx, rank, tokens} (giornale recall).
+        max_tokens (solo con recall_leaf_select): spazio rimasto nel contesto per il risultato."""
         if isinstance(args, str):
             try:
                 args = json.loads(args or "{}")
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
+        if getattr(self.cfg, "recall_leaf_select", False):
+            out = self._leaf_recall(conv, args, max_idx, meta, max_tokens)
+            if out is not None:
+                return out
         if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
             if getattr(self, "_recall2", None) is None:
                 from .recall2 import Recall2
                 self._recall2 = Recall2(self)
             return self._recall2.recall(conv, args, max_idx, meta)
         return self.recall_legacy(conv, args, max_idx, meta)
+
+    _LEAF_RID = re.compile(r"\b([rta][0-9a-f]{12})\b")
+
+    def _leaf_recall(self, conv: str, args: dict, max_idx, meta, max_tokens) -> str | None:
+        """recall_leaf_select: estratto a sotto-blocchi foglia (leafsel.py) di UN'uscita strutturata.
+        - id (+ query facoltativa), senza offset/mode/path: il testo di quell'id;
+        - solo query: la prima uscita di strumento (più recente) che contiene la query come sottostringa;
+        - guida: la query e/o l'ultima domanda dell'utente (self.question, impostata dal server; dichiarata
+          nell'intestazione). None = comportamento di serie (offset, path, mode, formato incerto, nessuna scelta,
+          testo che sta già intero nel budget)."""
+        from . import leafsel
+        if any(args.get(k) not in (None, "", [], {}) for k in ("offset", "path", "mode", "queries")):
+            return None          # offset (anche 0 = lettura sequenziale), path, mode: comportamento di serie
+        q = str(args.get("query") or "").strip()
+        question = getattr(self, "question", "") or ""
+        rid = str(args.get("id") or "").strip().removeprefix("recall:").removeprefix("id=")
+        r = None
+        note = ""
+
+        def by_question():
+            # l'uscita di strumento più recente, prima della domanda, in cui la domanda sceglie dei blocchi
+            with self.store.lock:
+                cand = self.store.db.execute(
+                    "SELECT rid FROM archive WHERE conv=? AND role='tool' AND idx < ? ORDER BY idx DESC LIMIT 8",
+                    (conv, 10 ** 9 if max_idx is None else max_idx)).fetchall()
+            for (c,) in cand:
+                rc = self.store.get(c, conv)
+                if rc is not None and leafsel.select(rc[5] or "", question):
+                    return rc
+            return None
+
+        if rid:
+            r = self.store.get(rid, conv) or self.store.get(rid)
+            if r is None:
+                m = self._LEAF_RID.search(rid)
+                r = (self.store.get(m.group(1), conv) or self.store.get(m.group(1))) if m else None
+            if r is None and question:
+                # id che non esiste (testo, numero, id senza 'r'): dichiarato nell'intestazione
+                r = by_question()
+                if r is not None:
+                    shown = (rid[:60] + "\u2026") if len(rid) > 60 else rid
+                    note = self.L("; «%s» non è un id d'archivio: usato id=%s", "; %r is not an archive id: "
+                                  "used id=%s") % (shown, r[0])
+        elif q:
+            # più candidati: fra le uscite di strumento che contengono la query (fino a 8, le
+            # più pertinenti prima) la prima in cui il selettore sceglie dei blocchi; se nessuna, la prima trovata
+            first = None
+            for h in self.store.search(conv, q, limit=8, max_idx=max_idx):
+                if h[2] != "tool":
+                    continue
+                rc = self.store.get(h[0], conv)
+                if rc is None:
+                    continue
+                first = first or rc
+                if leafsel.select(rc[5] or "", question, q):
+                    r = rc
+                    break
+            r = r or first
+            if r is None and question:
+                # query che non compare in nessuna uscita: si sceglie con la domanda, dichiarato nell'intestazione
+                r = by_question()
+                if r is not None:
+                    shown = (q[:60] + "\u2026") if len(q) > 60 else q
+                    note = self.L("; la query «%s» non compare in nessuna uscita", "; the query %r appears in no "
+                                  "output") % shown
+                    q = ""
+        if r is None or r[3] != "tool":
+            return None
+        text = r[5] or ""
+        cap = self.cfg.recall_max_tokens if max_tokens is None else min(max_tokens, self.cfg.recall_max_tokens)
+        if not q and self.tc.count(text) <= cap - 80:
+            return None          # solo id e il testo entra intero: lo legge intero (comportamento di serie)
+        where = self.L("messaggio %d (%s%s)", "message %d (%s%s)") % (r[2] + 1, r[3], (" " + r[4]) if r[4] else "") \
+            + note
+        t0 = time.time()
+        out, info = leafsel.leaf_recall(text, question, q, r[0], where, self.tc.count, cap, rn=self.rn,
+                                        lang=self.lang)
+        ms = round((time.time() - t0) * 1000, 2)
+        if out is None:
+            self.journal.log("recall_leaf", conv=conv, rid=r[0], used=False, why=info, ms=ms)
+            return None
+        self.journal.log("recall_leaf", conv=conv, rid=r[0], used=True, ms=ms, **info)
+        if meta is not None:
+            meta.append({"rid": r[0], "idx": r[2], "rank": 0, "tokens": r[6], "leaf": info["blocks"],
+                         "lines": info["lines"][:40]})
+        return out
 
     def recall_legacy(self, conv: str, args: dict, max_idx: int | None = None, meta: list | None = None,
                       head_fn=None) -> str:

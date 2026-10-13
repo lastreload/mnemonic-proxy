@@ -117,6 +117,9 @@ class Proxy:
         msgs_c = req.get("messages") or []
         last_user = max((i for i, m in enumerate(msgs_c) if is_human_user(m)), default=None)
         lu_text = content_text(msgs_c[last_user].get("content"))[:300] if last_user is not None else ""
+        if self.cfg.recall_leaf_select:
+            # selettore a sotto-blocco foglia: guida = ultima domanda dell'utente (intera), dichiarata nell'estratto
+            self.mgr.question = content_text(msgs_c[last_user].get("content")) if last_user is not None else ""
         stream_state = {"sent_role": False, "client_calls": 0} if emit else None
         for rnd in range(self.cfg.max_recall_rounds + 2):
             self._live(p, phys, rnd, body)
@@ -207,6 +210,12 @@ class Proxy:
                             room += give
                             self.journal.log("response_shrunk", conv=p.conv, round=rnd, max_tokens=resp_budget - give,
                                              was=resp_budget)
+                    if need > max(room, 0) and self.cfg.recall_leaf_select:
+                        # selettore foglia: si rifà la scelta dentro lo spazio rimasto (cornice e coda comprese),
+                        # togliendo i blocchi meno pertinenti invece di tagliare il testo a metà
+                        meta.clear()
+                        out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta, max_tokens=max(room, 0))
+                        need = self.tc.count(out)
                     if need > max(room, 0):
                         out = self.mgr.fit_tokens(out, max(room, 0))
                         self.journal.log("recall_trimmed", conv=p.conv, room=room, round=rnd)

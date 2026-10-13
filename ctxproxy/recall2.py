@@ -454,9 +454,9 @@ class Recall2:
                             "chiamata"):
             return self.around(conv, rid, mode, args, max_idx, meta)
         if rid:
-            return self.mgr.recall_legacy(conv, {"id": rid, "offset": args.get("offset"), "query": args.get("query")},
-                                          max_idx, meta,
-                                          head_fn=self._id_head)
+            # propaga solo i campi presenti: un offset assente non è offset=0
+            fwd = {"id": rid, **{k: args[k] for k in ("offset", "query") if args.get(k) not in (None, "")}}
+            return self.mgr.recall_legacy(conv, fwd, max_idx, meta, head_fn=self._id_head)
         if path:
             return self.file(conv, path, mode or "timeline", args, max_idx, meta)
         qs = args.get("queries")
