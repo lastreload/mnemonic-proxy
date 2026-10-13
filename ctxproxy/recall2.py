@@ -443,7 +443,12 @@ class Recall2:
         return out, allterms, stats
 
     # ------------------------------------------------------------ entrata
-    def recall(self, conv, args, max_idx=None, meta=None) -> str:
+    def recall(self, conv, args, max_idx=None, meta=None, max_tokens=None) -> str:
+        if getattr(self.cfg, "recall_leaf_select", False):
+            # leaf selector (leafsel.py) before the structured recall, as in Manager.recall; None = not applicable
+            out = self.mgr._leaf_recall(conv, args, max_idx, meta, max_tokens)
+            if out is not None:
+                return out
         max_idx = 10 ** 9 if max_idx is None else max_idx
         mode = str(args.get("mode") or "").strip().lower()
         rid = str(args.get("id") or "").strip().removeprefix("recall:").removeprefix("id=")

@@ -218,7 +218,7 @@ class Proxy:
                         out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta, max_tokens=max(room, 0))
                         need = self.tc.count(out)
                     if need > max(room, 0):
-                        out = self.mgr.fit_tokens(out, max(room, 0))
+                        out = self.mgr.fit_tokens(out, max(room, 0), exact=self.cfg.recall_leaf_select)
                         self.journal.log("recall_trimmed", conv=p.conv, room=room, round=rnd)
                 new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                 rec = self.journal.log("recall", conv=p.conv, req=rid_req, round=rnd, last_user=lu_text,

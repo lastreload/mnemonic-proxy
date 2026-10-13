@@ -1991,22 +1991,26 @@ class Manager:
         return "\n".join(head + lines), ev
 
     # ---------- recall ----------
-    def fit_tokens(self, text: str, max_tokens: int) -> str:
-        """Taglia un testo a max_tokens (conteggio del contatore) con indicazione esplicita."""
+    def fit_tokens(self, text: str, max_tokens: int, exact: bool = False) -> str:
+        """Taglia un testo a max_tokens (conteggio del contatore) con indicazione esplicita.
+        exact: il conto comprende la riga d'avviso aggiunta (risultato <= max_tokens); di serie si riserva un margine
+        fisso di 30 token, mentre l'avviso ne conta circa 40 (chars/3.5): il risultato può superare max_tokens."""
         if self.tc.count(text) <= max_tokens:
             return text
-        lo, hi = 0, len(text)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if self.tc.count(text[:mid]) <= max(max_tokens - 30, 0):
-                lo = mid
-            else:
-                hi = mid - 1
-        return text[:lo] + self.L(
+        note = self.L(
             "\n[recall troncato per spazio nel contesto: chiedi un id preciso o usa offset; con id e "
             "query ricevi solo le righe che contengono la query]",
             "\n[recall truncated for space in the context: ask for a specific id or use offset; with id and "
             "query you get only the lines that contain the query]")
+        keep = max(max_tokens - (self.tc.count(note) + 1 if exact else 30), 0)
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self.tc.count(text[:mid]) <= keep:
+                lo = mid
+            else:
+                hi = mid - 1
+        return text[:lo] + note
 
     def _recall_lines(self, rid, r, text, q, meta, head_fn) -> str:
         lines = text.splitlines()
@@ -2052,15 +2056,16 @@ class Manager:
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
-        if getattr(self.cfg, "recall_leaf_select", False):
-            out = self._leaf_recall(conv, args, max_idx, meta, max_tokens)
-            if out is not None:
-                return out
         if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
             if getattr(self, "_recall2", None) is None:
                 from .recall2 import Recall2
                 self._recall2 = Recall2(self)
-            return self._recall2.recall(conv, args, max_idx, meta)
+            # Recall2.recall tries the leaf selector first when recall_leaf_select is on
+            return self._recall2.recall(conv, args, max_idx, meta, max_tokens=max_tokens)
+        if getattr(self.cfg, "recall_leaf_select", False):
+            out = self._leaf_recall(conv, args, max_idx, meta, max_tokens)
+            if out is not None:
+                return out
         return self.recall_legacy(conv, args, max_idx, meta)
 
     _LEAF_RID = re.compile(r"\b([rta][0-9a-f]{12})\b")
@@ -2149,6 +2154,16 @@ class Manager:
                          "lines": info["lines"][:40]})
         return out
 
+    def _id_frame_tokens(self, rid: str, r, total: int, head_fn=None) -> int:
+        """Upper bound (tokens) of the header + continuation line that recall_legacy adds around an id chunk."""
+        head = self.L("[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n",
+                      "[recall:%s \u2014 message %d (%s%s), %d tokens, characters %d\u2013%d of %d]\n") % (
+            rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", r[6], total, total, total)
+        if head_fn is not None:
+            head = head_fn(r, total, total, total)
+        tail = self.L("\n[continua: %s id=%s offset=%d]", "\n[continues: %s id=%s offset=%d]") % (self.rn, rid, total)
+        return self.tc.count(head) + self.tc.count(tail) + 2
+
     def recall_legacy(self, conv: str, args: dict, max_idx: int | None = None, meta: list | None = None,
                       head_fn=None) -> str:
         """recall di serie (id / path / query). head_fn: intestazione alternativa per id (recall2)."""
@@ -2173,7 +2188,12 @@ class Manager:
                 # mai alla riga cercata.
                 return self._recall_lines(rid, r, text, q, meta, head_fn)
             chunk = text[off:off + lim]
-            chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
+            if getattr(self.cfg, "recall_leaf_select", False):
+                # header and continuation line count against recall_max_tokens (default: only the chunk does)
+                frame = self._id_frame_tokens(rid, r, len(text), head_fn)
+                chunk = self.fit_tokens(chunk, max(self.cfg.recall_max_tokens - frame, 0), exact=True)
+            else:
+                chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
             if chunk.endswith("usa offset]") or chunk.endswith("use offset]"):
                 chunk = chunk[:max(chunk.rfind("\n[recall troncato"), chunk.rfind("\n[recall truncated"))]
             if meta is not None:
