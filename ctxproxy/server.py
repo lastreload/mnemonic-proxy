@@ -23,7 +23,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import compat
+from . import answerfix, compat
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
 from .paging import guard_msg, is_guarded, receipt_contaminated
@@ -127,9 +127,10 @@ class Proxy:
                 stream_state["internal"] = self._internal_names(p, phys)
             try:
                 if emit:
-                    resp = self._round({**body, "messages": phys, "tools": p.tools}, emit, stream_state)
+                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd), "messages": phys,
+                                        "tools": p.tools}, emit, stream_state)
                 else:
-                    resp = self.up.chat({**body, "messages": phys, "tools": p.tools})
+                    resp = answerfix.chat(self, p, body, phys, rnd)
             except UpstreamError as e:
                 self.journal.log("upstream_error", conv=p.conv, status=e.status, error=str(e)[:300])
                 return e.status, _err_body(e), {}
@@ -231,6 +232,9 @@ class Proxy:
                     strip_r[-1] += info
             phys += new
             internal += new
+        # controllo post-risposta (K) e pulizia del ragionamento di T/K (answerfix.py)
+        resp = answerfix.guard(self, p, body, phys, resp, emit)
+        answerfix.finish(self, p, resp)
         if internal and p.hs:
             self.mgr.remember_internal(p.conv, p.hs[-1], internal, "".join(strip_c), "".join(strip_r))
         if recall_logs:

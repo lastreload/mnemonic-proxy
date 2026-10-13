@@ -217,6 +217,13 @@ class Config:
     # dall'ultima domanda dell'utente, verbatim, con '⋮' e la riga per leggere tutto (offset). Parse incerto, offset
     # esplicito, path o mode -> comportamento di serie. Spento di serie.
     recall_leaf_select: bool = False
+    # answerfix.py: rimedi allo stop prematuro della risposta dopo un recall. Spenti di serie.
+    answer_thinking_after_recall: bool = False  # T: thinking acceso quando la richiesta termina con un recall
+    answer_thinking_budget: int = 512           # T: tetto reasoning_budget_tokens (0 = senza tetto)
+    truncation_guard: bool = False              # K: risposta corta che finisce a metà di un token del recall
+    truncation_guard_max_tokens: int = 16       # K: solo risposte fino a questi token
+    truncation_guard_budget: int = 512          # K: tetto di ragionamento della rigiocata (0 = senza tetto)
+    answer_thinking_strip: bool = True          # T/K: il ragionamento non torna al client
     # definizioni strumenti accorciate (tooldefs.py, TOOLDEFS-RESULT.md): 0 = spento (default). Testi deterministici
     # e stabili fra richieste; strumenti in tooldefs_keep mai toccati (recall è del proxy: già corto)
     tooldefs_desc_max: int = 0      # caratteri massimi della description di uno strumento
