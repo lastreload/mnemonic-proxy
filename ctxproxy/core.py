@@ -28,6 +28,7 @@ from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, 
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
                      query_terms, typed_receipt)
 from .render import message_piece, render_pieces, template_kwargs
+from .window import find_guard, notes_source
 from .tooldefs import ToolShortener
 
 # Nomi degli strumenti del proxy (0.2.0: neutri rispetto al motore). Le conversazioni nate prima della 0.2.0 tengono i
@@ -295,6 +296,15 @@ class Config:
     # for NEW conversations: "en" (default) | "it". Saved per conversation at first use; conversations born before
     # 0.3.1 keep Italian (byte-identical prefix). Markers are recognized in both languages everywhere.
     prompt_language: str = "en"
+    # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
+    window_guard: bool = True
+    window_margin: int = 64              # technical margin (Strata itself keeps 8)
+    window_estimate_slack: float = 0.0   # without an exact tokenizer: inflate the estimated prompt by this much (0 =
+    #                                      trust the calibrated counter; guard events then carry guarantee=estimated)
+    answer_min_tokens: int = 512         # INV-2: a thinking budget always leaves at least this much answer
+    recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
+    final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
+    notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
@@ -1417,7 +1427,9 @@ class Manager:
         if cause is None:
             cause = "segmento" if "switch" in names else "blocco" if "mask" in names else \
                 "client" if names & {"branch", "new_conversation"} else "altro"
-        return {"tokens": lost, "cause": cause, "first_diff": k}
+        return {"tokens": lost, "cause": cause, "first_diff": k,
+                # 0.3.3 (measure only): prefix the engine could reuse = previous prompt up to the first difference
+                "expected_reused": max(0, int(pest) - int(lost))}
 
     # ---------- richiamo automatico (ricerca §6-8) ----------
     def _hidden_rids(self, msgs, hs, start) -> set:
@@ -1883,10 +1895,24 @@ class Manager:
         # 1) note di passaggio in coda ad A (stesso system/tool/reasoning: il prefisso resta in cache)
         t0 = time.time()
         notes, usage, finish, timings = "", {}, None, None
+        instr = {"role": "user", "content": self.L(NOTES_INSTRUCTION, NOTES_INSTRUCTION_EN).replace("{rn}", self.rn)}
+        nbody = {**params, "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False}
+        nt = str(getattr(cfg, "notes_thinking", "auto") or "auto")
+        if nt == "off":
+            ctk = params.get("chat_template_kwargs") if isinstance(params.get("chat_template_kwargs"), dict) else {}
+            nbody["chat_template_kwargs"] = {**ctk, "enable_thinking": False}
+        elif nt == "auto" and cfg.notes_max_tokens > 1:
+            # 0.3.3: the reasoning must not eat the notes (they came out empty): budget < max_tokens (Strata closes
+            # the thinking at the budget; engines without the field ignore it). INV-2 caps it again in the guard.
+            nbody["reasoning_budget_tokens"] = max(1, int(cfg.notes_max_tokens) // 2)
+        # 0.3.3: A + instruction must leave room for the notes: otherwise A is shortened from the end (window.py)
+        src = notes_source(find_guard(upstream), phys, tools, instr, template_kwargs(nbody),
+                           min(int(cfg.notes_max_tokens), 1024))
+        if len(src) < len(phys):
+            events.append(self.journal.log("window_guard", action="notes_source", conv=conv, kept=len(src),
+                                           of=len(phys)))
         try:
-            r = upstream.chat({**params, "messages": phys + [{"role": "user", "content": self.L(
-                NOTES_INSTRUCTION, NOTES_INSTRUCTION_EN).replace("{rn}", self.rn)}],
-                               "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False})
+            r = upstream.chat({**nbody, "messages": src + [instr]})
             notes = (r["choices"][0]["message"].get("content") or "").strip()
             usage = r.get("usage") or {}
             finish, timings = r["choices"][0].get("finish_reason"), r.get("timings")

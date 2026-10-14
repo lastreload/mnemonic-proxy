@@ -54,6 +54,28 @@ class FakeEngine:
         self.ds4_live_ids: set = set()
         self.ds4_replay = {"mem": 0, "canonical": 0, "missing_ids": []}
         self.rejected: list = []
+        # 0.3.3 strict window (worst-case engine for the window guard): `strict_window` = True rejects with HTTP 400
+        # every chat request with prompt + max_tokens > n_ctx (and one without max_tokens: the engine would run to
+        # the window). `counter(body)` -> prompt tokens (default: the proxy's exact count is passed in by tests).
+        self.strict_window = False
+        self.counter = None
+        self.violations: list = []
+        self.checked = 0
+
+    def window_check(self, body: dict) -> str | None:
+        self.checked += 1
+        p = int(self.counter(body)) if self.counter else int(len(render(body)) / self.cpt)
+        mt = body.get("max_completion_tokens") or body.get("max_tokens")
+        if not isinstance(mt, int) or mt <= 0 or p + mt > self.n_ctx:
+            v = {"prompt": p, "max_tokens": mt, "n_ctx": self.n_ctx,
+                 "reasoning_budget_tokens": body.get("reasoning_budget_tokens")}
+            self.violations.append(v)
+            return "request (%d tokens) exceeds the available context size (%d tokens)" % (p + (mt or 0), self.n_ctx)
+        rb = body.get("reasoning_budget_tokens")
+        if isinstance(rb, int) and rb > 0 and rb >= mt:
+            self.violations.append({"prompt": p, "max_tokens": mt, "reasoning_budget_tokens": rb, "inv": 2})
+            return "reasoning_budget_tokens %d >= max_tokens %d" % (rb, mt)
+        return None
 
     def restart(self):
         """Come un riavvio di Strata: la conversazione in memoria si perde, i file di sessione restano."""
@@ -124,6 +146,8 @@ class FakeEngine:
             msg = self.ds4_after(body, msg)
         self.live = p
         pt = int(len(p) / self.cpt)
+        if self.counter is not None:               # strict window: report the same exact count it enforces
+            pt = int(self.counter(body))
         cached = int(common / self.cpt)
         finish = "tool_calls" if msg.get("tool_calls") else "stop"
         ct = int(len(json.dumps(msg)) / self.cpt)
@@ -233,6 +257,10 @@ class FakeEngine:
                                             "n_saved": int(len(eng.live) / eng.cpt),
                                             "n_restored": int(len(eng.live) / eng.cpt),
                                             "n_written": len(eng.live) * 10, "timings": {"save_ms": 1.0}})
+                if eng.strict_window and self.path.startswith("/v1/chat"):
+                    err = eng.window_check(body)
+                    if err:
+                        return self._send(400, {"error": {"message": err, "type": "exceed_context_size_error"}})
                 if body.get("stream"):
                     return self.do_POST_stream(body)
                 self._send(200, eng.handle_chat(body))

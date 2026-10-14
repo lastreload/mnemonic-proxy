@@ -27,7 +27,10 @@ from . import answerfix, compat
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
 from .paging import guard_msg, is_guarded, receipt_contaminated
+from .render import template_kwargs
 from .upstream import Upstream, UpstreamError
+from .window import (CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, RESULT_MIN, WindowGuard, _text as _txt, clean,
+                     remove_piece, removal_order)
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
              "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
@@ -49,6 +52,13 @@ class Proxy:
         self.lock = threading.Lock()
         self.autosaver = None
         self.engine = None          # engines.Engine | None (impostato da main; None = Strata)
+        # 0.3.3: window guard on the innermost Upstream (wrappers - Tracker, ArchivingUpstream - delegate to it)
+        self.wguard = WindowGuard(cfg, self.mgr, journal)
+        base = upstream
+        while hasattr(base, "up") and base.__class__.__name__ in ("Tracker", "ArchivingUpstream"):
+            base = base.up
+        if isinstance(base, Upstream):
+            base.window_guard = self.wguard
 
     def enable_autosave(self, start: bool = True):
         """Avvolge l'upstream nel Tracker (ripristino automatico) e avvia il thread di autosalvataggio."""
@@ -117,20 +127,31 @@ class Proxy:
         msgs_c = req.get("messages") or []
         last_user = max((i for i, m in enumerate(msgs_c) if is_human_user(m)), default=None)
         lu_text = content_text(msgs_c[last_user].get("content"))[:300] if last_user is not None else ""
+        lu_full = content_text(msgs_c[last_user].get("content")) if last_user is not None else ""
         if self.cfg.recall_leaf_select:
             # selettore a sotto-blocco foglia: guida = ultima domanda dell'utente (intera), dichiarata nell'estratto
             self.mgr.question = content_text(msgs_c[last_user].get("content")) if last_user is not None else ""
         stream_state = {"sent_role": False, "client_calls": 0} if emit else None
+        guard_on = bool(getattr(self.cfg, "window_guard", True))
+        phys0 = list(phys)          # P0: prompt prepared before the loop (masking, segments)
+        loop: list[dict] = []       # what the loop adds (calls, reasoning, results): removable, see window.py
+        floor = self._answer_floor(body)
+        final = False
         for rnd in range(self.cfg.max_recall_rounds + 2):
+            tools_r = p.tools
+            if guard_on:
+                final, tools_r = self._plan_round(p, phys0, loop, body, rnd, floor, lu_full)
+                phys = phys0 + clean(loop)
             self._live(p, phys, rnd, body)
             if stream_state is not None:
                 stream_state["internal"] = self._internal_names(p, phys)
+            self.wguard.where = "final" if final else ("answer" if rnd == 0 else "recall_round")
             try:
                 if emit:
-                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd), "messages": phys,
-                                        "tools": p.tools}, emit, stream_state)
+                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd, tools_r), "messages": phys,
+                                        "tools": tools_r}, emit, stream_state)
                 else:
-                    resp = answerfix.chat(self, p, body, phys, rnd)
+                    resp = answerfix.chat(self, p, body, phys, rnd, tools_r)
             except UpstreamError as e:
                 self.journal.log("upstream_error", conv=p.conv, status=e.status, error=str(e)[:300])
                 return e.status, _err_body(e), {}
@@ -138,6 +159,8 @@ class Proxy:
                 self.journal.log("client_disconnect", conv=p.conv, round=rnd, req=rid_req,
                                  ms=round((time.time() - t0) * 1000))
                 raise
+            finally:
+                self.wguard.where = ""
             self._log_request("managed", p, resp, t0, rnd, len(phys))
             self._live(p, phys, rnd, body, resp)
             msg = resp["choices"][0]["message"]
@@ -149,14 +172,15 @@ class Proxy:
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
-            if others or rnd > self.cfg.max_recall_rounds:
-                # chiamate miste (o troppi giri): al client vanno solo le sue; la recall non eseguita sparisce.
+            if others or rnd > self.cfg.max_recall_rounds or final:
+                # chiamate miste (o troppi giri, o giro finale per spazio): al client vanno solo le sue; la recall
+                # non eseguita sparisce.
                 msg["tool_calls"] = others or None
                 if not others:
                     msg.pop("tool_calls", None)
                     resp["choices"][0]["finish_reason"] = "stop"
                 self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
-                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}))
+                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final)
                 break
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
             amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
@@ -194,6 +218,10 @@ class Proxy:
                 if rnd == self.cfg.max_recall_rounds:
                     # ultimo giro: niente nuova ricerca, il modello deve rispondere con ciò che ha (G3)
                     out = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
+                elif guard_on:
+                    out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
+                    out = self._fit_result(p, phys0, loop, new, body, rnd, floor, lu_full, a, out, meta,
+                                           last_user)
                 else:
                     out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
                     # ricontrollo del budget: il risultato non deve far uscire il prompt dalla finestra
@@ -230,8 +258,14 @@ class Proxy:
                     info = "\n[%s %s: %d risultati]\n" % (cname, _short(a), len(meta))
                     self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                     strip_r[-1] += info
-            phys += new
-            internal += new
+            if guard_on:
+                loop += new
+                phys = phys0 + clean(loop)
+            else:
+                phys += new
+                internal += new
+        if guard_on:
+            internal = clean(loop)
         # controllo post-risposta (K) e pulizia del ragionamento di T/K (answerfix.py)
         resp = answerfix.guard(self, p, body, phys, resp, emit)
         answerfix.finish(self, p, resp)
@@ -268,6 +302,117 @@ class Proxy:
                 fin["timings"] = resp["timings"]
             emit(fin)
         return 200, resp, hdr
+
+    # ---------- 0.3.3 window guard: recall loop (window.py) ----------
+    def _answer_floor(self, body) -> int:
+        """F: answer tokens the client call always gets: the client's max_tokens (or default_response), lowered to
+        response_floor when that is set, never more than a quarter of the window."""
+        mt = int(body.get("max_completion_tokens") or body.get("max_tokens") or self.cfg.default_response)
+        rf = int(self.cfg.response_floor or 0)
+        f = min(mt, rf) if rf > 0 else mt
+        return max(1, min(f, max(1, int(self.cfg.window) // 4)))
+
+    def _final_tools(self, p, phys):
+        """Final call for lack of space: the client's tools only (the proxy's own are not offered)."""
+        if not getattr(self.cfg, "final_drop_internal_tools", True) or not p.tools:
+            return p.tools
+        names = self._internal_names(p, phys)
+        out = [t for t in p.tools if ((t or {}).get("function") or {}).get("name") not in names]
+        return out or None
+
+    def _wcount(self, phys, tools, body) -> int:
+        return self.wguard.count(phys, tools, template_kwargs(body))
+
+    def _plan_round(self, p, phys0, loop, body, rnd, floor, question):
+        """Before each round of the recall loop: INV-1/INV-3 with removals by value (G2). Mutates `loop` (pieces
+        replaced by receipts / one conclusion line, whole rounds dropped) and returns (final, tools for the round).
+        Search round: P + CALL_ALLOWANCE + RESULT_MIN + F + margin <= W. Final round: P + F + margin <= W, always
+        reachable by removing everything the loop added (P -> P0, and P0 + F + margin <= W is checked in prepare)."""
+        W, M = int(self.cfg.window), self.wguard.margin
+        ntok = self.tc.count
+        policy = getattr(self.cfg, "recall_removal", "value")
+        removed = []
+
+        def fits(extra, tools):
+            return self._wcount(phys0 + clean(loop), tools, body) + extra + M <= W
+
+        def shrink(extra, tools):
+            while not fits(extra, tools):
+                order = removal_order(loop, ntok, question, policy, rn=p.recall_name, lang=p.lang)
+                if not order:
+                    return False
+                pc = order[0]
+                remove_piece(loop, pc, p.recall_name, p.lang, ntok)
+                removed.append([pc["kind"], pc["round"], ntok(pc["text"])])
+            return True
+
+        search_ok = rnd <= self.cfg.max_recall_rounds
+        final = not search_ok or not shrink(CALL_ALLOWANCE + RESULT_MIN + floor, p.tools)
+        tools = p.tools
+        if final:
+            # closed for space or for the round limit: no internal tools (a recall there would be dropped and the
+            # answer left empty); for space the model is also told why
+            tools = self._final_tools(p, phys0 + clean(loop))
+        if final and search_ok:
+            if loop and loop[-1].get("role") == "tool" and not loop[-1].get("_final_note"):
+                note = FINAL_NOTE_IT if p.lang == "it" else FINAL_NOTE_EN
+                loop[-1] = {**loop[-1], "content": _txt(loop[-1].get("content")) + note, "_final_note": True,
+                            "_keep": True}
+        if final and not shrink(floor, tools):
+            # C2: drop whole rounds (call + results), oldest first, until the final call fits (P -> P0)
+            while loop and not fits(floor, tools):
+                j = next((k for k in range(1, len(loop)) if loop[k].get("role") == "assistant"), len(loop))
+                del loop[:j]
+                removed.append(["round", -1, 0])
+        if removed or (final and search_ok):
+            P = self._wcount(phys0 + clean(loop), tools, body)
+            self.wguard._log(action="final" if final else "remove", where="round", conv=p.conv, round=rnd,
+                             policy=policy, removed=removed, prompt=P, floor=floor, fits=P + floor + M <= W)
+        return final, tools
+
+    def _fit_result(self, p, phys0, loop, new, body, rnd, floor, question, a, out, meta, last_user):
+        """A recall result never takes the room the answer floor needs: cap = W - margin - F - P(with an empty
+        result). If the cap is below what the result needs (at most 2 x RESULT_MIN), pieces are removed first -
+        older rounds and the reasoning of this round (the model already acted on it) - so a search round is never
+        wasted on an empty result. Then leaf selector (whole blocks), then a strict cut (count includes the notice)."""
+        W, M = int(self.cfg.window), self.wguard.margin
+        ntok = self.tc.count
+        policy = getattr(self.cfg, "recall_removal", "value")
+        empty = {"role": "tool", "tool_call_id": "x", "content": ""}
+
+        def cap_now():
+            base = self._wcount(phys0 + clean(loop + new) + [empty], p.tools, body)
+            return max(0, W - M - floor - base)
+
+        need = self.tc.count(out)
+        cap = cap_now()
+        want = min(need, 2 * RESULT_MIN)
+        removed = []
+        while cap < want:
+            both = loop + new
+            order = removal_order(both, ntok, question, policy, rn=p.recall_name, lang=p.lang)
+            if not order:
+                break
+            pc = order[0]
+            remove_piece(both, pc, p.recall_name, p.lang, ntok)
+            loop[:] = both[:len(loop)]
+            new[:] = both[len(loop):]
+            removed.append([pc["kind"], pc["round"], ntok(pc["text"])])
+            cap = cap_now()
+        if removed:
+            self.wguard._log(action="remove", where="result", conv=p.conv, round=rnd, policy=policy,
+                             removed=removed, cap=cap, need=need)
+        if need <= cap:
+            return out
+        if self.cfg.recall_leaf_select:
+            meta.clear()
+            out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta, max_tokens=cap)
+            need = self.tc.count(out)
+        if need > cap:
+            note = "\n[...tagliato per spazio]" if p.lang == "it" else "\n[...cut for space]"
+            out = self.wguard.fit_text(out, cap, note)
+            self.journal.log("recall_trimmed", conv=p.conv, room=cap, round=rnd, guard=True)
+        return out
 
     # ---------- streaming ----------
     def _emit_delta(self, emit, state, resp, delta):
@@ -522,6 +667,16 @@ class Proxy:
                          finish=resp["choices"][0].get("finish_reason"),
                          invalidated_suffix_tokens=inv.get("tokens", 0) if p else None,
                          invalidated_cause=inv.get("cause") if p else None)
+        if p and rnd == 0 and any(e.get("event") == "mask" for e in p.events or []):
+            # 0.3.3, measure only: after a mask, prefix the proxy expected the engine to reuse vs what it reused
+            # (hybrid engines restart from the live session or the longest checkpoint that is a prefix)
+            real_reused = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
+            if real_reused is None:
+                real_reused = tm.get("cache_n")
+            exp = inv.get("expected_reused")
+            self.journal.log("mask_reuse", conv=p.conv, seg=p.seg, first_diff=inv.get("first_diff"),
+                             expected_reused=exp, real_reused=real_reused, prompt_tokens=real,
+                             gap=(exp - real_reused) if exp is not None and real_reused is not None else None)
 
 
 def _short(a) -> str:

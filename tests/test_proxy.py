@@ -151,6 +151,12 @@ class TestMasking(Base):
         read = [e["prompt_read"] for e in reqs[1:]]
         big = sum(1 for r in read if r > 1500)
         self.assertEqual(big, len(masks), read)
+        # 0.3.3 (measure only): one mask_reuse per mask, expected reuse = prefix up to the first difference
+        reuse = self.events("mask_reuse")
+        self.assertEqual(len(reuse), len(masks))
+        for e in reuse:
+            self.assertIsNotNone(e["expected_reused"])
+            self.assertIsNotNone(e["real_reused"])
         # segnaposto presenti, coda recente intatta, coppie tool integre
         last = self.eng.requests[-1]["messages"]
         ph = [m for m in last if m.get("role") == "tool" and (m["content"].startswith(OUT_PREFIX) or m["content"].startswith(RECEIPT_OPEN))]
@@ -308,8 +314,13 @@ class TestSegments(Base):
         h3 = [dict(m) for m in h2]
         h3[1]["content"] = "crea un altro gioco"
         self.proxy.mgr.cfg.segments_enabled = False
-        r, _ = self.send(h3)
+        # 0.3.3: without segments the whole history (~52K) no longer fits the 40K window: the window guard refuses
+        # the request (fail-closed, clear 400) instead of sending it over the window as before.
+        st, r, _ = self.proxy.chat({"model": "m", "messages": h3, "tools": TOOLS, "max_tokens": 1024})
         self.assertTrue(self.events("segment_miss"))
+        self.assertEqual((st, r["error"]["code"]), (400, "window_guard"))
+        self.proxy.mgr.cfg.window_guard = False      # guard off: the 0.3.2 behaviour (segment 0, request sent)
+        r, _ = self.send(h3)
         self.assertEqual(r["strata_context"]["segment"], 0)
 
     def test_response_floor_and_saved_A_prompt(self):

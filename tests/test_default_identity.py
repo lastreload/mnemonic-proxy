@@ -44,13 +44,15 @@ def compute(inputs: dict) -> dict:
             for ai, a in enumerate(ARGS):
                 args = {k: v.format(rid=rid, needle=needle) if isinstance(v, str) else v for k, v in a.items()}
                 out["%s|cfg%d|args%d" % (fmt, ci, ai)] = m.recall("c", args, max_idx=5)
-    out["server"] = server_round(inputs["formats"]["yaml"][0])
+    out["server"] = server_round(inputs["formats"]["yaml"][0], {"window_guard": False})
+    out["server"].pop("_guard", None)
     return out
 
 
-def server_round(text: str) -> dict:
+def server_round(text: str, over: dict | None = None, n_ctx: int = 12288) -> dict:
     """One full proxy turn with the default config: the model asks recall(id) of a big output in a small window
-    (12K: the server's budget check cuts the result). Returns what the engine received in the round after."""
+    (12K: the server's budget check cuts the result). Returns what the engine received in the round after.
+    over: extra config (0.3.3: the golden is the 0.3.2 path, window_guard off; see test_guard_on_small_window)."""
     from ctxproxy.core import RECALL_NAME, Config, Journal, Store, TokenCounter
     from ctxproxy.server import Proxy
     from ctxproxy.upstream import Upstream
@@ -70,19 +72,25 @@ def server_round(text: str) -> dict:
             state["k"] = 2
         if state["k"] == 0:
             import re
-            rid = re.findall(r"r[0-9a-f]{12}", json.dumps(msgs))[0]
+            ids = re.findall(r"r[0-9a-f]{12}", json.dumps(msgs))
+            if not ids:                            # big window: nothing archived, the output is in the prompt
+                state["k"] = 2
+                return {"role": "assistant", "content": "ok"}
+            rid = ids[0]
             state["k"] = 1
             return {"role": "assistant", "content": "", "tool_calls": [
                 {"type": "function", "function": {"name": RECALL_NAME, "arguments": json.dumps({"id": rid})}}]}
         return {"role": "assistant", "content": "ok"}
 
     tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-    eng = FakeEngine(policy, n_ctx=12288)
+    eng = FakeEngine(policy, n_ctx=n_ctx)
     url = eng.start()
     try:
-        cfg = Config.from_dict({"window": 12288, "allow_small_window": True})
+        cfg = Config.from_dict({"window": n_ctx, "allow_small_window": True, **(over or {})})
+        got["_guard"] = None
         proxy = Proxy(cfg, Upstream(url), Store(os.path.join(tmp.name, "a.sqlite")),
                       Journal(os.path.join(tmp.name, "j.jsonl")), TokenCounter(3.5))
+        got["_guard"] = proxy.wguard
         h = [{"role": "system", "content": "you are a coding agent"},
              {"role": "user", "content": "Run: cat services.yaml"},
              {"role": "assistant", "content": "", "tool_calls": [{"id": "call_cat", "type": "function", "function": {
@@ -102,6 +110,8 @@ def server_round(text: str) -> dict:
         st, r, _ = proxy.chat({"model": "m", "messages": h, "tools": TOOLS, "max_tokens": 1024})
         got["status"] = st
         got["answer"] = r["choices"][0]["message"].get("content") if st == 200 else r
+        if n_ctx != 12288:                         # 0.3.3 identity test: every request the engine received
+            got["_requests"] = json.dumps(eng.requests, sort_keys=True)
         proxy.store.db.close()
     finally:
         eng.stop()
@@ -128,6 +138,29 @@ class TestDefaultIdentity(unittest.TestCase):
         self.assertEqual(got["server"]["status"], 200)
         self.assertIn("tool", got["server"])
         self.assertRegex(got["server"]["tool"][-200:], "truncated")   # the server-side cut is exercised too
+
+    def test_guard_on_small_window(self):
+        """0.3.3, window guard on (default): the recall result is no longer cut by the old double reserve (0.3.2 left
+        it ~0 tokens in 12K); it gets what fits with the answer floor, and the next request respects INV-1."""
+        with open(GOLDEN, encoding="utf-8") as f:
+            g = json.load(f)
+        got = server_round(g["inputs"]["formats"]["yaml"][0])
+        wg = got.pop("_guard")
+        self.assertEqual(got["status"], 200)
+        self.assertGreater(len(got["tool"]), len(g["expected"]["server"]["tool"]))
+        self.assertEqual((wg.violations, wg.refused), (0, 0))
+
+    def test_guard_identity_at_128k(self):
+        """0.3.3, test 4: where the room abounds (128K) the guard changes nothing: same requests, byte for byte."""
+        with open(GOLDEN, encoding="utf-8") as f:
+            g = json.load(f)
+        text = g["inputs"]["formats"]["yaml"][0]
+        on = server_round(text, n_ctx=131072)
+        off = server_round(text, {"window_guard": False}, n_ctx=131072)
+        wg = on.pop("_guard")
+        off.pop("_guard")
+        self.assertEqual(on, off)
+        self.assertEqual((wg.violations, wg.refused), (0, 0))
 
 
 if __name__ == "__main__":

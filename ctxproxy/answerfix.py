@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 import time
 
+from .upstream import UpstreamError
+
 # token di un testo recall: identificatori con - . / : @ + interni (WX-5130-TEAL, 71.3, ip-10-4-77-212, tests/x.py)
 TOK_RE = re.compile(r"[^\W_][\w\-./:@+]*\w|\w")
 # ultima parola della risposta (può finire con '.', '-', '/', ':' come "71." o "WX-")
@@ -94,18 +96,26 @@ def prefix_hit(reply: str, recall_text: str):
 ANSWER_MIN = 64        # token di risposta garantiti dopo il ragionamento (sotto: thinking non acceso)
 
 
-def fit_thinking(proxy, p, body: dict, phys: list, budget: int):
+def fit_thinking(proxy, p, body: dict, phys: list, budget: int, tools="_p"):
     """Corpo con il thinking e il tetto che entra nella finestra, oppure None se non c'è spazio.
-    Con il controllo del budget del proxy (upstream.guard, finestre piccole) max_tokens viene ridotto allo spazio
+    Con la guardia di finestra (0.3.3, window.py; o il vecchio upstream.guard) max_tokens viene ridotto allo spazio
     rimasto: il tetto di ragionamento si riduce di conseguenza (resta sempre spazio per ANSWER_MIN token di
     risposta); senza tetto (budget 0) il thinking si accende solo se il guard non riduce la risposta."""
     cfg = proxy.cfg
+    tools = p.tools if tools == "_p" else tools
     send = thinking_fields(body, budget, int(cfg.default_response))
+    wg = getattr(proxy, "wguard", None)
     g = getattr(proxy.up, "guard", None)
-    if g is None:
-        return send
     want = int(send["max_tokens"])
-    got = int(g({**send, "messages": phys, "tools": p.tools}, proxy.up).get("max_tokens") or want)
+    if wg is not None and getattr(cfg, "window_guard", True):
+        try:
+            got = int(wg.enforce({**send, "messages": phys, "tools": tools}, dry=True).get("max_tokens") or want)
+        except UpstreamError:
+            return None
+    elif g is not None:
+        got = int(g({**send, "messages": phys, "tools": tools}, proxy.up).get("max_tokens") or want)
+    else:
+        return send
     if got >= want:
         return send
     if not budget:
@@ -119,22 +129,24 @@ def fit_thinking(proxy, p, body: dict, phys: list, budget: int):
     return send
 
 
-def thinking_body(proxy, p, body: dict, phys: list, rnd: int) -> dict:
+def thinking_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
     """T: il corpo da mandare al motore per questo giro (body invariato se T è spento o non si applica)."""
     cfg = proxy.cfg
     if not getattr(cfg, "answer_thinking_after_recall", False) or not ends_with_recall(phys, p.recall_aliases):
         return body
     budget = int(getattr(cfg, "answer_thinking_budget", 0) or 0)
-    send = fit_thinking(proxy, p, body, phys, budget)
+    send = fit_thinking(proxy, p, body, phys, budget, tools)
     proxy.journal.log("answer_thinking", conv=p.conv, round=rnd, budget=budget, used=send is not None,
                       effective=(send or {}).get("reasoning_budget_tokens"), max_tokens=(send or {}).get("max_tokens"))
     return send if send is not None else body
 
 
-def chat(proxy, p, body: dict, phys: list, rnd: int) -> dict:
-    """Giro non-stream verso il motore, con T se si applica (la risposta porta allora il segno _af_thinking)."""
-    send = thinking_body(proxy, p, body, phys, rnd)
-    resp = proxy.up.chat({**send, "messages": phys, "tools": p.tools})
+def chat(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
+    """Giro non-stream verso il motore, con T se si applica (la risposta porta allora il segno _af_thinking).
+    tools: quelli del giro (0.3.3: la chiamata finale per spazio non offre gli strumenti del proxy)."""
+    tools = p.tools if tools == "_p" else tools
+    send = thinking_body(proxy, p, body, phys, rnd, tools)
+    resp = proxy.up.chat({**send, "messages": phys, "tools": tools})
     if send is not body and isinstance(resp, dict):
         resp["_af_thinking"] = True
         msg = (resp.get("choices") or [{}])[0].get("message") or {}
@@ -146,10 +158,10 @@ def chat(proxy, p, body: dict, phys: list, rnd: int) -> dict:
     return resp
 
 
-def stream_body(proxy, p, body: dict, phys: list, rnd: int) -> dict:
+def stream_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
     """Giro in streaming: stesso corpo di T (il ragionamento, se c'è, arriva al client come reasoning_content come
     per ogni modello con il thinking acceso; il proxy non lo toglie dallo stream)."""
-    return thinking_body(proxy, p, body, phys, rnd)
+    return thinking_body(proxy, p, body, phys, rnd, tools)
 
 
 def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None) -> dict:

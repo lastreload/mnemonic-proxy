@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- **Fix: the proxy never sends a request larger than the window (window guard, on by default).** On a small window
+  (AgentLongBench at 16K/32K) the recall loop could grow the prompt round after round and send
+  `prompt + max_tokens` over the window: the engine refused the request and the client got an error or an empty
+  answer. Now one check runs before EVERY call to the engine (answer, recall rounds, handoff notes, answerfix
+  retries, streaming and not): `prompt + max_tokens + window_margin ≤ window` (INV-1). If it does not fit,
+  `max_tokens` is lowered, never below the answer floor; a thinking budget always leaves `answer_min_tokens` of
+  answer (INV-2); a new search round starts only if the worst case fits (INV-3), otherwise the round is final:
+  the proxy's own tools are not offered and the model is told there is no room for more searches. To make room
+  the proxy removes what the recall loop added, by value per token (results become one-line receipts recallable
+  by id, old reasoning becomes its last conclusion line, never a generated summary); removing all of it gives back
+  the prepared prompt, so the final call always fits. If even that is impossible the client gets HTTP 400 and
+  nothing is sent. Exact with `--tokenizer`; without it the guarantee is that of the estimate
+  (`guarantee=estimated` in the journal). `"window_guard": false` restores 0.3.2.
+- Measured on CPU with a strict fake engine (rejects every request over the window, always generates the maximum):
+  2,000 random scenarios (8K–128K, streaming and not, answerfix and selector on/off), 27,411 requests, **0 over
+  the window** (0.3.2 on the same scenarios: 1,021 of 3,867). Replay of the failed AgentLongBench cases
+  (`13_i3_b` 16K, `9_i2_b` and `35_i9_b` 32K): 0.3.2 ends in an engine error on all 4, the guard answers all 4.
+- The handoff-notes request is also kept in the window: the source part is shortened from the end (whole groups,
+  same prefix). This is the only change of the 0.3.0 language golden (`tests/test_lang.py`); at 128K the requests
+  are byte-identical with and without the guard (`tests/test_default_identity.py`).
+- New journal events: `window_guard` (`clamp`, `budget_cap`, `remove`, `final`, `notes_source`, `refused`) and,
+  measure only, `mask_reuse` (prefix the engine was expected to reuse after a mask vs what it reused).
+- A final round (for space or for the round limit) no longer offers the proxy's tools: a recall there was dropped
+  and could leave the answer empty.
+
 - **Fix: `recall` by id lost data between pages.** When a page was cut by `recall_max_tokens`, the truncation notice
   stayed inside the page, the header counted it as data and the next `offset` skipped as many real characters as the
   notice is long (146 per page in English). Now the notice is removed: the header and the `[continues: … offset=N]`

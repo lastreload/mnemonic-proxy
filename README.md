@@ -424,6 +424,16 @@ Optional: `--tokenizer` (a Hugging Face `tokenizer.json`, or a Strata pack `toke
 instead of a chars/3.5 estimate; with llama-server, `"engine_tokenize": true` counts through its `/tokenize`. A
 systemd user unit is in [examples/mnemonic-proxy.service](https://github.com/lastreload/mnemonic-proxy/blob/main/examples/mnemonic-proxy.service).
 
+**Window guard.** No request the proxy sends to the engine is larger than the window: before every call (answer,
+recall rounds, handoff notes, retries) the proxy checks `prompt + max_tokens + window_margin ≤ window` and, if it
+does not fit, lowers `max_tokens`, removes what the recall loop added (by value per token: results become one-line
+receipts, old reasoning becomes its conclusion line, recallable by id) or, as a last resort, returns HTTP 400 to
+the client instead of sending. With `--tokenizer` the count is the engine's own, so the guarantee is exact
+(`window_guard` events in the journal carry `guarantee=exact`). Without it the count is the calibrated chars/3.5
+estimate and the guarantee is only as good as that estimate (`guarantee=estimated`): on text with many digits or
+symbols the real count can be well above it, so use `--tokenizer` (or raise `window_estimate_slack`, e.g. `0.3`)
+when the window is small. `"window_guard": false` restores the 0.3.2 behaviour.
+
 Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
 history.
 

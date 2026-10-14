@@ -50,6 +50,13 @@ class TestScenario(unittest.TestCase):
         cls.en = run_session(os.path.join(d, "en"))
         cls.legacy = run_session(os.path.join(d, "legacy"), legacy_until=1)
         cls.it = run_session(os.path.join(d, "it"), {"prompt_language": "it"})
+        # 0.3.3: the 0.3.0 golden is byte-identical with the window guard off; with it on (default) exactly one
+        # request differs - the handoff-notes request of the 40K segment step, whose prompt A + instruction was over
+        # the window (40092 > 40000 - 64): the guard shortens A from the end (see test_guard_changes_only_notes).
+        for name in ("legacy_off", "it_off"):
+            os.makedirs(os.path.join(d, name))
+        cls.legacy_off = run_session(os.path.join(d, "legacy_off"), {"window_guard": False}, legacy_until=1)
+        cls.it_off = run_session(os.path.join(d, "it_off"), {"prompt_language": "it", "window_guard": False})
 
     @classmethod
     def tearDownClass(cls):
@@ -71,12 +78,27 @@ class TestScenario(unittest.TestCase):
     def test_old_conversation_byte_identical_to_030(self):
         with open(GOLDEN_030) as f:
             golden = f.read().split()
-        self.assertEqual(digest(self.legacy), golden)
+        self.assertEqual(digest(self.legacy_off), golden)
 
     def test_prompt_language_it_is_030(self):
         with open(GOLDEN_030) as f:
             golden = f.read().split()
-        self.assertEqual(digest(self.it), golden)
+        self.assertEqual(digest(self.it_off), golden)
+
+    def test_guard_changes_only_notes(self):
+        """Window guard on: the only difference from 0.3.0 is the over-window notes request, now a prefix of A."""
+        with open(GOLDEN_030) as f:
+            golden = f.read().split()
+        for on, off in ((self.legacy, self.legacy_off), (self.it, self.it_off)):
+            dg = digest(on)
+            self.assertEqual(len(dg), len(golden))
+            diff = [i for i, (a, b) in enumerate(zip(dg, golden)) if a != b]
+            self.assertEqual(len(diff), 1, diff)
+            i = diff[0]
+            a, b = on[i]["messages"], off[i]["messages"]
+            self.assertEqual(a[-1], b[-1])                     # same notes instruction
+            self.assertLess(len(a), len(b))
+            self.assertEqual(a[:-1], b[:len(a) - 1])          # A shortened from the end, same prefix (cache)
 
     def test_same_shape_in_both_languages(self):
         self.assertEqual([(r["conv"], r["step"], len(r["messages"])) for r in self.en],

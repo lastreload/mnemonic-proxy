@@ -24,6 +24,10 @@ class Upstream:
         self.slot_id = 0
         self.slot_dir = ""          # per riconoscere un file mancante (llama-server risponde 400)
         self.extra_body: dict = {}  # campi aggiunti a ogni richiesta chat (llama.cpp: id_slot, cache_prompt)
+        self.window_guard = None    # window.WindowGuard: every chat request passes through enforce() (0.3.3)
+
+    def _guard(self, body: dict) -> dict:
+        return self.window_guard.enforce(body) if self.window_guard is not None else body
 
     def set_engine(self, engine, slot_dir: str = ""):
         self.engine = engine
@@ -53,13 +57,14 @@ class Upstream:
         return json.loads(body)
 
     def chat(self, body: dict) -> dict:
-        body = {**self.extra_body, **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}
+        body = self._guard({**self.extra_body,
+                            **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}})
         return self.post_json("/v1/chat/completions", body)
 
     def chat_stream(self, body: dict) -> "StreamCall":
         """Apre /v1/chat/completions in streaming. Iterare l'oggetto dà i chunk JSON; close() chiude la connessione
         (Strata vede la disconnessione e annulla la generazione)."""
-        body = {**self.extra_body, **body, "stream": True, "stream_options": {"include_usage": True}}
+        body = self._guard({**self.extra_body, **body, "stream": True, "stream_options": {"include_usage": True}})
         return StreamCall(self, body)
 
     def slot(self, action: str, filename: str) -> dict:
