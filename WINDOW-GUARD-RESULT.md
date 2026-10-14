@@ -2,8 +2,10 @@
 
 Data: 14/10/2026. Branch `fix/window-guard` da `main a9eba25`, in `/mnt/mneme-nvme/proxy-ideas/gemelli/proxy-guard`
 (PC4070TI) e in `…/workspaces/t_b0eba5e1/proxy-guard` (MVLINNA). Commit come Maurizio Verde, **nessun push**.
-Tutto su CPU, senza lock GPU; la produzione :8095/:8096 non è stata toccata. Dalle 18:10 il lavoro CPU si è
-spostato su MVLINNA, per il blocco GPU del coordinatore.
+Tutto su CPU, senza lock GPU; la produzione :8095/:8096 non è stata toccata. **Nota:** i due giri dello smoke G3
+(sezione 3.5, motore finto, nice 19/ionice idle, ~18:05–18:21) sono girati su PC4070TI, cioè durante il blocco GPU
+del coordinatore iniziato alle 18:10: possono aver disturbato le misure di velocità di `runs/par` in quella
+finestra. Dopo le 18:21 tutto il lavoro CPU (suite, prova a tappeto finale) è girato su MVLINNA.
 
 ## 1. Invarianti (G1)
 
