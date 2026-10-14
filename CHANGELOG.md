@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **`recall_leaf_select`** (off by default): on structured outputs `recall` returns the record that matches the query
+  or the user's last question, with the key lines of its ancestors, verbatim, `⋮` markers and the offsets of what was
+  left out. Falls back to the normal recall when the parse is uncertain, when `offset`/`path`/`mode` is given, or on
+  `recall(id)` without a strong match. Same behaviour in `recall_struct`/`flex`/`multi` and in the MCP server. With the
+  option on, the recall cap also counts the proxy's own header and warnings.
+- **`answer_thinking_after_recall`** and **`truncation_guard`** (off by default): thinking only for the answer after a
+  recall, and one replay with thinking for a short answer cut in the middle of a recalled value. The reasoning never
+  reaches the client and the prompt prefix stays stable.
+- Measured (one machine, Qwen3.8 Flash Next IQ3_XXS on Strata, 32K): complete evidence in the first recall 66% → 99%
+  (CPU replay, 1,512 turns); 80 sealed turns 70/80 → 80/80 with the selector and thinking after recall. Details:
+  `docs/dev-notes/LEAF-SELECT-RESULT.md`.
+- With the default config, what reaches the engine is byte-identical to 0.3.2 (`tests/test_default_identity.py`).
+
 ## 0.3.2 — 2026-10-11
 
 Runs natively on Windows (no WSL), with saved engine state. Available on PyPI.
