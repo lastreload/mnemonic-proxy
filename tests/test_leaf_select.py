@@ -170,10 +170,16 @@ class TestFormats(unittest.TestCase):
                                            leafsel.GAP, "      replica:", "        host: db-pagamenti-02",
                                            "        porta: 47213", "        sola_lettura: true"])
 
+    @unittest.skipIf(sys.version_info < (3, 11), "TOML selection needs tomllib (Python >= 3.11)")
     def test_toml_section(self):
         out, _ = self.check(TOML, "qual è la soglia_bar della pompa di riserva dell'impianto brenta?",
                             ["[impianti.brenta]", "[impianti.brenta.pompa_riserva]", "soglia_bar = 8.65"],
                             ["6.36", "11.30", "Cittadella"], fmt="toml")
+
+    @unittest.skipIf(sys.version_info >= (3, 11), "fallback only without tomllib")
+    def test_toml_falls_back_without_tomllib(self):
+        # Python 3.10: no tomllib, so TOML is never parsed and recall stays the normal one
+        self.assertIsNone(leafsel.parse_toml(TOML.split("\n"), TOML))
 
     def test_xml_element_same_id_other_parent(self):
         # lo stesso id T-0447 sta in due centrali: la domanda (valbruna) distingue
