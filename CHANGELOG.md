@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Fix: a piece carrying identifiers of the question is never the cheapest thing to drop.** The removal rule
+  discounts x0.25 a piece whose identifiers had all appeared in an older piece; the recall results that answer the
+  question look like duplicates of one another, so the question's own evidence was removed first (real journal,
+  ALB 16K `38_i13_j22_a_0031`: 5 of the 6 results carrying `0031` removed, 4 of them as the first choice). Now
+  `window.piece_value` never discounts a piece that carries identifiers of the current question and
+  `window.removal_order` puts those pieces last (whatever the policy: `age`, `reasoning`, `value`). The window
+  invariant does not change: a protected piece is still removed when nothing else can free the room, and the
+  journal records it (`protected` in the `window_guard` events, next to `policy`). With the same reconstructed
+  candidates the removed pieces carrying `0031` go from 5 to 1, and the one left is the event where every
+  remaining candidate carried it. Suite: 312 ok on 3.10, 338 ok on 3.14; sweep 2,000 scenarios (8K–128K, exact
+  tokenizer, 27,411 requests): 0 over the window. See `docs/dev-notes/GUARD-PROTECT-RESULT.md`.
 - **Fix: the proxy never sends a request larger than the window (window guard, on by default).** On a small window
   (AgentLongBench at 16K/32K) the recall loop could grow the prompt round after round and send
   `prompt + max_tokens` over the window: the engine refused the request and the client got an error or an empty

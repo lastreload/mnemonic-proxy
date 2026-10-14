@@ -62,6 +62,11 @@ disponibili prima della decisione, come chiede il commento del coordinatore:
 `recall_use.overlap` non è usato. Un risultato rimosso diventa una ricevuta di una riga con l'id, recuperabile con
 recall. Il ragionamento si riduce all'ultima riga di conclusione, **estratta**.
 
+**0.3.4 (questo ramo).** Il correttivo di duplicazione non si applica ai pezzi che portano almeno un
+identificativo della domanda corrente, e `removal_order` li mette in coda a tutto il resto (tutte le politiche):
+sono la prova che la domanda cerca, e il giornale registra `protected` quando l'invariante della finestra
+costringe a rimuoverli lo stesso. Vedi `docs/dev-notes/GUARD-PROTECT-RESULT.md`.
+
 **Confronto delle 3 politiche.** Rigioco a motore finto severo di tutti i casi D/Dfix di `runs/w16k` e `runs/w32k`
 che hanno recall: 18 casi su 26, gli altri 8 non hanno recall. Il copione è quello delle recall del modello vero,
 ognuna ripetuta con un ragionamento lungo quanto il caso peggiore. Metrica: valori gold rimasti nel prompt finale

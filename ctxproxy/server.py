@@ -332,6 +332,7 @@ class Proxy:
         ntok = self.tc.count
         policy = getattr(self.cfg, "recall_removal", "value")
         removed = []
+        protected = []               # pieces removed although they carry identifiers of the question (0.3.4)
 
         def fits(extra, tools):
             return self._wcount(phys0 + clean(loop), tools, body) + extra + M <= W
@@ -344,6 +345,8 @@ class Proxy:
                 pc = order[0]
                 remove_piece(loop, pc, p.recall_name, p.lang, ntok)
                 removed.append([pc["kind"], pc["round"], ntok(pc["text"])])
+                if pc.get("protected"):
+                    protected.append([pc["kind"], pc["round"], ntok(pc["text"])])
             return True
 
         search_ok = rnd <= self.cfg.max_recall_rounds
@@ -367,7 +370,8 @@ class Proxy:
         if removed or (final and search_ok):
             P = self._wcount(phys0 + clean(loop), tools, body)
             self.wguard._log(action="final" if final else "remove", where="round", conv=p.conv, round=rnd,
-                             policy=policy, removed=removed, prompt=P, floor=floor, fits=P + floor + M <= W)
+                             policy=policy, removed=removed, protected=protected, prompt=P, floor=floor,
+                             fits=P + floor + M <= W)
         return final, tools
 
     def _fit_result(self, p, phys0, loop, new, body, rnd, floor, question, a, out, meta, last_user):
@@ -388,6 +392,7 @@ class Proxy:
         cap = cap_now()
         want = min(need, 2 * RESULT_MIN)
         removed = []
+        protected = []               # pieces removed although they carry identifiers of the question (0.3.4)
         while cap < want:
             both = loop + new
             order = removal_order(both, ntok, question, policy, rn=p.recall_name, lang=p.lang)
@@ -398,10 +403,12 @@ class Proxy:
             loop[:] = both[:len(loop)]
             new[:] = both[len(loop):]
             removed.append([pc["kind"], pc["round"], ntok(pc["text"])])
+            if pc.get("protected"):
+                protected.append([pc["kind"], pc["round"], ntok(pc["text"])])
             cap = cap_now()
         if removed:
             self.wguard._log(action="remove", where="result", conv=p.conv, round=rnd, policy=policy,
-                             removed=removed, cap=cap, need=need)
+                             removed=removed, protected=protected, cap=cap, need=need)
         if need <= cap:
             return out
         if self.cfg.recall_leaf_select:

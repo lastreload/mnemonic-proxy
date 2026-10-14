@@ -217,14 +217,22 @@ def pieces(loop: list) -> list[dict]:
     return out
 
 
+def asked_idents(pc: dict, question: str) -> set:
+    """Identifiers of the piece that also appear in the current question (empty = the piece carries nothing the
+    question asks about). A piece with a non-empty set is `protected`: the duplication rule never discounts it and
+    it is removed only when nothing else can free the room (0.3.4, ALB w16k: the receipts with `0031`)."""
+    return idents(pc["text"]) & idents(question)
+
+
 def piece_value(pc: dict, question: str, loop: list, n_rounds: int, seen_before: set | None = None) -> float:
     """Value of a piece (higher = keep). Only signals available BEFORE the decision (no recall_use.overlap: it counts
     words like 'recall' as use): kind, age, identifiers of the current request present in the piece (x3),
-    duplication (a piece whose identifiers all appeared in an older piece is worth little). Reasoning weighs 1/4
+    duplication (a piece whose identifiers all appeared in an older piece is worth little - but a piece that carries
+    identifiers of the current question is NEVER discounted: it is the answer). Reasoning weighs 1/4
     of a result (the model already acted on it; only its extracted conclusion line is kept)."""
     q = idents(question)
     ids = idents(pc["text"])
-    dup = bool(ids) and seen_before is not None and ids <= seen_before
+    dup = bool(ids) and seen_before is not None and ids <= seen_before and not (ids & q)
     v = 3.0 * len(ids & q) + 1.0 + (pc["round"] + 1) / float(max(n_rounds, 1))
     if dup:
         v *= 0.25
@@ -243,21 +251,32 @@ def removal_order(loop: list, ntok, question: str = "", policy: str = "value", k
                   rn: str = "recall", lang: str = "en") -> list:
     """Pure, deterministic order in which the pieces are removed (first = removed first).
     age: oldest round first (reasoning before result within a round); reasoning: all reasoning (oldest first) then
-    results (oldest first); value: ascending value per freed token, ties -> oldest first."""
+    results (oldest first); value: ascending value per freed token, ties -> oldest first.
+    Whatever the policy, a piece that carries identifiers of the current question (`protected`: the question asks
+    about what the piece contains) is removed LAST: first the pieces without them (reasoning, then results), and the
+    results with them only when nothing else can free the room. The window invariant wins over this rule: the loop
+    that consumes this order keeps removing until the request fits, so a protected piece is removed too when it is
+    the only one left (the journal records it under `protected`).
+    Each piece carries `tokens` (freed), `value`, `protected` for the caller's journal."""
     ps = [p for p in pieces(loop) if p["kind"] in kinds]
-    if policy == "age":
-        return sorted(ps, key=lambda p: (p["round"], 0 if p["kind"] == "reasoning" else 1, p["i"]))
-    if policy == "reasoning":
-        return sorted(ps, key=lambda p: (0 if p["kind"] == "reasoning" else 1, p["round"], p["i"]))
     n_rounds = sum(1 for m in loop if m.get("role") == "assistant")
+    q = idents(question)
     seen: set = set()
     for p in sorted(ps, key=lambda p: p["i"]):
         p["tokens"] = freed(p, ntok, rn, lang)
         ids = idents(p["text"])
+        p["protected"] = bool(ids & q)
         p["value"] = piece_value(p, question, loop, n_rounds, seen if p["kind"] == "result" else None)
         if p["kind"] == "result":
             seen |= ids
-    return sorted(ps, key=lambda p: (p["value"] / p["tokens"], p["round"], p["i"]))
+    if policy == "age":
+        key = lambda p: (p["round"], 0 if p["kind"] == "reasoning" else 1, p["i"])
+    elif policy == "reasoning":
+        key = lambda p: (0 if p["kind"] == "reasoning" else 1, p["round"], p["i"])
+    else:
+        key = lambda p: (p["value"] / p["tokens"], p["round"], p["i"])
+    # 0 in front: the pieces without the question's identifiers go first, the protected ones last
+    return sorted(ps, key=lambda p: (1 if p["protected"] else 0,) + key(p))
 
 
 def conclusion(reasoning: str, max_chars: int = 200) -> str:

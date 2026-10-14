@@ -215,6 +215,132 @@ class TestStrictEngine(unittest.TestCase):
             sc.close()
 
 
+class TestQuestionIdents(unittest.TestCase):
+    """0.3.4: the pieces carrying the identifiers of the current question are removed last (ALB w16k, case 0031).
+
+    The defect: with value pz the duplication rule discounted a result whose identifiers had already appeared in an
+    older result (x0.25), so the receipts the question is about looked like receipts with nothing useful in them and
+    were the first ones thrown away - with the guard on the model answered "no" to a question whose answer was yes.
+    """
+    W = 16384
+    QID = "db-77-001"
+    QUESTION = "which port did db-77-001 use? use recall if needed"
+
+    def setUp(self):
+        import tempfile as _t
+        from types import SimpleNamespace
+        self.tmp = _t.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(self.tmp.cleanup)
+        from ctxproxy.core import LEGACY_RECALL_NAME
+        cfg = Config.from_dict({"window": self.W})
+        self.jpath = os.path.join(self.tmp.name, "j.jsonl")
+        self.px = Proxy(cfg, Upstream("http://127.0.0.1:9"), Store(os.path.join(self.tmp.name, "a.sqlite")),
+                        Journal(self.jpath), TokenCounter(3.5))
+        self.addCleanup(self.px.store.db.close)
+        rtool = {"type": "function", "function": {"name": RECALL_NAME, "parameters": {"type": "object"}}}
+        self.p = SimpleNamespace(conv="c", tools=TOOLS + [rtool], recall_name=RECALL_NAME, lang="en", catalog=None,
+                                 recall_aliases=frozenset((RECALL_NAME, LEGACY_RECALL_NAME)))
+        self.body = {"max_tokens": 2048}
+        self.floor = self.px._answer_floor(self.body)
+
+    def asked(self, tokens: int) -> str:
+        """A recall result the question is about (contains db-77-001)."""
+        line = "host %s port 31010 status ok latency 12 ms\n" % self.QID
+        return (line * (int(tokens * 3.5) // len(line) + 1))[:int(tokens * 3.5)]
+
+    def plain(self, tokens: int) -> str:
+        """A recall result with no identifier of the question."""
+        line = "plain filler words only here and there\n"
+        return (line * (int(tokens * 3.5) // len(line) + 1))[:int(tokens * 3.5)]
+
+    def loop(self, *texts):
+        out = []
+        for k, t in enumerate(texts):
+            out += [{"role": "assistant", "content": "", "reasoning_content": "looking at svc %d\nso: next" % k,
+                     "tool_calls": [{"id": "c%d" % k, "type": "function",
+                                     "function": {"name": RECALL_NAME, "arguments": '{"query": "svc-%d"}' % k}}]},
+                    {"role": "tool", "tool_call_id": "c%d" % k, "content": t}]
+        return out
+
+    def size_p0(self, loop, target: int):
+        """phys0 whose window count (with the loop) is exactly `target` tokens: bisection on the filler length."""
+        base = [{"role": "system", "content": "s"}, {"role": "user", "content": ""}]
+
+        def at(n):
+            base[1]["content"] = "x" * n
+            return self.px._wcount(base + window.clean(loop), self.p.tools, self.body)
+
+        lo, hi = 0, 8
+        while at(hi) < target:
+            hi *= 2
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if at(mid) < target:
+                lo = mid + 1
+            else:
+                hi = mid
+        self.assertGreater(lo, 0, "P0 already over the target: the scenario is not usable")
+        base[1]["content"] = "x" * lo
+        return base
+
+    def freed(self, text, kind="result"):
+        return window.freed({"kind": kind, "text": text}, self.px.tc.count, RECALL_NAME, "en")
+
+    def events(self, action=None):
+        if not os.path.exists(self.jpath):
+            return []
+        with open(self.jpath) as f:
+            ev = [json.loads(l) for l in f]
+        return [e for e in ev if e["event"] == "window_guard" and (action is None or e.get("action") == action)]
+
+    def test_receipts_the_question_is_about_are_removed_last(self):
+        """Room is short by one removal: the piece removed is the one WITHOUT the question's identifiers, even
+        though the result with them looks duplicated (its identifiers also appear in an older result)."""
+        a0, a, b = self.asked(500), self.asked(3000), self.plain(800)
+        loop = self.loop(a0, a, b)
+        S = window.CALL_ALLOWANCE + window.RESULT_MIN + self.floor
+        M = self.px.wguard.margin
+        free_b = self.freed(b)
+        phys0 = self.size_p0(loop, self.W - S - M + free_b // 2)
+        # sensitivity: by value per freed token (the old key) the duplicated piece i=3 is the first to go, i.e. the
+        # old rule would have removed exactly the receipt the question is about
+        order = window.removal_order(loop, self.px.tc.count, self.QUESTION, "value")
+        dup = [p for p in order if p["i"] == 3][0]
+        plain_pc = [p for p in order if p["i"] == 5][0]
+        self.assertLess(dup["value"] / dup["tokens"], plain_pc["value"] / plain_pc["tokens"])
+        self.assertEqual(order[0]["i"], 5, "the piece without the question's identifiers is removed first")
+        final, tools = self.px._plan_round(self.p, phys0, loop, self.body, 1, self.floor, self.QUESTION)
+        self.assertFalse(final)
+        self.assertIn("result removed from the context for space", loop[5]["content"])   # b -> receipt
+        self.assertEqual(loop[1]["content"], a0)                                         # untouched
+        self.assertEqual(loop[3]["content"], a)                                          # untouched: kept
+        P = self.px._wcount(phys0 + window.clean(loop), tools, self.body)
+        self.assertLessEqual(P + S + M, self.W, "INV-3 after removing a piece without the question's identifiers")
+        ev = self.events("remove")
+        self.assertTrue(ev)
+        self.assertEqual(ev[-1]["protected"], [], "nothing carrying the question's identifiers was removed")
+        self.assertEqual(ev[-1]["removed"], [["result", 2, self.px.tc.count(b)]])
+
+    def test_a_piece_with_the_question_idents_is_removed_when_it_is_the_only_one(self):
+        """Window invariant first: if the only piece left carries the question's identifiers it is removed too,
+        and the journal says so (protected)."""
+        a = self.asked(3000)
+        loop = self.loop(a)
+        S = window.CALL_ALLOWANCE + window.RESULT_MIN + self.floor
+        M = self.px.wguard.margin
+        free_a = self.freed(a)
+        phys0 = self.size_p0(loop, self.W - S - M + free_a // 2)
+        final, tools = self.px._plan_round(self.p, phys0, loop, self.body, 1, self.floor, self.QUESTION)
+        self.assertFalse(final)
+        self.assertIn("result removed from the context for space", loop[1]["content"])
+        P = self.px._wcount(phys0 + window.clean(loop), tools, self.body)
+        self.assertLessEqual(P + S + M, self.W, "the request must never go over the window")
+        ev = self.events("remove")
+        self.assertTrue(ev)
+        self.assertEqual(ev[-1]["protected"], [["result", 0, self.px.tc.count(a)]], "the journal must record it")
+        self.assertIn(["result", 0, self.px.tc.count(a)], ev[-1]["removed"])
+
+
 class FakeMgr:
     def __init__(self):
         self.tc = TokenCounter(3.5)
@@ -296,8 +422,24 @@ class TestRemoval(unittest.TestCase):
         tc = TokenCounter(3.5)
         order = window.removal_order(self.loop(), tc.count, "which port for db-7-001?", "value")
         results = [p for p in order if p["kind"] == "result"]
-        # the first result with the question's identifiers is kept longest; its duplicate (round 2) goes earlier
-        self.assertEqual(results[-1]["round"], 0)
+        # 0.3.4: the results carrying the question's identifiers are removed last (the question is about them);
+        # the result without them (round 1) goes first - the duplication rule no longer discounts them
+        self.assertEqual(results[0]["round"], 1)
+        self.assertFalse(results[0]["protected"])
+        self.assertEqual([p["round"] for p in results[-2:]], [0, 2])
+        self.assertTrue(all(p["protected"] for p in results[-2:]))
+
+    def test_question_idents_are_removed_last_whatever_the_policy(self):
+        """Only one piece frees the room and it carries the identifiers of the question: it is removed last."""
+        tc = TokenCounter(3.5)
+        q = "which port for db-7-001?"
+        for pol in window.POLICIES:
+            order = window.removal_order(self.loop(), tc.count, q, pol)
+            self.assertTrue(order[-1]["protected"], (pol, [(p["kind"], p["round"], p["protected"]) for p in order]))
+            asked = [p for p in order if p["protected"]]
+            self.assertEqual(len(asked), 2)                      # rounds 0 and 2 carry db-7-001
+            self.assertEqual([p["round"] for p in asked], [0, 2])
+            self.assertTrue(all(not p["protected"] for p in order[:len(order) - len(asked)]))
 
     def test_policies(self):
         tc = TokenCounter(3.5)

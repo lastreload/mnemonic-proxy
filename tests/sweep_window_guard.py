@@ -132,9 +132,8 @@ def run_one(args) -> dict:
     eng = FakeEngine(policy, n_ctx=w)
     eng.strict_window = True
     exact = bool(tokdir)
-    if exact:
-        ref = TokenCounter(3.5, tokdir)
-
+    ref = TokenCounter(3.5, tokdir) if exact else None
+    if exact and ref.exact:
         def engine_count(body):
             msgs = [{k: v for k, v in m.items() if k != "extra"} for m in body.get("messages") or []]
             return sum(ref.raw(t) for _, t in render_pieces(msgs, body.get("tools"), template_kwargs(body)))
@@ -147,7 +146,9 @@ def run_one(args) -> dict:
         jp = os.path.join(tmp.name, "j.jsonl")
         px = Proxy(cfg, Upstream(url), Store(os.path.join(tmp.name, "a.sqlite")), Journal(jp), tc)
         holder["px"] = px
-        if not exact:
+        if eng.counter is None:
+            # no usable tokenizer (module missing or no --tokdir): the proxy counts with its own estimate, so the
+            # engine must use the same counter, or the sweep reports overflows that are only a counting mismatch
             eng.counter = lambda body: px.wguard.count_body(body)
         h = [{"role": "system", "content": "you are a coding agent. " * rng.randint(1, 40)},
              {"role": "user", "content": "inspect the services"}]
@@ -189,7 +190,7 @@ def run_one(args) -> dict:
             "floor": floor, "answers": len(state["answers"]),
             "answer_below_floor": sum(1 for a in state["answers"] if a["max_tokens"] < floor),
             "answer_min_max_tokens": min([a["max_tokens"] for a in state["answers"]] or [0]),
-            "exact": exact and not est_proxy, "secs": round(time.time() - t0, 2)})
+            "exact": exact and not est_proxy, "tokenizer": bool(ref and ref.exact), "secs": round(time.time() - t0, 2)})
         px.store.db.close()
     except Exception as e:  # noqa: BLE001
         res["exception"] = repr(e)[:500]
@@ -245,6 +246,7 @@ def summarize(rows):
          "answer_below_floor": tot("answer_below_floor"),
          "scenarios_with_violation": [r["seed"] for r in rows if r.get("violations")][:20],
          "scenarios_with_exception": [(r["seed"], r["exception"]) for r in rows if "exception" in r][:5],
+         "tokenizer_loaded": sum(1 for r in rows if r.get("tokenizer")),
          "per_window": {}}
     for w in WINDOWS:
         rs = [r for r in rows if r["window"] == w]
