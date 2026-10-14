@@ -1,7 +1,9 @@
 # Author: Maurizio Verde — LastReload
 """With the default config the new options (recall_leaf_select, answerfix) change nothing: the recall text and what
-reaches the engine are byte-identical to 0.3.2 (7ff7e7f). The golden file tests/data/recall_default_golden.json was
-produced by running this module with --compute on the 7ff7e7f tree (compute() uses only 0.3.2 APIs).
+reaches the engine are byte-identical to 0.3.2 (7ff7e7f), except for the paging fix of recall by id (a cut page no
+longer carries the truncation notice and its offsets are exact; see tests/test_recall_paging.py). The golden file
+tests/data/recall_default_golden.json was produced by running this module with --compute on the 7ff7e7f tree
+(compute() uses only 0.3.2 APIs) and regenerated with that fix (53 cut-page outputs changed, nothing else).
 
     python3 -m unittest -v tests.test_default_identity
 """

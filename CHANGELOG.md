@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Fix: `recall` by id lost data between pages.** When a page was cut by `recall_max_tokens`, the truncation notice
+  stayed inside the page, the header counted it as data and the next `offset` skipped as many real characters as the
+  notice is long (146 per page in English). Now the notice is removed: the header and the `[continues: … offset=N]`
+  line say where the page ends, and reading page after page returns every character exactly once
+  (`tests/test_recall_paging.py`). Found while preparing the AgentLongBench runs (long id lists). This changes the
+  recall output when a page is cut: the golden file of `tests/test_default_identity.py` is regenerated (53 of 157
+  outputs, all of them cut pages, differ only by the removed notice and the corrected offsets).
+
 - **`recall_leaf_select`** (off by default): on structured outputs `recall` returns the record that matches the query
   or the user's last question, with the key lines of its ancestors, verbatim, `⋮` markers and the offsets of what was
   left out. Falls back to the normal recall when the parse is uncertain, when `offset`/`path`/`mode` is given, or on

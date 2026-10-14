@@ -2188,14 +2188,20 @@ class Manager:
                 # mai alla riga cercata.
                 return self._recall_lines(rid, r, text, q, meta, head_fn)
             chunk = text[off:off + lim]
+            raw = chunk
             if getattr(self.cfg, "recall_leaf_select", False):
                 # header and continuation line count against recall_max_tokens (default: only the chunk does)
                 frame = self._id_frame_tokens(rid, r, len(text), head_fn)
                 chunk = self.fit_tokens(chunk, max(self.cfg.recall_max_tokens - frame, 0), exact=True)
             else:
                 chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
-            if chunk.endswith("usa offset]") or chunk.endswith("use offset]"):
-                chunk = chunk[:max(chunk.rfind("\n[recall troncato"), chunk.rfind("\n[recall truncated"))]
+            if chunk != raw:
+                # paging by id: drop fit_tokens' notice, the header and the [continues: ... offset=N] line already say
+                # where the page ends. Left in, the notice was counted as data and the next offset skipped as many
+                # real characters as the notice is long (146 per page in English).
+                cut = max(chunk.rfind("\n[recall troncato"), chunk.rfind("\n[recall truncated"))
+                if cut >= 0 and raw.startswith(chunk[:cut]):
+                    chunk = chunk[:cut]
             if meta is not None:
                 meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": off, "chars": len(chunk)})
             head = self.L("[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n",
