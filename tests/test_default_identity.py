@@ -46,10 +46,15 @@ def compute(inputs: dict) -> dict:
                 out["%s|cfg%d|args%d" % (fmt, ci, ai)] = m.recall("c", args, max_idx=5)
     out["server"] = server_round(inputs["formats"]["yaml"][0], {"window_guard": False})
     out["server"].pop("_guard", None)
+    out["server"].pop("_exact", None)
     return out
 
 
-def server_round(text: str, over: dict | None = None, n_ctx: int = 12288) -> dict:
+TOKDIR = os.environ.get("CTX_TOKDIR", "")
+EXACT = bool(TOKDIR) and os.path.exists(os.path.join(TOKDIR, "vocab.json"))
+
+
+def server_round(text: str, over: dict | None = None, n_ctx: int = 12288, tokdir: str | None = None) -> dict:
     """One full proxy turn with the default config: the model asks recall(id) of a big output in a small window
     (12K: the server's budget check cuts the result). Returns what the engine received in the round after.
     over: extra config (0.3.3: the golden is the 0.3.2 path, window_guard off; see test_guard_on_small_window)."""
@@ -89,7 +94,8 @@ def server_round(text: str, over: dict | None = None, n_ctx: int = 12288) -> dic
         cfg = Config.from_dict({"window": n_ctx, "allow_small_window": True, **(over or {})})
         got["_guard"] = None
         proxy = Proxy(cfg, Upstream(url), Store(os.path.join(tmp.name, "a.sqlite")),
-                      Journal(os.path.join(tmp.name, "j.jsonl")), TokenCounter(3.5))
+                      Journal(os.path.join(tmp.name, "j.jsonl")), TokenCounter(3.5, tokdir))
+        got["_exact"] = proxy.tc.exact
         got["_guard"] = proxy.wguard
         h = [{"role": "system", "content": "you are a coding agent"},
              {"role": "user", "content": "Run: cat services.yaml"},
@@ -112,6 +118,64 @@ def server_round(text: str, over: dict | None = None, n_ctx: int = 12288) -> dic
         got["answer"] = r["choices"][0]["message"].get("content") if st == 200 else r
         if n_ctx != 12288:                         # 0.3.3 identity test: every request the engine received
             got["_requests"] = json.dumps(eng.requests, sort_keys=True)
+        proxy.store.db.close()
+    finally:
+        eng.stop()
+        tmp.cleanup()
+    return got
+
+
+def query_rounds(text: str, over: dict, n_ctx: int = 131072, tokdir: str | None = None) -> dict:
+    """0.3.5: one turn at 128K where the model really searches the archive three times (query, id + query, id) and
+    then answers: room to spare, so the guard must change nothing. Returns every request the engine received."""
+    import re
+    from ctxproxy.core import RECALL_NAME, Config, Journal, Store, TokenCounter
+    from ctxproxy.server import Proxy
+    from ctxproxy.upstream import Upstream
+    from tests.fake_engine import FakeEngine
+    from tests.test_proxy import TOOLS
+    state = {"k": None}
+
+    def policy(body):
+        msgs = body["messages"]
+        last = msgs[-1]
+        if last.get("role") == "user" and "payments replica" in str(last.get("content")):
+            state["k"] = 0
+        if state["k"] is not None and state["k"] < 3:
+            ids = re.findall(r"\br[0-9a-f]{12}\b", json.dumps(msgs))
+            args = [{"query": "db-pagamenti-02"}, {"id": ids[-1] if ids else "x", "query": "porta"},
+                    {"id": ids[-1] if ids else "x"}][state["k"]]
+            state["k"] += 1
+            return {"role": "assistant", "content": "", "reasoning_content": "looking", "tool_calls": [
+                {"id": "q%d" % state["k"], "type": "function",
+                 "function": {"name": RECALL_NAME, "arguments": json.dumps(args)}}]}
+        return {"role": "assistant", "content": "47213"}
+
+    tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+    eng = FakeEngine(policy, n_ctx=n_ctx)
+    url = eng.start()
+    got = {}
+    try:
+        cfg = Config.from_dict({"window": n_ctx, **over})
+        jp = os.path.join(tmp.name, "j.jsonl")
+        proxy = Proxy(cfg, Upstream(url), Store(os.path.join(tmp.name, "a.sqlite")), Journal(jp),
+                      TokenCounter(3.5, tokdir))
+        got["_guard"], got["_exact"] = proxy.wguard, proxy.tc.exact
+        h = [{"role": "system", "content": "you are a coding agent"},
+             {"role": "user", "content": "Run: cat services.yaml"},
+             {"role": "assistant", "content": "", "tool_calls": [{"id": "call_cat", "type": "function", "function": {
+                 "name": "bash", "arguments": json.dumps({"command": "cat services.yaml"})}}]},
+             {"role": "tool", "tool_call_id": "call_cat", "content": text},
+             {"role": "assistant", "content": "Read."},
+             {"role": "user", "content": "Without re-running: what is the port of the payments replica?"}]
+        st, r, _ = proxy.chat({"model": "m", "messages": h, "tools": TOOLS, "max_tokens": 1024})
+        got["status"] = st
+        got["answer"] = r["choices"][0]["message"].get("content") if st == 200 else r
+        got["requests"] = json.dumps(eng.requests, sort_keys=True)
+        with open(jp) as f:
+            ev = [json.loads(l) for l in f]
+        rec = [e for e in ev if e["event"] == "recall"]
+        got["recalls"], got["tokens"] = len(rec), [e["tokens"] for e in rec]
         proxy.store.db.close()
     finally:
         eng.stop()
@@ -146,6 +210,7 @@ class TestDefaultIdentity(unittest.TestCase):
             g = json.load(f)
         got = server_round(g["inputs"]["formats"]["yaml"][0])
         wg = got.pop("_guard")
+        got.pop("_exact")
         self.assertEqual(got["status"], 200)
         self.assertGreater(len(got["tool"]), len(g["expected"]["server"]["tool"]))
         self.assertEqual((wg.violations, wg.refused), (0, 0))
@@ -161,6 +226,26 @@ class TestDefaultIdentity(unittest.TestCase):
         off.pop("_guard")
         self.assertEqual(on, off)
         self.assertEqual((wg.violations, wg.refused), (0, 0))
+
+    def test_guard_identity_at_128k_exact_with_real_recalls(self):
+        """0.3.5 (Sol, correction 2): the 128K identity with the EXACT count (pack tokenizer passed to the
+        TokenCounter) and a turn that really runs a recall (outputs masked early): guard on and off send the same
+        requests, byte for byte."""
+        if not EXACT:
+            self.skipTest("needs CTX_TOKDIR (pack tokenizer) and the tokenizers module")
+        with open(GOLDEN, encoding="utf-8") as f:
+            g = json.load(f)
+        text = g["inputs"]["formats"]["yaml"][0]
+        on = query_rounds(text, {}, tokdir=TOKDIR)
+        off = query_rounds(text, {"window_guard": False}, tokdir=TOKDIR)
+        wg = on.pop("_guard")
+        off.pop("_guard")
+        self.assertTrue(on.pop("_exact") and off.pop("_exact"), "the count must really be exact")
+        self.assertEqual(on["recalls"], 3, "the turn must run real recalls")
+        self.assertTrue(all(n > 100 for n in on["tokens"]), on["tokens"])
+        self.assertEqual(on["status"], 200)
+        self.assertEqual(on, off)
+        self.assertEqual((wg.violations, wg.refused, wg.count_errors), (0, 0, 0))
 
 
 if __name__ == "__main__":

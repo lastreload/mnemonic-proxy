@@ -12,6 +12,15 @@ stream / non-stream, answerfix on/off, leaf selector on/off, removal policy, rea
 --tokdir: pack tokenizer: proxy AND engine count exactly (engine count is independent: render_pieces + its own
 tokenizer instance). Without it both use the chars/3.5 counter (plumbing only, guarantee=estimated).
 --estimated-proxy: engine exact, proxy WITHOUT tokenizer (measures the estimated mode; violations possible).
+
+0.3.5 (correction 2): ~30% of the recall calls ask for a REAL archive id seen in the prompt (whole, a page, id +
+query) or repeat an earlier call of the same answer, so verified copies and distinct deliveries are exercised.
+Failure criteria (exit 1 on any): a request with prompt + max_tokens + margin > W (the engine checks with the margin);
+an exception; an answer below F when F was reachable (no floor_short); evidence lost - a recall result the model has
+SEEN that a later request of the same answer no longer carries, while its lines are not all still present in another
+result (engine-side check, independent of the proxy's bookkeeping); a false deduplication (such a loss on a piece the
+proxy removed as a copy); the tokenizer not loaded in every scenario (with --tokdir); an exact-count error; no scenario
+with >= 2 distinct recall results delivered together.
 """
 from __future__ import annotations
 
@@ -19,6 +28,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 import tempfile
 import time
@@ -93,7 +103,7 @@ def run_one(args) -> dict:
            "policy": cfgd["recall_removal"], "answerfix": bool(cfgd.get("answer_thinking_after_recall")),
            "leaf": cfgd["recall_leaf_select"]}
     tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-    state = {"k": None, "answers": [], "where": []}
+    state = {"k": None, "answers": [], "where": [], "asked": []}
     holder = {}
 
     def policy(body):
@@ -115,9 +125,20 @@ def run_one(args) -> dict:
         if state["k"] is not None and state["k"] < rounds and (offered or residual):
             state["k"] += 1
             calls = []
+            real = sorted(set(re.findall(r"\br[0-9a-f]{12}\b", json.dumps(msgs))))
             for j in range(rng.randint(1, 3)):
-                q = {"query": "svc-%d" % rng.randint(1, 30)} if rng.random() < 0.7 else \
-                    {"id": "r" + "%012x" % rng.getrandbits(48)}
+                u = rng.random()
+                if u < 0.15 and state["asked"]:
+                    q = dict(rng.choice(state["asked"]))                        # repeat an earlier call
+                elif u < 0.30 and real:
+                    rid = rng.choice(real)                                      # a real archive id
+                    q = rng.choice(({"id": rid}, {"id": rid, "offset": rng.choice((0, 600, 2000))},
+                                    {"id": rid, "query": "svc-%d" % rng.randint(1, 30)}))
+                elif u < 0.79:
+                    q = {"query": "svc-%d" % rng.randint(1, 30)}
+                else:
+                    q = {"id": "r" + "%012x" % rng.getrandbits(48)}
+                state["asked"].append(q)
                 calls.append({"id": "rc%d_%d" % (state["k"], j), "type": "function",
                               "function": {"name": RECALL_NAME, "arguments": json.dumps(q)}})
             if rng.random() < 0.1:
@@ -129,7 +150,8 @@ def run_one(args) -> dict:
         ans = ("the answer is port 30007. " * 40)[:max(1, int((mt - rtok) * 3.5))]
         return {"role": "assistant", "content": ans, "reasoning_content": reasoning}
 
-    eng = FakeEngine(policy, n_ctx=w)
+    margin = int(cfgd.get("window_margin", 64))
+    eng = FakeEngine(policy, n_ctx=w - margin)     # 0.3.5: the engine rejects prompt + max_tokens + margin > W
     eng.strict_window = True
     exact = bool(tokdir)
     ref = TokenCounter(3.5, tokdir) if exact else None
@@ -167,13 +189,23 @@ def run_one(args) -> dict:
                 statuses.append(send(px, h, client_mt, stream))
         h.append({"role": "user", "content": "QUESTION: which port did svc-%d id-%d use? use recall if needed"
                   % (rng.randint(1, steps), rng.randint(0, 9999))})
+        n0 = len(eng.requests)
         statuses.append(send(px, h, client_mt, stream))
+        turn = eng.requests[n0:]
+        lost = info_lost(turn)
+        distinct = max([len({str(m.get("content")) for m in b["messages"] if m.get("role") == "tool"
+                             and str(m.get("tool_call_id", "")).startswith("rc") and RECEIPT_MARK not in
+                             str(m.get("content"))}) for b in turn] or [0])
         ev = []
         if os.path.exists(jp):
             with open(jp) as f:
                 ev = [json.loads(l) for l in f]
         wg = [e for e in ev if e["event"] == "window_guard"]
         floor = px._answer_floor({"max_tokens": client_mt} if client_mt else {})
+        floor_short = any(e.get("action") == "floor_short" for e in wg)
+        copies = [x for e in wg for k in ("removed_search", "removed_final", "newest_group", "c2")
+                  for x in (e.get(k) or []) if x.get("copy")]
+        copy_ids = {x.get("tool_call_id") for x in copies}
         res.update({
             "requests": eng.checked, "violations": len(eng.violations), "violation_detail": eng.violations[:3],
             "guard_violations": px.wguard.violations, "refused": sum(1 for e in wg if e.get("action") == "refused"),
@@ -189,6 +221,18 @@ def run_one(args) -> dict:
             "recall_empty": sum(1 for e in ev if e["event"] == "recall" and not e.get("tokens")),
             "floor": floor, "answers": len(state["answers"]),
             "answer_below_floor": sum(1 for a in state["answers"] if a["max_tokens"] < floor),
+            "floor_short": floor_short,
+            "answer_below_floor_admissible": 0 if floor_short else
+            sum(1 for a in state["answers"] if a["max_tokens"] < floor),
+            "evidence_lost": len(lost), "lost_ids": lost[:5],
+            "false_dedup": sum(1 for t in lost if t in copy_ids),
+            "copies_removed": len(copies),
+            "journal_evidence_lost": max([e.get("evidence_lost") or 0 for e in wg] or [0]),
+            "noncopy_search": sum(e.get("noncopy_search") or 0 for e in wg),
+            "c2": sum(len(e.get("c2") or []) for e in wg),
+            "newest_group": sum(len(e.get("newest_group") or []) for e in wg),
+            "distinct_delivered": distinct,
+            "count_errors": getattr(px.wguard, "count_errors", 0),
             "answer_min_max_tokens": min([a["max_tokens"] for a in state["answers"]] or [0]),
             "exact": exact and not est_proxy, "tokenizer": bool(ref and ref.exact), "secs": round(time.time() - t0, 2)})
         px.store.db.close()
@@ -198,6 +242,43 @@ def run_one(args) -> dict:
         eng.stop()
         tmp.cleanup()
     return res
+
+
+RECEIPT_MARK = "result removed from the context for space"
+
+
+def _lines(text: str) -> list:
+    """Information lines of a recall result: header/notice lines out, the line marker of id+query out."""
+    out = []
+    for l in (text or "").splitlines():
+        l = l.strip().lstrip(">").strip()
+        if not l or l.startswith("[") or l.startswith("--- id=") or l == "\u22ee":
+            continue
+        out.append(l)
+    return out
+
+
+def info_lost(requests: list) -> list:
+    """Engine-side check, independent of the proxy's bookkeeping (0.3.5): the recall results the model has SEEN
+    (present in a request of this answer) that a later request no longer carries verbatim, while some of their
+    information lines are not present in any other result still there. Returns their tool_call ids."""
+    seen, lost = {}, []
+    for body in requests:
+        cur = {m.get("tool_call_id"): str(m.get("content") or "") for m in body["messages"] if m.get("role") == "tool"}
+        for tid, txt in seen.items():
+            now = cur.get(tid)
+            if (now is not None and now.startswith(txt)) or tid in lost:
+                continue
+            others = "\n".join(re.sub(r"(?m)^\s*>", "", v) for k, v in cur.items() if k != tid and RECEIPT_MARK not in v)
+            if all(l in others for l in _lines(txt)) and _lines(txt):
+                continue                       # every line still present in another result: a real copy
+            if not _lines(txt) and any(v == txt for k, v in cur.items() if k != tid):
+                continue
+            lost.append(tid)
+        for tid, txt in cur.items():
+            if tid and str(tid).startswith("rc") and RECEIPT_MARK not in txt and tid not in seen:
+                seen[tid] = txt
+    return lost
 
 
 def send(px, h, mt, stream):
@@ -231,7 +312,7 @@ def main():
         with open(a.out, "w") as f:
             json.dump({"summary": summ, "rows": rows}, f, indent=1)
     print(json.dumps(summ, indent=1))
-    return 0 if summ["violations"] == 0 and summ["exceptions"] == 0 else 1
+    return 0 if not summ["failures"] else 1
 
 
 def summarize(rows):
@@ -247,12 +328,40 @@ def summarize(rows):
          "scenarios_with_violation": [r["seed"] for r in rows if r.get("violations")][:20],
          "scenarios_with_exception": [(r["seed"], r["exception"]) for r in rows if "exception" in r][:5],
          "tokenizer_loaded": sum(1 for r in rows if r.get("tokenizer")),
+         "floor_short": sum(1 for r in rows if r.get("floor_short")),
+         "answer_below_floor_admissible": tot("answer_below_floor_admissible"),
+         "evidence_lost": tot("evidence_lost"), "false_dedup": tot("false_dedup"),
+         "copies_removed": tot("copies_removed"), "journal_evidence_lost": tot("journal_evidence_lost"),
+         "noncopy_search": tot("noncopy_search"), "c2": tot("c2"), "newest_group": tot("newest_group"),
+         "count_errors": tot("count_errors"),
+         "scenarios_distinct_ge2": sum(1 for r in rows if (r.get("distinct_delivered") or 0) >= 2),
+         "scenarios_with_loss": [(r["seed"], r.get("lost_ids")) for r in rows if r.get("evidence_lost")][:20],
          "per_window": {}}
     for w in WINDOWS:
         rs = [r for r in rows if r["window"] == w]
         s["per_window"][w] = {"scenarios": len(rs), "requests": tot("requests", rs), "violations": tot("violations", rs),
                               "client_400": tot("client_400", rs), "finals": tot("finals", rs),
-                              "removes": tot("removes", rs), "answer_below_floor": tot("answer_below_floor", rs)}
+                              "removes": tot("removes", rs), "answer_below_floor": tot("answer_below_floor", rs),
+                              "evidence_lost": tot("evidence_lost", rs), "copies_removed": tot("copies_removed", rs),
+                              "distinct_ge2": sum(1 for r in rs if (r.get("distinct_delivered") or 0) >= 2)}
+    fail = []
+    if s["violations"]:
+        fail.append("over the window (prompt + max_tokens + margin > W)")
+    if s["exceptions"]:
+        fail.append("exceptions")
+    if s["answer_below_floor_admissible"]:
+        fail.append("final answer below F although F was reachable")
+    if s["evidence_lost"]:
+        fail.append("evidence seen by the model lost")
+    if s["false_dedup"]:
+        fail.append("false deduplication")
+    if s["count_errors"]:
+        fail.append("exact count errors")
+    if not s["scenarios_distinct_ge2"]:
+        fail.append("no scenario with >= 2 distinct recall results delivered")
+    if any(r.get("exact") for r in rows) and s["tokenizer_loaded"] != len(rows):
+        fail.append("tokenizer not loaded in every scenario")
+    s["failures"] = fail
     return s
 
 

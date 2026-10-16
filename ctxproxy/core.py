@@ -2065,9 +2065,13 @@ class Manager:
                 out.append("\u22ee")
             out.append("%s%d@%d: %s" % (">" if j in hit else " ", j + 1, starts[j], lines[j]))
             prev = j
+        txt = "\n".join(out)
+        fitted = self.fit_tokens(txt, self.cfg.recall_max_tokens)
         if meta is not None:
-            meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "query": q, "lines": len(hit)})
-        return self.fit_tokens("\n".join(out), self.cfg.recall_max_tokens)
+            # 0.3.5: the exact line set the model received (0-based line indices of the record); cut = shortened
+            meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "query": q, "lines": len(hit),
+                         "line_set": keep, **({"cut": True} if fitted != txt else {})})
+        return fitted
 
     def recall(self, conv: str, args, max_idx: int | None = None, meta: list | None = None,
                max_tokens: int | None = None) -> str:
@@ -2177,7 +2181,7 @@ class Manager:
         self.journal.log("recall_leaf", conv=conv, rid=r[0], used=True, ms=ms, **info)
         if meta is not None:
             meta.append({"rid": r[0], "idx": r[2], "rank": 0, "tokens": r[6], "leaf": info["blocks"],
-                         "lines": info["lines"][:40]})
+                         "lines": info["lines"][:40], "leaf_lines": list(info["lines"])})
         return out
 
     def _id_frame_tokens(self, rid: str, r, total: int, head_fn=None) -> int:
@@ -2221,6 +2225,7 @@ class Manager:
                 chunk = self.fit_tokens(chunk, max(self.cfg.recall_max_tokens - frame, 0), exact=True)
             else:
                 chunk = self.fit_tokens(chunk, self.cfg.recall_max_tokens)
+            verbatim = True
             if chunk != raw:
                 # paging by id: drop fit_tokens' notice, the header and the [continues: ... offset=N] line already say
                 # where the page ends. Left in, the notice was counted as data and the next offset skipped as many
@@ -2228,8 +2233,12 @@ class Manager:
                 cut = max(chunk.rfind("\n[recall troncato"), chunk.rfind("\n[recall truncated"))
                 if cut >= 0 and raw.startswith(chunk[:cut]):
                     chunk = chunk[:cut]
+                else:
+                    verbatim = False
             if meta is not None:
-                meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": off, "chars": len(chunk)})
+                # 0.3.5: [offset, offset + chars) is exactly what the model received (a page); cut when it is not
+                meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": off, "chars": len(chunk),
+                             **({} if verbatim else {"cut": True})})
             head = self.L("[recall:%s \u2014 messaggio %d (%s%s), %d token, caratteri %d\u2013%d di %d]\n",
                           "[recall:%s \u2014 message %d (%s%s), %d tokens, characters %d\u2013%d of %d]\n") % (
                 rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", r[6], off, off + len(chunk), len(text))
@@ -2277,16 +2286,19 @@ class Manager:
             low = content.lower()
             p = low.find(q.lower()) if is_exact else min([x for x in (low.find(t) for t in terms) if x >= 0],
                                                          default=0)
-            s = content[max(0, p - 400):p + len(q) + 1200]
+            a0 = max(0, p - 400)
+            s = content[a0:p + len(q) + 1200]
             block = "\n--- id=%s \u00b7 %s %d (%s%s) \u00b7 %d token%s%s\n%s" % (
                 rid2, self.L("messaggio", "message"), idx + 1, role, (" " + name) if name and role == "tool" else "",
                 tokens, self.L("", "s"), "" if len(s) >= len(content) else
                 self.L(" \u00b7 estratto, testo intero con id", " \u00b7 excerpt, full text with id"), s)
             t = self.tc.count(block)
+            was_cut = False
             if t > budget:
                 if rank < 2 and budget > 300:
                     block = self.fit_tokens(block, budget)
                     t = budget
+                    was_cut = True
                 else:
                     out.append(self.L("\n[altri %d risultati non mostrati: affina la query]",
                                       "\n[%d more results not shown: refine the query]") % (len(hits) - rank))
@@ -2294,8 +2306,9 @@ class Manager:
             out.append(block)
             budget -= t
             if meta is not None:
+                # 0.3.5: offset + chars = the excerpt the model received, verbatim (cut when shortened afterwards)
                 meta.append({"rid": rid2, "idx": idx, "rank": rank, "tokens": tokens, "chars": len(s),
-                             "exact": is_exact})
+                             "offset": a0, "exact": is_exact, **({"cut": True} if was_cut else {})})
         return "\n".join(out)
 
     def remember_internal(self, conv: str, h_last: str, msgs: list, strip_content: str = "",

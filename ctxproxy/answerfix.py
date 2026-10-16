@@ -164,9 +164,12 @@ def stream_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
     return thinking_body(proxy, p, body, phys, rnd, tools)
 
 
-def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None) -> dict:
-    """K: controllo post-risposta. Restituisce la risposta da dare al client (la rigiocata se usata)."""
+def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None, tools="_p") -> dict:
+    """K: controllo post-risposta. Restituisce la risposta da dare al client (la rigiocata se usata).
+    tools: those of the round that produced `resp` (0.3.5: after a final round without the proxy's tools the retry
+    does not offer them again - it used to re-open the search with p.tools)."""
     cfg = proxy.cfg
+    tools = p.tools if tools == "_p" else tools
     if not getattr(cfg, "truncation_guard", False) or resp is None or emit is not None or resp.get("_af_thinking"):
         return resp
     msg = (resp.get("choices") or [{}])[0].get("message") or {}
@@ -185,14 +188,14 @@ def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None) -> dict:
     if not hit:
         return resp
     budget = int(getattr(cfg, "truncation_guard_budget", 512) or 0)
-    send = fit_thinking(proxy, p, body, phys, budget)
+    send = fit_thinking(proxy, p, body, phys, budget, tools)
     if send is None:
         proxy.journal.log("truncation_guard", conv=p.conv, word=hit[0], token=hit[1], before=text[:200],
                           used=False, error="nessuno spazio per il ragionamento")
         return resp
     t0 = time.time()
     try:
-        r2 = proxy.up.chat({**send, "messages": phys, "tools": p.tools})
+        r2 = proxy.up.chat({**send, "messages": phys, "tools": tools})
     except Exception as e:  # noqa: BLE001  (UpstreamError o rete: si tiene la risposta originale)
         proxy.journal.log("truncation_guard", conv=p.conv, word=hit[0], token=hit[1], before=text[:200],
                           used=False, error=repr(e)[:200], ms=round((time.time() - t0) * 1000))

@@ -141,16 +141,24 @@ class TestStrictEngine(unittest.TestCase):
                             sc.close()
 
     def test_long_loop_results_never_empty(self):
-        """Long reasoning per round: every recall result still reaches the model (pieces are removed to make room,
-        INV-3), and the loop ends with an answer."""
+        """Long reasoning per round: every recall result that reaches the model is not empty, the search rounds remove
+        only reasoning (never a result: 0.3.5) and the loop ends with an answer.
+        0.3.5: this test asked for >= 4 results in 16K with 4K-token results; 0.3.3/0.3.4 got there only by throwing
+        away the results of the earlier rounds (Argon, correction 2, 5.1.3). Now two or three distinct results fill
+        the window and the search closes (final for space) keeping all of them."""
         sc = Scenario(16384, rounds=20, reasoning_chars=12000, extra={"max_recall_rounds": 8})
         try:
             res = sc.run()
             self.check(sc, res)
             rec = sc.events("recall")
-            self.assertGreaterEqual(len(rec), 4)
+            self.assertGreaterEqual(len(rec), 2)
             self.assertTrue(all(e["tokens"] > 0 for e in rec), [e["tokens"] for e in rec])
-            self.assertTrue(sc.events("window_guard", "remove"))
+            wg = sc.events("window_guard")
+            self.assertTrue(any(e.get("action") == "remove" for e in wg))
+            self.assertEqual(sum(e.get("noncopy_search") or 0 for e in wg), 0, "a search removed a result")
+            self.assertEqual([e for e in wg if e.get("c2")], [], "no emergency")
+            fin = [e for e in wg if e.get("action") == "final"]
+            self.assertTrue(fin and fin[-1]["reason"] == "space", fin[-1:])
         finally:
             sc.close()
 
@@ -293,52 +301,75 @@ class TestQuestionIdents(unittest.TestCase):
             ev = [json.loads(l) for l in f]
         return [e for e in ev if e["event"] == "window_guard" and (action is None or e.get("action") == action)]
 
-    def test_receipts_the_question_is_about_are_removed_last(self):
-        """Room is short by one removal: the piece removed is the one WITHOUT the question's identifiers, even
-        though the result with them looks duplicated (its identifiers also appear in an older result)."""
+    def test_search_round_never_removes_a_result(self):
+        """0.3.5 (was test_receipts_the_question_is_about_are_removed_last, 0.3.4): room short for one more search
+        round. 0.3.4 removed the result WITHOUT the question's identifiers to make room for the search; 0.3.5 never
+        pays a search with a result that is not a verified copy: only reasoning goes, then the round is final and
+        every result is still there (the search could only have cost evidence)."""
         a0, a, b = self.asked(500), self.asked(3000), self.plain(800)
         loop = self.loop(a0, a, b)
-        S = window.CALL_ALLOWANCE + window.RESULT_MIN + self.floor
         M = self.px.wguard.margin
         free_b = self.freed(b)
+        S = max(window.S_MIN, window.CALL_ALLOWANCE + window.RESULT_R + self.floor) + \
+            self.px._frame_tokens(self.p, [{"role": "user", "content": "x"}], self.body)
         phys0 = self.size_p0(loop, self.W - S - M + free_b // 2)
-        # sensitivity: by value per freed token (the old key) the duplicated piece i=3 is the first to go, i.e. the
-        # old rule would have removed exactly the receipt the question is about
-        order = window.removal_order(loop, self.px.tc.count, self.QUESTION, "value")
-        dup = [p for p in order if p["i"] == 3][0]
-        plain_pc = [p for p in order if p["i"] == 5][0]
-        self.assertLess(dup["value"] / dup["tokens"], plain_pc["value"] / plain_pc["tokens"])
-        self.assertEqual(order[0]["i"], 5, "the piece without the question's identifiers is removed first")
         final, tools = self.px._plan_round(self.p, phys0, loop, self.body, 1, self.floor, self.QUESTION)
-        self.assertFalse(final)
-        self.assertIn("result removed from the context for space", loop[5]["content"])   # b -> receipt
-        self.assertEqual(loop[1]["content"], a0)                                         # untouched
-        self.assertEqual(loop[3]["content"], a)                                          # untouched: kept
+        self.assertTrue(final)
+        self.assertEqual(loop[1]["content"], a0)
+        self.assertEqual(loop[3]["content"], a)
+        self.assertTrue(loop[5]["content"].startswith(b))                                # kept (+ closing note)
+        self.assertIn("no room left for more searches", loop[5]["content"])
+        ev = self.events()
+        self.assertEqual(ev[-1]["action"], "final")
+        self.assertEqual(ev[-1]["noncopy_search"], 0)
+        self.assertTrue(all(e["kind"] == "reasoning" for e in ev[-1]["removed_search"]))
+        self.assertEqual(ev[-1]["evidence_lost"], 0)
         P = self.px._wcount(phys0 + window.clean(loop), tools, self.body)
-        self.assertLessEqual(P + S + M, self.W, "INV-3 after removing a piece without the question's identifiers")
-        ev = self.events("remove")
-        self.assertTrue(ev)
-        self.assertEqual(ev[-1]["protected"], [], "nothing carrying the question's identifiers was removed")
-        self.assertEqual(ev[-1]["removed"], [["result", 2, self.px.tc.count(b)]])
+        self.assertLessEqual(P + self.floor + M, self.W)
+
+    def test_final_emergency_removes_the_unrelated_result_before_the_question_s(self):
+        """0.3.5: the final call does not fit even after reasoning and the newest group (its result -> receipt, then
+        the group cancelled): the emergency removes results that are not copies, the one without the question's
+        identifiers first (band 2 before band 3), and records the loss (evidence_lost, cause, sources)."""
+        A, B, N = self.asked(3000), self.plain(800), self.plain(60)
+        loop = self.loop(A, B, N)
+        M = self.px.wguard.margin
+        free_b = self.freed(B)
+        rn = self.px.cfg.max_recall_rounds
+        tools = self.px._final_tools(self.p, [])
+        base = self.size_p0(loop[:4], 0 + self.W - self.floor - M + free_b // 2)
+        final, tools = self.px._plan_round(self.p, base, loop, self.body, rn, self.floor, self.QUESTION)
+        self.assertTrue(final)
+        self.assertEqual(len(loop), 4, "the newest group is cancelled first")
+        self.assertEqual(loop[1]["content"], A, "the result the question is about is kept")
+        self.assertIn("result removed from the context for space", loop[3]["content"])
+        ev = self.events("final")[-1]
+        self.assertEqual([e["cause"] for e in ev["newest_group"]], ["newest_group_receipt", "newest_group_cancelled"])
+        self.assertEqual([(e["cause"], e["protected"]) for e in ev["c2"]], [("final_emergency", False)])
+        self.assertEqual(ev["evidence_lost"], 1)
+        P = self.px._wcount(base + window.clean(loop), tools, self.body)
+        self.assertLessEqual(P + self.floor + M, self.W)
 
     def test_a_piece_with_the_question_idents_is_removed_when_it_is_the_only_one(self):
-        """Window invariant first: if the only piece left carries the question's identifiers it is removed too,
-        and the journal says so (protected)."""
-        a = self.asked(3000)
-        loop = self.loop(a)
-        S = window.CALL_ALLOWANCE + window.RESULT_MIN + self.floor
+        """Window invariant first: in the final emergency, if the only piece left carries the question's identifiers
+        it is removed too, and the journal says so (protected, evidence_lost). 0.3.5: no longer in a search round
+        (a search never removes a result) - only in the final call, after the newest group."""
+        a, n = self.asked(3000), self.plain(60)
+        loop = self.loop(a, n)
         M = self.px.wguard.margin
         free_a = self.freed(a)
-        phys0 = self.size_p0(loop, self.W - S - M + free_a // 2)
-        final, tools = self.px._plan_round(self.p, phys0, loop, self.body, 1, self.floor, self.QUESTION)
-        self.assertFalse(final)
+        phys0 = self.size_p0(loop[:2], self.W - self.floor - M + free_a // 2)
+        final, tools = self.px._plan_round(self.p, phys0, loop, self.body, self.px.cfg.max_recall_rounds,
+                                           self.floor, self.QUESTION)
+        self.assertTrue(final)
         self.assertIn("result removed from the context for space", loop[1]["content"])
         P = self.px._wcount(phys0 + window.clean(loop), tools, self.body)
-        self.assertLessEqual(P + S + M, self.W, "the request must never go over the window")
-        ev = self.events("remove")
-        self.assertTrue(ev)
-        self.assertEqual(ev[-1]["protected"], [["result", 0, self.px.tc.count(a)]], "the journal must record it")
-        self.assertIn(["result", 0, self.px.tc.count(a)], ev[-1]["removed"])
+        self.assertLessEqual(P + self.floor + M, self.W, "the request must never go over the window")
+        ev = self.events("final")[-1]
+        # the closing note went on the last result left (a) before the emergency: its size is counted with it
+        self.assertEqual([x[:2] for x in ev["protected"]], [["result", 0]])
+        self.assertGreaterEqual(ev["protected"][0][2], self.px.tc.count(a))
+        self.assertEqual(ev["evidence_lost"], 1)
 
 
 class FakeMgr:
@@ -419,35 +450,42 @@ class TestRemoval(unittest.TestCase):
         self.assertEqual(json.dumps(lp), snap)
 
     def test_value_keeps_relevant_result(self):
+        """0.3.5: round 2 returned exactly the text of round 0 (still present): a verified copy, removed first even
+        though it carries the question's identifiers (band 0); then the result without them (band 2); the result
+        the question is about last (band 3). 0.3.4 kept both copies protected."""
         tc = TokenCounter(3.5)
         order = window.removal_order(self.loop(), tc.count, "which port for db-7-001?", "value")
         results = [p for p in order if p["kind"] == "result"]
-        # 0.3.4: the results carrying the question's identifiers are removed last (the question is about them);
-        # the result without them (round 1) goes first - the duplication rule no longer discounts them
-        self.assertEqual(results[0]["round"], 1)
+        self.assertEqual([(p["round"], p["band"]) for p in results], [(2, 0), (1, 2), (0, 3)])
+        self.assertEqual(results[0]["copy"], 1)                    # its witness: the result of round 0 (loop[1])
         self.assertFalse(results[0]["protected"])
-        self.assertEqual([p["round"] for p in results[-2:]], [0, 2])
-        self.assertTrue(all(p["protected"] for p in results[-2:]))
+        self.assertTrue(results[-1]["protected"])
 
     def test_question_idents_are_removed_last_whatever_the_policy(self):
-        """Only one piece frees the room and it carries the identifiers of the question: it is removed last."""
+        """Whatever the policy: copies, then reasoning, then results without the question's identifiers, and the
+        result that carries them (and is not a copy) last."""
         tc = TokenCounter(3.5)
         q = "which port for db-7-001?"
         for pol in window.POLICIES:
             order = window.removal_order(self.loop(), tc.count, q, pol)
+            self.assertEqual([p["band"] for p in order], sorted(p["band"] for p in order), pol)
             self.assertTrue(order[-1]["protected"], (pol, [(p["kind"], p["round"], p["protected"]) for p in order]))
             asked = [p for p in order if p["protected"]]
-            self.assertEqual(len(asked), 2)                      # rounds 0 and 2 carry db-7-001
-            self.assertEqual([p["round"] for p in asked], [0, 2])
-            self.assertTrue(all(not p["protected"] for p in order[:len(order) - len(asked)]))
+            self.assertEqual([p["round"] for p in asked], [0])     # round 2 carries db-7-001 too, but is a copy
+            self.assertEqual((order[0]["kind"], order[0]["round"]), ("result", 2))
+            self.assertFalse(any(p["protected"] for p in order if p["kind"] == "reasoning"))
 
     def test_policies(self):
+        """Inside each band the policy orders: age -> oldest round first; reasoning -> oldest first."""
         tc = TokenCounter(3.5)
-        age = window.removal_order(self.loop(), tc.count, "", "age")
-        self.assertEqual([p["round"] for p in age], sorted(p["round"] for p in age))
+        for pol in ("age", "reasoning"):
+            o = window.removal_order(self.loop(), tc.count, "", pol)
+            self.assertEqual([p["band"] for p in o], sorted(p["band"] for p in o))
+            for b in set(p["band"] for p in o):
+                rs = [p["round"] for p in o if p["band"] == b]
+                self.assertEqual(rs, sorted(rs), (pol, b))
         rs = window.removal_order(self.loop(), tc.count, "", "reasoning")
-        kinds = [p["kind"] for p in rs]
-        self.assertEqual(kinds, sorted(kinds, key=lambda k: 0 if k == "reasoning" else 1))
+        self.assertEqual([p["kind"] for p in rs if p["band"] != 0], ["reasoning", "reasoning", "result", "result"])
 
     def test_remove_piece_receipt_and_conclusion(self):
         tc = TokenCounter(3.5)

@@ -97,7 +97,7 @@ class TestRecallSmallWindow(unittest.TestCase):
         self.assertEqual(st, 200, r)
         return r
 
-    def test_third_error_reaches_the_model(self):
+    def history(self):
         h = [{"role": "system", "content": "sei un agente di programmazione"},
              {"role": "user", "content": "Esegui: cat server.log . Dimmi solo quante righe ERROR ci sono."},
              {"role": "assistant", "content": "", "tool_calls": [{"id": "call_cat", "type": "function", "function": {
@@ -115,13 +115,43 @@ class TestRecallSmallWindow(unittest.TestCase):
             self.send(h + [{"role": "user", "content": "ok"}])
         h.append({"role": "user", "content": "Senza rieseguire comandi: qual era esattamente il request id e lo shard "
                                              "del TERZO errore nel server.log? Se non lo vedi più, usa recall."})
-        self.send(h)
+        return h
+
+    def events(self):
         with open(self.jpath) as f:
-            ev = [json.loads(l) for l in f]
+            return [json.loads(l) for l in f]
+
+    def test_third_error_reaches_the_model(self):
+        """0.3.5: the model asks for the lines with ERROR (id + query): the third ERROR line reaches it at 8K."""
+        self.SEQ = [lambda rid: {"id": rid, "query": "ERROR"}]
+        self.send(self.history())
+        ev = self.events()
         self.assertTrue([e for e in ev if e["event"] in ("mask", "switch")], "l'uscita di cat deve essere tolta")
         self.assertTrue(self.got, "le recall devono essere arrivate al motore")
         self.assertTrue(any(THIRD in g for g in self.got),
                         "la 3a riga ERROR non è mai arrivata al modello: %s" % [g[:120] for g in self.got])
+
+    def test_live_sequence_keeps_the_pages_it_read(self):
+        """The live sequence (page, page, id+offset+query ERROR, page) at 8K with F = 2048.
+        0.3.0-0.3.4: the third call reached the model because the proxy threw away the pages already read to make
+        room. 0.3.5 (correction 2): a search never costs a result the model has already seen - after two 1K pages
+        P = ~5.0K and one more round needs P + max(S, 256 + R + F) + H + 64 <= 8192 (P <= ~4.75K): the search closes,
+        the model is told so, both pages stay and the answer gets F. Documented in
+        docs/dev-notes/SEARCH-KEEPS-EVIDENCE-RESULT.md (cost of the rule at 8K)."""
+        self.send(self.history())
+        ev = self.events()
+        rec = [e for e in ev if e["event"] == "recall"]
+        self.assertEqual(len(rec), 2, [e["args"] for e in rec])
+        fin = [e for e in ev if e["event"] == "window_guard" and e.get("action") == "final"]
+        self.assertTrue(fin and fin[-1]["reason"] == "space", fin[-1:])
+        self.assertEqual(fin[-1]["evidence_lost"], 0)
+        last = self.eng.requests[-1]
+        tool_txt = [str(m.get("content")) for m in last["messages"] if m.get("role") == "tool"
+                    and not str(m.get("tool_call_id", "")).startswith("call_s") and m.get("tool_call_id") != "call_cat"]
+        self.assertEqual(len([t for t in tool_txt if "removed from the context" not in t]), 2, tool_txt)
+        self.assertIn("no room left for more searches", tool_txt[-1])
+        self.assertNotIn(RECALL_NAME, {((t or {}).get("function") or {}).get("name") for t in last.get("tools") or []})
+        self.assertGreaterEqual(last["max_tokens"], 2048)
 
 
 if __name__ == "__main__":

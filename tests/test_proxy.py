@@ -181,6 +181,11 @@ class TestRecall(Base):
     def policy(self, body):
         msgs = body["messages"]
         last = msgs[-1]
+        names = {((t or {}).get("function") or {}).get("name") for t in body.get("tools") or []}
+        if last.get("role") == "tool" and ("search limit" in last["content"] or "limite di ricerche" in
+                                           last["content"]) and RECALL_NAME not in names:
+            # 0.3.5: at the round limit the round is final - recall not offered, the limit note on the last result
+            return {"role": "assistant", "content": "rispondo con quello che ho"}
         if last.get("role") == "tool" and last["content"].startswith("recall: search limit"):
             return {"role": "assistant", "content": "rispondo con quello che ho"}
         if any(m.get("role") == "user" and "insistente" in str(m.get("content")) for m in msgs[-12:]):
@@ -243,7 +248,12 @@ class TestRecall(Base):
         n0 = len(self.eng.requests)
         r, _ = self.send(h)
         self.assertEqual(r["choices"][0]["message"]["content"], "rispondo con quello che ho")
-        self.assertEqual(len(self.eng.requests) - n0, self.proxy.cfg.max_recall_rounds + 2)
+        # 0.3.5 (correction 2): max_recall_rounds searches, then the final round directly (recall no longer offered
+        # once more only to answer "limit reached": that round was wasted) -> max_recall_rounds + 1 requests
+        self.assertEqual(len(self.eng.requests) - n0, self.proxy.cfg.max_recall_rounds + 1)
+        last = self.eng.requests[-1]
+        self.assertNotIn(RECALL_NAME, {((t or {}).get("function") or {}).get("name") for t in last.get("tools") or []})
+        self.assertEqual(len(self.events("recall")), self.proxy.cfg.max_recall_rounds)
 
     def test_recall_by_query_and_offset(self):
         mgr = self.proxy.mgr

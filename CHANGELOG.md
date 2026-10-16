@@ -1,6 +1,31 @@
 # Changelog
 
-## Unreleased
+## 0.3.5 — unreleased
+
+- **Fix: a search round never consumes the evidence already acquired (window guard, correction 2).** On a small
+  window (AgentLongBench 16K) the guard made room for one more `recall` round by removing results the model had
+  already read: 0.3.4 only changed the order. Now, during the search, only verified copies and finished reasoning
+  are removed; removal goes by bands (verified copies → reasoning → results that are not copies → results that are
+  not copies and carry the question's identifiers; the x0.25 duplication discount is gone; reasoning is never
+  `protected`). A result is a verified copy only if its delivered text is identical to an older result still
+  present, or if its certified coverage (exact character spans or line sets of the same record, recorded in the
+  extended `meta`; never after a cut, never for grouped provenance, never with empty sources) is inside the coverage
+  of older results still present; receipts are never witnesses. A search round is admitted only if
+  `P + max(S, 256 + 1024 + F) + H + margin <= W` (S = max(2048, largest complete generation of the previous rounds +
+  256), never decreasing; R = 1024 per round; H = result frame + closing note). If a new group does not fit, it is
+  reduced or cancelled first (tool protocol coherent) and the round becomes final; dropping older evidence (C2) is an
+  emergency, journaled with cause and sources (`evidence_lost`). `_fit_result` frees up to what the result needs,
+  replaces a result that does not fit in < 256 tokens with a "no room" notice (or drops the call when not even that
+  fits) and closes the search; the other calls of the round do not search. Tool definitions and receipt-guard notices
+  pass the same check. At `max_recall_rounds` the round is final directly (no `recall` offered only to say "limit").
+  The closing note no longer pins the last result (`_keep`); answerfix K retries with the tools of the final round.
+  `P0 + F + margin <= W` is checked before the loop (`floor_short`); in exact mode a count error is journaled
+  (`count_error`), never a silent fallback. Sweep (2,000 conversations, exact tokenizer, real ids and repeated calls,
+  engine-side loss check): evidence seen by the model and then lost 669 → 0, false deduplications 0 on 392 copies
+  removed, 0 over the window; cost: 6,450 recalls instead of 9,547 (more searches end for space). See
+  `docs/dev-notes/SEARCH-KEEPS-EVIDENCE-RESULT.md`.
+
+## Earlier in this cycle (0.3.3, 0.3.4; not released separately)
 
 - **Fix: a piece carrying identifiers of the question is never the cheapest thing to drop.** The removal rule
   discounts x0.25 a piece whose identifiers had all appeared in an older piece; the recall results that answer the

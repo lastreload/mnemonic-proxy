@@ -533,9 +533,11 @@ class Recall2:
             block = "\n%s\n%s" % (self.head(r[0], r[2], r[3], r[6], conv, cuts, extra, h["strong"], (a, b),
                                             len(r[5] or "")), s)
             t = self.tc.count(block)
+            was_cut = False
             if used + t > budget:
                 if rank < 2 and budget - used > 200:
                     block, t = self.fit(block, budget - used), budget - used
+                    was_cut = True
                 else:
                     out.append(self.L("\n[altri %d risultati non mostrati: affina la query o usa i filtri "
                                       "role/seg/from/to]", "\n[%d more results not shown: refine the query or use the "
@@ -544,8 +546,11 @@ class Recall2:
             out.append(block)
             used += t
             if meta is not None:
-                meta.append({"rid": r[0], "idx": r[2], "rank": rank, "tokens": r[6], "chars": b - a,
-                             "strong": h["strong"]})
+                # 0.3.5: [offset, offset + chars) verbatim; grouped = the header carries the provenance of other
+                # records with the same text ("same text also in messages ...": not in meta -> opaque, never a copy)
+                meta.append({"rid": r[0], "idx": r[2], "rank": rank, "tokens": r[6], "chars": b - a, "offset": a,
+                             "strong": h["strong"], **({"cut": True} if was_cut else {}),
+                             **({"grouped": True} if dups.get(h["rid"]) else {})})
         if len(shown) > 1 and not by_time:
             out.append(self.L("\n[in ordine di messaggio: %s]", "\n[in message order: %s]") % ", ".join(
                 "%d%s" % (x[1][2] + 1, "" if x[0]["strong"] else "?") for x in sorted(shown, key=lambda x: x[1][2])))
@@ -703,21 +708,21 @@ class Recall2:
             if op in ("read",) and not q:
                 line += " \u00b7 " + _short(hd, 60)
             snippet = ""
+            entry = None
             if hit_rid:
                 r = self._row(hit_rid, conv)
                 if r:
                     s = best_lines(r[5] or "", hits_by_rid[hit_rid], qwords, terms, 2 if op != "read" else 1)
                     snippet = "\n    \u2502 " + s.replace("\n", "\n    \u2502 ")
-                    if meta is not None:
-                        meta.append({"rid": hit_rid, "idx": idx, "rank": k, "tokens": r[6], "chars": len(s)})
+                    entry = {"rid": hit_rid, "idx": idx, "rank": k, "tokens": r[6], "chars": len(s)}
             elif op in ("edit", "multiedit"):
                 r = self._row(ra, conv)
                 if r:
                     snippet = "\n    \u2502 " + _short(_edit_summary(r[5] or ""), 260)
             elif q:
                 line += self.L(" \u00b7 (senza %r)", " \u00b7 (without %r)") % q
-            if meta is not None and not snippet:
-                meta.append({"rid": ro, "idx": idx, "rank": k, "tokens": 0, "path": p2})
+            if entry is None and not snippet:
+                entry = {"rid": ro, "idx": idx, "rank": k, "tokens": 0, "path": p2}
             t = self.tc.count(line + snippet)
             if used + t > budget:
                 out.append(self.L("[altre %d operazioni non mostrate: usa from/to (numeri di messaggio) o query]",
@@ -726,6 +731,9 @@ class Recall2:
                 break
             out.append(line + snippet)
             used += t
+            if meta is not None and entry is not None:
+                # 0.3.5: recorded only once the line is really in the result (Sol: it used to precede the check)
+                meta.append(entry)
         if skipped:
             out.append(self.L("[%d letture senza %r omesse]", "[%d reads without %r omitted]") % (skipped, q))
         if q and not hits_by_rid:
