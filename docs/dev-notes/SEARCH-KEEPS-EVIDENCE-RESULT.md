@@ -161,3 +161,92 @@ senza tomllib, Strata non importabile, file pi mancante); Python 3.10 (senza `to
 | rigioco: `0031`/`0892` chiusi prima di avere entrambe le prove o con una tolta prima della finale | **`0031` superato** nella variante a due prove (entrambe presenti alla finale); col copione registrato il round 13 non è mai chiesto (chiusura per limite di giri, non per spazio, uguale alla 0.3.4). **`0892` non superato alla lettera**: nessuna prova tolta (la 0.3.4 le toglieva tutte), ma la ricerca chiude per spazio dopo 1 giro, prima della seconda chiamata del copione; mancano ~175 token con R = 1.024 e F = 4.096 (§3). Da decidere |
 | una risposta sbagliata o un rifiuto che guadagna punti con la normalizzazione | **non verificato qui**: è il normalizzatore del banco ALB, fuori dal proxy |
 | differenze a 128K fra guardia accesa e spenta (conteggio esatto, recall reali) | **superato**: richieste identiche byte per byte, 3 recall vere, tokenizer esatto |
+
+## 7. Niente risposta vuota quando nel giro finale il modello chiama comunque `recall` (card `t_720646cc`)
+
+### Il difetto
+Pilota GPU `t_caa8225d` (configurazione D, 32K), 2 domande su 8 con risposta **vuota** (`finish_reason=stop`):
+nel giro finale il proxy non offre i suoi strumenti, ma Flash Next ha visto `recall` nella conversazione e lo chiama
+lo stesso; il proxy scartava la chiamata (`recall_dropped final=true`) e restituiva il messaggio senza contenuto.
+
+- `13_i3_b`: 3 ricerche, `window_guard action=final reason=space` al giro 3 (prompt 10.314, F 4.096), poi
+  `recall_dropped`; 3.139 token di ragionamento e una `recall` non offerta.
+- `49_i7_b`: 4 ricerche, `reason=round_limit` al giro 4 (prompt 5.806), poi uguale.
+
+La 0.3.5 (finale diretta al limite dei giri, chiusure per spazio più frequenti) ha reso il caso più comune. Giornali
+copiati in sola lettura da PC4070TI: `out/correzione2/pilot-c2-final-recall/`.
+
+### La correzione (`Proxy._final_retry`, `server.py`)
+Quando un giro **finale** (guardia accesa) restituisce solo chiamate a strumenti interni, senza contenuto e senza
+chiamate del client:
+
+1. **un solo nuovo tentativo**: entrano nel ciclo il messaggio assistant con quelle chiamate (ragionamento ridotto
+   alla riga di conclusione, `_reasoning_cut`, come per i giri conclusi) e per ciascuna un risultato breve con
+   l'avviso di chiusura - `FINAL_NOTE` per lo spazio (e per le chiusure `no_room_*`), `LIMIT_MSG` ("non chiamare più
+   recall") per il limite di giri; IT/EN. Nessuna ricerca viene eseguita (le recall del banco restano 6.450).
+2. Il tentativo è un giro finale normale: strumenti del client soli, stessa verifica `P + F + M ≤ W` (con
+   `floor_short` il tentativo deve lasciare almeno lo spazio di risposta che aveva il primo). Il costo aggiunto si
+   paga solo con le fasce 0-1 (copie verificate, ragionamento concluso; mai prove); se non entra il ciclo torna com'era
+   (niente tolto per un tentativo che non si fa) e la risposta resta vuota come prima.
+3. Se anche il secondo tentativo chiama solo strumenti interni: risposta vuota come prima (`recall_dropped` con
+   `retry=true`; con `retry_no_room=true` quando il tentativo non è entrato). Mai più di un tentativo; la ricerca
+   resta chiusa (`SearchState.close(reason)`).
+4. Giornale: `final_recall_retry` con `round`, `reason` (`space` / `round_limit` / motivo della chiusura), `used`,
+   `calls`, `names`, `prompt_before`, `prompt`, `need`, `floor`, `removed` (fascia per voce), `evidence_lost`.
+   `SearchState.final_reason` porta il motivo dell'ultima finale (prima lo spazio non era memorizzato).
+5. Streaming: le chiamate interne non arrivano mai al client (`_round` le trattiene); il client vede il ragionamento
+   del primo tentativo, una riga informativa ("nuovo tentativo di risposta") e poi la risposta; ciò che ha già visto
+   va in `strip_c`/`strip_r` come per gli altri giri interni. Chiamate miste, contenuto visibile, finale che risponde
+   normalmente: percorso invariato (nessun evento); identità byte per byte a 128K invariata (`test_default_identity`).
+
+### Numeri: banco a tappeto prima/dopo (AI395, 2.000 conversazioni, semi 1000-2999, tokenizer esatto, 12 processi)
+Stesso banco su `d463f85` e sul nuovo commit. Novità del banco: con probabilità `SWEEP_RESIDUAL` (0,3) il modello finto
+chiama `recall` anche quando non è offerto (nel giro finale e di nuovo nel tentativo); fallisce su una **risposta
+vuota evitabile** (né contenuto né chiamate, mentre il tentativo non era impossibile - `used=false` - e il modello non
+ha richiamato `recall` nel tentativo) e se nessun tentativo viene esercitato. Esecuzione in un'unità
+`systemd-run --user` con `MemoryMax=40G`, `Nice=19`, `IOSchedulingClass=idle`, 88 GB disponibili alla partenza.
+
+| misura | `d463f85` | correzione |
+|---|---:|---:|
+| richieste al motore | 25.836 | 26.089 (+253 tentativi) |
+| sforamenti (`P + mt + 64 > W`) | 0 | **0** |
+| eccezioni / errori di conteggio esatto | 0 / 0 | 0 / 0 |
+| risposte sotto F con F raggiungibile | 0 | **0** |
+| prove viste e poi perse / false deduplicazioni | 0 / 0 | **0 / 0** (392 copie tolte in entrambi) |
+| recall eseguite | 6.450 | 6.450 |
+| finali di sole chiamate interne | 254 | 254 |
+| tentativi fatti (`used`) | - | 253 (`space` 129 scenari, `round_limit` 118, `no_room_for_result` 7) |
+| tentativi impossibili (non entra con F) | - | 1 |
+| il modello richiama `recall` nel tentativo | - | 62 (57 vuote; 5 con anche una chiamata del client: non vuote) |
+| **risposte vuote** | **254** | **58** (57 richiamo + 1 tentativo impossibile) |
+| **risposte vuote evitabili** | **254** | **0** |
+| esito del banco | **FALLISCE** (vuote evitabili) | **passa** |
+
+Vuote per finestra prima → dopo: 8K 78 → 25, 16K 54 → 9, 24K 42 → 9, 32K 41 → 9, 128K 39 → 6; in streaming
+125 → 30 (124 tentativi in streaming). L'unico tentativo impossibile (seme 1979, 8K, F = 1.024): prompt della finale
+6.863, margine libero 241 token, tre chiamate da chiudere e nessuna copia o ragionamento da togliere: resta vuota,
+nessuna prova toccata. Uscite: `out/correzione2/final-recall-retry/` (`sweep-frr-{before,after}.json`, script; il
+numero "dopo" è il secondo giro, dopo l'aggiunta di `retry_no_room` al giornale, identico al primo salvo quel campo;
+nel log `rc=0` è un difetto dello script - `$(date)` nello stesso `echo` azzera `$?` - fa fede `failures`).
+
+### Test
+Nuovi (`tests/test_final_recall_retry.py`, 12 test, motore finto): (a) finale per spazio a 16K → secondo tentativo con
+risposta, F intera, ragionamento ridotto alla conclusione, avviso, niente marcatori privati verso il motore, nessuna
+prova persa, nessuna ricerca; (b) uguale per il limite di giri (32K, `max_recall_rounds=1`, `LIMIT_MSG`); (c) il
+modello richiama `recall` → vuota, un solo tentativo, `recall_dropped retry=true` (spazio e limite); (d) spazio al
+limite, unitari su `_final_retry`: entra senza togliere nulla; entra pagando con una copia verificata (la prova resta
+intera); non entra → ciclo ripristinato, `used=false`; `floor_short` con e senza copia; (e) streaming: nessuna
+chiamata interna nei delta, contenuto "answer: yes", riga informativa, `finish_reason=stop`; anche con richiamo; (f)
+chiamate miste (anche in streaming) e contenuto visibile invariati, finale normale invariata. Sul codice `d463f85` 9
+dei 12 falliscono; restano verdi i 3 di invarianza.
+
+Aggiornato `test_recall_small_window.test_live_sequence_keeps_the_pages_it_read`: il copione chiama `recall` anche
+nel giro finale; ora l'ultima richiesta è il tentativo (le due pagine restano, la seconda con la nota di chiusura, poi
+il risultato con il solo avviso; `final_recall_retry space used=true`).
+
+Suite completa verde: Python 3.14 con tokenizer esatto 380 test OK (4 saltati); Python 3.10 354 test OK (10 saltati).
+
+### Cosa non è provato
+- Con il modello vero (GPU) non è stato rigiocato: non so quanto spesso Flash Next, dopo l'avviso, risponda invece di
+  richiamare `recall` (nel banco il richiamo è una moneta da 0,3).
+- Il tentativo costa un giro di prefill (nel pilota: ~10K token di prompt a 32K) e la sua generazione.

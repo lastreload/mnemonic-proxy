@@ -104,6 +104,7 @@ class SearchState:
         self.gens: list = []
         self.evidence_lost: list = []
         self.floor_short = False
+        self.final_reason = ""       # reason of the last final round: space / round_limit / the closure's reason
 
     def saw_generation(self, n, finish: str = "") -> None:
         if isinstance(n, int) and not isinstance(n, bool) and n >= 0:

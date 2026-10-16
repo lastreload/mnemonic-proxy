@@ -148,8 +148,16 @@ class TestRecallSmallWindow(unittest.TestCase):
         last = self.eng.requests[-1]
         tool_txt = [str(m.get("content")) for m in last["messages"] if m.get("role") == "tool"
                     and not str(m.get("tool_call_id", "")).startswith("call_s") and m.get("tool_call_id") != "call_cat"]
-        self.assertEqual(len([t for t in tool_txt if "removed from the context" not in t]), 2, tool_txt)
-        self.assertIn("no room left for more searches", tool_txt[-1])
+        # 0.3.5 (final recall retry): the scripted model calls recall in the final round too (recall not offered):
+        # one new attempt, where that call is answered by the closing notice alone (nothing searched)
+        notice = "[context manager: no room left for more searches. Answer now with the information already " \
+                 "retrieved (or say that you do not have it).]"
+        self.assertEqual(tool_txt[-1], notice, tool_txt[-1:])
+        pages = [t for t in tool_txt[:-1] if "removed from the context" not in t]
+        self.assertEqual(len(pages), 2, tool_txt)
+        self.assertIn("no room left for more searches", pages[-1])
+        fr = [e for e in ev if e["event"] == "final_recall_retry"]
+        self.assertEqual([(e["reason"], e["used"]) for e in fr], [("space", True)])
         self.assertNotIn(RECALL_NAME, {((t or {}).get("function") or {}).get("name") for t in last.get("tools") or []})
         self.assertGreaterEqual(last["max_tokens"], 2048)
 

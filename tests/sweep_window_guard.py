@@ -21,6 +21,11 @@ SEEN that a later request of the same answer no longer carries, while its lines 
 result (engine-side check, independent of the proxy's bookkeeping); a false deduplication (such a loss on a piece the
 proxy removed as a copy); the tokenizer not loaded in every scenario (with --tokdir); an exact-count error; no scenario
 with >= 2 distinct recall results delivered together.
+
+0.3.5 (final recall retry): with probability SWEEP_RESIDUAL (default 0.3) the fake model calls recall also in a round
+where it is not offered (the final round, and again in the one new attempt). Failure criteria: an avoidable empty
+answer - the client gets no content and no call while the new attempt was neither impossible (final_recall_retry
+used=false: it did not fit with F) nor answered by recall again (recall_dropped retry=true); no retry exercised at all.
 """
 from __future__ import annotations
 
@@ -45,6 +50,8 @@ from ctxproxy.server import Proxy  # noqa: E402
 from ctxproxy.upstream import Upstream  # noqa: E402
 
 WINDOWS = (8192, 16384, 24576, 32768, 131072)
+# probability that the fake model calls recall in a round where it is NOT offered (final round, and the one new attempt)
+RESIDUAL = float(os.environ.get("SWEEP_RESIDUAL", "0.3"))
 TOOLS = [{"type": "function", "function": {"name": "bash", "description": "run a command",
                                            "parameters": {"type": "object",
                                                           "properties": {"command": {"type": "string"}}}}}]
@@ -121,7 +128,7 @@ def run_one(args) -> dict:
         if last.get("role") == "user" and "QUESTION" in str(last.get("content")):
             state["k"] = 0
         offered = RECALL_NAME in names
-        residual = (not offered) and state["k"] is not None and state["k"] < rounds and rng.random() < 0.3
+        residual = (not offered) and state["k"] is not None and state["k"] < rounds and rng.random() < RESIDUAL
         if state["k"] is not None and state["k"] < rounds and (offered or residual):
             state["k"] += 1
             calls = []
@@ -190,7 +197,8 @@ def run_one(args) -> dict:
         h.append({"role": "user", "content": "QUESTION: which port did svc-%d id-%d use? use recall if needed"
                   % (rng.randint(1, steps), rng.randint(0, 9999))})
         n0 = len(eng.requests)
-        statuses.append(send(px, h, client_mt, stream))
+        st_q, r_q = send(px, h, client_mt, stream, full=True)
+        statuses.append(st_q)
         turn = eng.requests[n0:]
         lost = info_lost(turn)
         distinct = max([len({str(m.get("content")) for m in b["messages"] if m.get("role") == "tool"
@@ -206,6 +214,21 @@ def run_one(args) -> dict:
         copies = [x for e in wg for k in ("removed_search", "removed_final", "newest_group", "c2")
                   for x in (e.get(k) or []) if x.get("copy")]
         copy_ids = {x.get("tool_call_id") for x in copies}
+        # 0.3.5 (final recall retry): an empty answer to the question is admissible only when the one new attempt was
+        # not possible (it did not fit: used=false) or the model called recall again in it (recall_dropped retry)
+        qmsg = ((r_q or {}).get("choices") or [{}])[0].get("message") or {}
+        empty = st_q == 200 and not (qmsg.get("content") or "").strip() and not qmsg.get("tool_calls")
+        fr = [e for e in ev if e["event"] == "final_recall_retry"]
+        again = [e for e in ev if e["event"] == "recall_dropped" and e.get("retry")]
+        explained = any(not e.get("used") for e in fr) or bool(again)
+        res.update({"final_recall_retry": len(fr), "retry_used": sum(1 for e in fr if e.get("used")),
+                    "retry_no_room": sum(1 for e in fr if not e.get("used")), "retry_recall_again": len(again),
+                    "retry_reasons": sorted({e.get("reason") for e in fr}),
+                    "empty_answer": int(empty), "empty_avoidable": int(empty and not explained),
+                    "final_recall_dropped": sum(1 for e in ev if e["event"] == "recall_dropped" and e.get("final")
+                                                and "reason" not in e        # not the calls left without room
+                                                and not e.get("mixed") and not e.get("retry")
+                                                and not e.get("retry_no_room"))})
         res.update({
             "requests": eng.checked, "violations": len(eng.violations), "violation_detail": eng.violations[:3],
             "guard_violations": px.wguard.violations, "refused": sum(1 for e in wg if e.get("action") == "refused"),
@@ -281,15 +304,15 @@ def info_lost(requests: list) -> list:
     return lost
 
 
-def send(px, h, mt, stream):
+def send(px, h, mt, stream, full=False):
     req = {"model": "m", "messages": list(h), "tools": TOOLS}
     if mt:
         req["max_tokens"] = mt
     if stream:
-        st, _, _ = px.chat(req, emit=lambda c: None)
+        st, r, _ = px.chat(req, emit=lambda c: None)
     else:
-        st, _, _ = px.chat(req)
-    return st
+        st, r, _ = px.chat(req)
+    return (st, r) if full else st
 
 
 def main():
@@ -334,6 +357,13 @@ def summarize(rows):
          "copies_removed": tot("copies_removed"), "journal_evidence_lost": tot("journal_evidence_lost"),
          "noncopy_search": tot("noncopy_search"), "c2": tot("c2"), "newest_group": tot("newest_group"),
          "count_errors": tot("count_errors"),
+         "final_recall_retry": tot("final_recall_retry"), "retry_used": tot("retry_used"),
+         "retry_no_room": tot("retry_no_room"), "retry_recall_again": tot("retry_recall_again"),
+         "retry_space": sum(1 for r in rows if "space" in (r.get("retry_reasons") or [])),
+         "retry_round_limit": sum(1 for r in rows if "round_limit" in (r.get("retry_reasons") or [])),
+         "empty_answer": tot("empty_answer"), "empty_avoidable": tot("empty_avoidable"),
+         "final_recall_dropped_without_retry": tot("final_recall_dropped"),
+         "scenarios_empty_avoidable": [r["seed"] for r in rows if r.get("empty_avoidable")][:20],
          "scenarios_distinct_ge2": sum(1 for r in rows if (r.get("distinct_delivered") or 0) >= 2),
          "scenarios_with_loss": [(r["seed"], r.get("lost_ids")) for r in rows if r.get("evidence_lost")][:20],
          "per_window": {}}
@@ -357,6 +387,10 @@ def summarize(rows):
         fail.append("false deduplication")
     if s["count_errors"]:
         fail.append("exact count errors")
+    if s["empty_avoidable"]:
+        fail.append("avoidable empty answers (final round of internal calls only, no new attempt)")
+    if not os.environ.get("SWEEP_GUARD_OFF") and not s["retry_used"]:
+        fail.append("no final recall retry exercised")
     if not s["scenarios_distinct_ge2"]:
         fail.append("no scenario with >= 2 distinct recall results delivered")
     if any(r.get("exact") for r in rows) and s["tokenizer_loaded"] != len(rows):

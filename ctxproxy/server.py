@@ -31,7 +31,7 @@ from .render import template_kwargs
 from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
                      NO_ROOM_EN, NO_ROOM_IT, NOTICE_MIN, RESULT_MIN, RESULT_R, SEARCH_BANDS, SearchState, WindowGuard,
-                     _text as _txt, clean, idents, pieces, remove_piece, removal_entry, removal_order,
+                     _text as _txt, clean, conclusion, idents, pieces, remove_piece, removal_entry, removal_order,
                      sources_from_meta)
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
@@ -139,10 +139,12 @@ class Proxy:
         loop: list[dict] = []       # what the loop adds (calls, reasoning, results): removable, see window.py
         floor = self._answer_floor(body)
         final = False
+        retried = False             # 0.3.5: at most one new attempt after a final round of internal calls only
+        retry_made = False
         st = SearchState()
         if guard_on:
             self._check_floor(p, phys0, body, floor, st)
-        for rnd in range(self.cfg.max_recall_rounds + 2):
+        for rnd in range(self.cfg.max_recall_rounds + 3):
             tools_r = p.tools
             if guard_on:
                 final, tools_r = self._plan_round(p, phys0, loop, body, rnd, floor, lu_full, st)
@@ -177,6 +179,22 @@ class Proxy:
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
+            if guard_on and final and not others and not retried and not (msg.get("content") or "").strip():
+                # 0.3.5: the final round (no internal tools offered) returned ONLY internal calls - the model saw
+                # recall used earlier and called it anyway. Instead of an empty answer: ONE new final attempt, with
+                # the calls answered by the closing notice (nothing searched), if it fits with F.
+                retried = True
+                if self._final_retry(p, phys0, loop, body, rnd, floor, lu_full, st, msg, mine, tools_r):
+                    retry_made = True
+                    if emit:
+                        info = ("\n[gestore del contesto: ricerca chiusa, %s non eseguita; nuovo tentativo di risposta]\n"
+                                if p.lang == "it" else
+                                "\n[context manager: search closed, %s not run; new answer attempt]\n") % p.recall_name
+                        self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
+                        strip_c.append(resp.get("_sent_content", ""))
+                        strip_r.append(resp.get("_sent_reasoning", "") + info)
+                    phys = phys0 + clean(loop)
+                    continue
             if others or rnd > self.cfg.max_recall_rounds or final:
                 # chiamate miste (o troppi giri, o giro finale per spazio): al client vanno solo le sue; la recall
                 # non eseguita sparisce.
@@ -185,7 +203,8 @@ class Proxy:
                     msg.pop("tool_calls", None)
                     resp["choices"][0]["finish_reason"] = "stop"
                 self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
-                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final)
+                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final,
+                                 retry=retry_made, retry_no_room=retried and not retry_made)
                 break
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
             amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
@@ -464,6 +483,7 @@ class Proxy:
             if not fits(floor, tools):
                 # C2 (emergency): whole rounds (call + results); rounds without protected pieces first, oldest first
                 self._c2(p, loop, question, r_c2, fits, floor, tools, st)
+        st.final_reason = reason if final else ""
         removed = r_search + r_final + r_group + r_c2
         if removed or final:
             P = self._wcount(phys0 + clean(loop), tools, body)
@@ -477,6 +497,51 @@ class Proxy:
                                  evidence_lost=len(st.evidence_lost), s_est=st.s_est, extra=extra or None,
                                  prompt=P, floor=floor, fits=P + floor + M <= W)
         return final, tools
+
+    def _final_retry(self, p, phys0, loop, body, rnd, floor, question, st, msg, mine, tools) -> bool:
+        """0.3.5: a final round answered with internal calls only (recall not offered, called anyway). Adds to the
+        loop the assistant message with those calls (reasoning reduced to its conclusion line, as for a finished
+        round) and, for each call, a short result with the closing notice (FINAL_NOTE for space, LIMIT_MSG for the
+        round limit); nothing is searched. The new attempt is a normal final call (client tools only) and must pass
+        the same check P + F + margin <= W - when the final call itself could not give F (floor_short), it must give
+        at least the room the first attempt had. To pay for the added cost only verified copies and finished
+        reasoning are removed (bands 0-1, never evidence); if it still does not fit the loop is restored and False is
+        returned (empty answer as before). Journal: final_recall_retry."""
+        W, M = int(self.cfg.window), self.wguard.margin
+        reason = st.final_reason or st.reason or "round_limit"
+        before = self._wcount(phys0 + clean(loop), tools, body)
+        need = max(1, min(floor, W - M - before))
+        if reason == "round_limit":
+            text = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
+        else:
+            text = (FINAL_NOTE_IT if p.lang == "it" else FINAL_NOTE_EN).strip()
+        snap = list(loop)
+        amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": list(mine)}
+        r = msg.get("reasoning_content")
+        if isinstance(r, str) and r.strip():
+            amsg["reasoning_content"] = conclusion(r)
+            amsg["_reasoning_cut"] = True
+        loop += [amsg] + [{"role": "tool", "tool_call_id": c.get("id"), "content": text, "_keep": True,
+                           "_final_note": text} for c in mine]
+        removed: list = []
+
+        def fits():
+            return self._wcount(phys0 + clean(loop), tools, body) + need + M <= W
+        while not fits():
+            if not self._remove(p, loop, question, SEARCH_BANDS, "final_retry", removed, st):
+                break
+        ok = fits()
+        after = self._wcount(phys0 + clean(loop), tools, body) if ok else before
+        if ok:
+            st.close(reason)              # the next round is final for the same reason (never a search again)
+        else:
+            loop[:] = snap                # nothing removed to pay for an attempt that is not made
+        self.journal.log("final_recall_retry", conv=p.conv, round=rnd, reason=reason, used=ok, calls=len(mine),
+                         names=sorted({(c.get("function") or {}).get("name") for c in mine}),
+                         prompt_before=before, prompt=after, need=need, floor=floor,
+                         removed=[[e["kind"], e["round"], e["tokens"], e["band"]] for e in removed] if ok else [],
+                         evidence_lost=len(st.evidence_lost))
+        return ok
 
     def _shrink_newest(self, p, loop, question, sink, fits, need, tools) -> None:
         """The newest group (last assistant call + its results) does not fit with F: its results become receipts

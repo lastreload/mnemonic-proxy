@@ -24,6 +24,19 @@
   engine-side loss check): evidence seen by the model and then lost 669 → 0, false deduplications 0 on 392 copies
   removed, 0 over the window; cost: 6,450 recalls instead of 9,547 (more searches end for space). See
   `docs/dev-notes/SEARCH-KEEPS-EVIDENCE-RESULT.md`.
+- **Fix: no empty answer when the model calls `recall` anyway in the final round.** In the final round (search
+  closed for space or at `max_recall_rounds`) `recall` is not offered, but a model that saw it used may call it
+  anyway; the call was dropped and the client got an empty answer (`finish_reason=stop`; 2 of 8 questions in an
+  AgentLongBench 32K pilot). Now such a round (internal calls only, no content, no client call) gets **one** new
+  final attempt: the calls go into the loop with their reasoning reduced to the conclusion line and each is answered
+  by the closing notice (`FINAL_NOTE` for space, `LIMIT_MSG` for the round limit; nothing is searched). The attempt
+  passes the same `P + F + margin <= W` check, paying only with verified copies and finished reasoning (never
+  evidence); if it does not fit, or the model calls `recall` again, the answer is empty as before. Mixed calls and
+  normal final answers are unchanged; streaming never shows the internal calls. Journal: `final_recall_retry`
+  (`round`, `reason`, `used`, prompt tokens), `recall_dropped` gains `retry` / `retry_no_room`. Sweep (2,000
+  conversations, exact tokenizer, the fake model calls `recall` when not offered with p = 0.3): avoidable empty
+  answers 254 → 0, empty answers 254 → 58 (model called `recall` again, or no room), 0 over the window, 0 evidence
+  lost.
 
 ## Earlier in this cycle (0.3.3, 0.3.4; not released separately)
 
