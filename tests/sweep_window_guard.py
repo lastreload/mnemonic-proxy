@@ -26,6 +26,14 @@ with >= 2 distinct recall results delivered together.
 where it is not offered (the final round, and again in the one new attempt). Failure criteria: an avoidable empty
 answer - the client gets no content and no call while the new attempt was neither impossible (final_recall_retry
 used=false: it did not fit with F) nor answered by recall again (recall_dropped retry=true); no retry exercised at all.
+
+0.3.6 (last attempt with the reasoning off): SWEEP_MODE chooses how the fake model behaves in a round where recall is
+NOT offered: `residual` (default, as 0.3.5: recall with probability SWEEP_RESIDUAL while it still has rounds to ask),
+`always` (it calls recall in every such round: the attempts are bounded and the answer stays empty), `nothink` (the
+model of the AgentLongBench confirmation run: with the reasoning on it always calls recall, with it off
+- chat_template_kwargs.enable_thinking=false - it answers). With the reasoning off the fake model writes no reasoning.
+More failure criteria: more than two new final attempts for one answer; in `nothink` mode any empty answer that is not
+explained by an attempt without room.
 """
 from __future__ import annotations
 
@@ -52,6 +60,8 @@ from ctxproxy.upstream import Upstream  # noqa: E402
 WINDOWS = (8192, 16384, 24576, 32768, 131072)
 # probability that the fake model calls recall in a round where it is NOT offered (final round, and the one new attempt)
 RESIDUAL = float(os.environ.get("SWEEP_RESIDUAL", "0.3"))
+MODE = os.environ.get("SWEEP_MODE", "residual")
+assert MODE in ("residual", "always", "nothink"), MODE
 TOOLS = [{"type": "function", "function": {"name": "bash", "description": "run a command",
                                            "parameters": {"type": "object",
                                                           "properties": {"command": {"type": "string"}}}}}]
@@ -110,7 +120,7 @@ def run_one(args) -> dict:
            "policy": cfgd["recall_removal"], "answerfix": bool(cfgd.get("answer_thinking_after_recall")),
            "leaf": cfgd["recall_leaf_select"]}
     tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-    state = {"k": None, "answers": [], "where": [], "asked": []}
+    state = {"k": None, "answers": [], "where": [], "asked": [], "unoffered": 0}
     holder = {}
 
     def policy(body):
@@ -120,16 +130,24 @@ def run_one(args) -> dict:
         mt = int(body.get("max_completion_tokens") or body.get("max_tokens") or 0)
         rb = body.get("reasoning_budget_tokens")
         where = holder["px"].wguard.where if "px" in holder else ""
+        no_think = template_kwargs(body).get("enable_thinking") is False
         if mt <= 1:
             return {"role": "assistant", "content": "."}
-        # worst case: reasoning fills the budget (or max_tokens - 64)
-        rtok = max(0, min(int(rb) if isinstance(rb, int) and rb > 0 else mt, mt - 64))
+        # worst case: reasoning fills the budget (or max_tokens - 64); none with the reasoning off
+        rtok = 0 if no_think else max(0, min(int(rb) if isinstance(rb, int) and rb > 0 else mt, mt - 64))
         reasoning = ("considering svc and ports carefully. " * (int(rtok * 3.5) // 37 + 1))[:int(rtok * 3.5)]
         if last.get("role") == "user" and "QUESTION" in str(last.get("content")):
             state["k"] = 0
         offered = RECALL_NAME in names
-        residual = (not offered) and state["k"] is not None and state["k"] < rounds and rng.random() < RESIDUAL
-        if state["k"] is not None and state["k"] < rounds and (offered or residual):
+        if not offered and state["k"] is not None:
+            state["unoffered"] += 1
+        if MODE == "always":
+            residual = (not offered) and state["k"] is not None
+        elif MODE == "nothink":
+            residual = (not offered) and state["k"] is not None and not no_think
+        else:
+            residual = (not offered) and state["k"] is not None and state["k"] < rounds and rng.random() < RESIDUAL
+        if state["k"] is not None and ((state["k"] < rounds and offered) or residual):
             state["k"] += 1
             calls = []
             real = sorted(set(re.findall(r"\br[0-9a-f]{12}\b", json.dumps(msgs))))
@@ -221,10 +239,16 @@ def run_one(args) -> dict:
         fr = [e for e in ev if e["event"] == "final_recall_retry"]
         again = [e for e in ev if e["event"] == "recall_dropped" and e.get("retry")]
         explained = any(not e.get("used") for e in fr) or bool(again)
+        no_room = any(not e.get("used") for e in fr)
         res.update({"final_recall_retry": len(fr), "retry_used": sum(1 for e in fr if e.get("used")),
                     "retry_no_room": sum(1 for e in fr if not e.get("used")), "retry_recall_again": len(again),
                     "retry_reasons": sorted({e.get("reason") for e in fr}),
                     "empty_answer": int(empty), "empty_avoidable": int(empty and not explained),
+                    "empty_no_room": int(empty and no_room),
+                    "attempts": len(fr), "attempt2": sum(1 for e in fr if e.get("attempt") == 2),
+                    "attempt2_used": sum(1 for e in fr if e.get("attempt") == 2 and e.get("used")),
+                    "attempt2_thinking_off": sum(1 for e in fr if e.get("attempt") == 2 and e.get("thinking_off")),
+                    "unoffered_calls": state["unoffered"],
                     "final_recall_dropped": sum(1 for e in ev if e["event"] == "recall_dropped" and e.get("final")
                                                 and "reason" not in e        # not the calls left without room
                                                 and not e.get("mixed") and not e.get("retry")
@@ -362,6 +386,12 @@ def summarize(rows):
          "retry_space": sum(1 for r in rows if "space" in (r.get("retry_reasons") or [])),
          "retry_round_limit": sum(1 for r in rows if "round_limit" in (r.get("retry_reasons") or [])),
          "empty_answer": tot("empty_answer"), "empty_avoidable": tot("empty_avoidable"),
+         "empty_no_room": tot("empty_no_room"), "mode": MODE,
+         "attempt2": tot("attempt2"), "attempt2_used": tot("attempt2_used"),
+         "attempt2_thinking_off": tot("attempt2_thinking_off"),
+         "max_attempts": max([r.get("attempts") or 0 for r in rows] or [0]),
+         "max_unoffered_calls": max([r.get("unoffered_calls") or 0 for r in rows] or [0]),
+         "scenarios_empty": [r["seed"] for r in rows if r.get("empty_answer")][:20],
          "final_recall_dropped_without_retry": tot("final_recall_dropped"),
          "scenarios_empty_avoidable": [r["seed"] for r in rows if r.get("empty_avoidable")][:20],
          "scenarios_distinct_ge2": sum(1 for r in rows if (r.get("distinct_delivered") or 0) >= 2),
@@ -389,6 +419,10 @@ def summarize(rows):
         fail.append("exact count errors")
     if s["empty_avoidable"]:
         fail.append("avoidable empty answers (final round of internal calls only, no new attempt)")
+    if s["max_attempts"] > 2:
+        fail.append("more than two new final attempts for one answer")
+    if MODE == "nothink" and s["empty_answer"] - s["empty_no_room"]:
+        fail.append("empty answers with a model that answers with the reasoning off")
     if not os.environ.get("SWEEP_GUARD_OFF") and not s["retry_used"]:
         fail.append("no final recall retry exercised")
     if not s["scenarios_distinct_ge2"]:

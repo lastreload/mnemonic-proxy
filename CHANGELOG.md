@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.6 — unreleased
+
+- **Fix: the final attempt is not left empty when the model calls `recall` again.** With 0.3.5 a final round of
+  internal calls only got one new attempt, but Flash Next called `recall` again in it too (it reasoned up to the
+  thinking budget, then called the tool that was not offered): the call was dropped and the answer was empty (2 of 19
+  D runs at 64K in the AgentLongBench confirmation run, both `round_limit`). Now, if that attempt also returns only
+  internal calls, there is **one last** attempt with the reasoning off (`chat_template_kwargs.enable_thinking=false`,
+  the switch Strata and llama.cpp honour; it wins over `reasoning_effort`; no `reasoning_budget_tokens`; answer T does
+  not turn the reasoning back on) and the calls answered by an explicit instruction (`ANSWER_NOW`: search closed,
+  no tools, answer now in the requested format, or say the information is missing). Same check
+  `P + F + margin <= W`, counted with the reasoning-off template; the answer room is never less than the previous
+  final call's; only verified copies and finished reasoning pay for it. If the calls + instruction do not fit, the
+  last attempt goes **bare** (the calls leave; the instruction is appended to the last result only if it fits).
+  If attempt 1 does not fit, the last attempt is tried at once. If the last attempt too calls only internal tools,
+  the answer stays empty (nothing invented). Never more than two new attempts. Journal: `final_recall_retry` gains
+  `attempt` (1|2), `thinking_off`, `bare`; `recall_dropped` gains `attempts`, `thinking_off`. Streaming: a reasoning
+  line "last answer attempt, reasoning off". Cost: with the reasoning off the template drops the reasoning
+  instruction from the system head, so the engine's prefix cache is lost for that one call (full prefill).
+  See `docs/dev-notes/FINAL-ATTEMPT-036-RESULT.md`.
+
 ## 0.3.5 — unreleased
 
 - **Fix: a search round never consumes the evidence already acquired (window guard, correction 2).** On a small

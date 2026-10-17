@@ -129,10 +129,12 @@ def fit_thinking(proxy, p, body: dict, phys: list, budget: int, tools="_p"):
     return send
 
 
-def thinking_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
-    """T: il corpo da mandare al motore per questo giro (body invariato se T è spento o non si applica)."""
+def thinking_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p", no_think: bool = False) -> dict:
+    """T: il corpo da mandare al motore per questo giro (body invariato se T è spento o non si applica).
+    no_think (0.3.6): ultimo tentativo finale con il ragionamento spento: T non lo riaccende."""
     cfg = proxy.cfg
-    if not getattr(cfg, "answer_thinking_after_recall", False) or not ends_with_recall(phys, p.recall_aliases):
+    if no_think or not getattr(cfg, "answer_thinking_after_recall", False) \
+            or not ends_with_recall(phys, p.recall_aliases):
         return body
     budget = int(getattr(cfg, "answer_thinking_budget", 0) or 0)
     send = fit_thinking(proxy, p, body, phys, budget, tools)
@@ -141,11 +143,11 @@ def thinking_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dic
     return send if send is not None else body
 
 
-def chat(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
+def chat(proxy, p, body: dict, phys: list, rnd: int, tools="_p", no_think: bool = False) -> dict:
     """Giro non-stream verso il motore, con T se si applica (la risposta porta allora il segno _af_thinking).
     tools: quelli del giro (0.3.3: la chiamata finale per spazio non offre gli strumenti del proxy)."""
     tools = p.tools if tools == "_p" else tools
-    send = thinking_body(proxy, p, body, phys, rnd, tools)
+    send = thinking_body(proxy, p, body, phys, rnd, tools, no_think)
     resp = proxy.up.chat({**send, "messages": phys, "tools": tools})
     if send is not body and isinstance(resp, dict):
         resp["_af_thinking"] = True
@@ -158,10 +160,10 @@ def chat(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
     return resp
 
 
-def stream_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p") -> dict:
+def stream_body(proxy, p, body: dict, phys: list, rnd: int, tools="_p", no_think: bool = False) -> dict:
     """Giro in streaming: stesso corpo di T (il ragionamento, se c'è, arriva al client come reasoning_content come
     per ogni modello con il thinking acceso; il proxy non lo toglie dallo stream)."""
-    return thinking_body(proxy, p, body, phys, rnd, tools)
+    return thinking_body(proxy, p, body, phys, rnd, tools, no_think)
 
 
 def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None, tools="_p") -> dict:

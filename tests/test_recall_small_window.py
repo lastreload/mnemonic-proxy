@@ -152,12 +152,17 @@ class TestRecallSmallWindow(unittest.TestCase):
         # one new attempt, where that call is answered by the closing notice alone (nothing searched)
         notice = "[context manager: no room left for more searches. Answer now with the information already " \
                  "retrieved (or say that you do not have it).]"
-        self.assertEqual(tool_txt[-1], notice, tool_txt[-1:])
-        pages = [t for t in tool_txt[:-1] if "removed from the context" not in t]
+        # 0.3.6: it calls recall in that attempt too (4th call of the sequence): the LAST attempt, reasoning off,
+        # where that call is answered by the instruction to answer now in the requested format
+        self.assertEqual(tool_txt[-2], notice, tool_txt[-2:])
+        self.assertIn("answer the question now, in the requested format", tool_txt[-1])
+        self.assertIs((last.get("chat_template_kwargs") or {}).get("enable_thinking"), False)
+        pages = [t for t in tool_txt[:-2] if "removed from the context" not in t]
         self.assertEqual(len(pages), 2, tool_txt)
         self.assertIn("no room left for more searches", pages[-1])
         fr = [e for e in ev if e["event"] == "final_recall_retry"]
-        self.assertEqual([(e["reason"], e["used"]) for e in fr], [("space", True)])
+        self.assertEqual([(e["reason"], e["used"], e["attempt"], e["thinking_off"], e["bare"]) for e in fr],
+                         [("space", True, 1, False, False), ("space", True, 2, True, False)])
         self.assertNotIn(RECALL_NAME, {((t or {}).get("function") or {}).get("name") for t in last.get("tools") or []})
         self.assertGreaterEqual(last["max_tokens"], 2048)
 

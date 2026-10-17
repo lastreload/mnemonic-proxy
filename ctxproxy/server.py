@@ -38,6 +38,13 @@ LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiama
              "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
 LIMIT_MSG_EN = ("{rn}: search limit reached for this answer. Do not call {rn} again: answer now with the "
                 "information already retrieved (or say that you do not have it).")
+# 0.3.6: the last new final attempt (thinking off) answers the internal calls of the previous attempt with this
+ANSWER_NOW_IT = ("{rn}: la ricerca è chiusa e {rn} non è disponibile. Non chiamare strumenti: rispondi ora alla "
+                 "domanda, nel formato richiesto, con le informazioni già recuperate (o di' che non le hai).")
+ANSWER_NOW_EN = ("{rn}: the search is closed and {rn} is not available. Do not call any tool: answer the question "
+                 "now, in the requested format, with the information already retrieved (or say that you do not have "
+                 "it).")
+FINAL_ATTEMPTS = 2          # 0.3.6: new final attempts after a final round of internal calls only, never more
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_./\-]{4,}|\d[\d.,:]{2,}")
 
 
@@ -139,8 +146,8 @@ class Proxy:
         loop: list[dict] = []       # what the loop adds (calls, reasoning, results): removable, see window.py
         floor = self._answer_floor(body)
         final = False
-        retried = False             # 0.3.5: at most one new attempt after a final round of internal calls only
-        retry_made = False
+        tries = made = 0            # 0.3.5/0.3.6: new final attempts tried / made (at most FINAL_ATTEMPTS)
+        no_think = False            # 0.3.6: the last attempt goes with the reasoning off (T not applied)
         st = SearchState()
         if guard_on:
             self._check_floor(p, phys0, body, floor, st)
@@ -155,10 +162,10 @@ class Proxy:
             self.wguard.where = "final" if final else ("answer" if rnd == 0 else "recall_round")
             try:
                 if emit:
-                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd, tools_r), "messages": phys,
-                                        "tools": tools_r}, emit, stream_state)
+                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd, tools_r, no_think),
+                                        "messages": phys, "tools": tools_r}, emit, stream_state)
                 else:
-                    resp = answerfix.chat(self, p, body, phys, rnd, tools_r)
+                    resp = answerfix.chat(self, p, body, phys, rnd, tools_r, no_think)
             except UpstreamError as e:
                 self.journal.log("upstream_error", conv=p.conv, status=e.status, error=str(e)[:300])
                 return e.status, _err_body(e), {}
@@ -179,17 +186,36 @@ class Proxy:
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
-            if guard_on and final and not others and not retried and not (msg.get("content") or "").strip():
+            if guard_on and final and not others and tries < FINAL_ATTEMPTS \
+                    and not (msg.get("content") or "").strip():
                 # 0.3.5: the final round (no internal tools offered) returned ONLY internal calls - the model saw
-                # recall used earlier and called it anyway. Instead of an empty answer: ONE new final attempt, with
+                # recall used earlier and called it anyway. Instead of an empty answer: a new final attempt, with
                 # the calls answered by the closing notice (nothing searched), if it fits with F.
-                retried = True
-                if self._final_retry(p, phys0, loop, body, rnd, floor, lu_full, st, msg, mine, tools_r):
-                    retry_made = True
+                # 0.3.6: if that attempt too returns only internal calls, a LAST one with the reasoning off and the
+                # explicit instruction to answer now in the requested format (Flash Next at 64K reasoned up to the
+                # budget and called recall again: AgentLongBench confirmation run). Never more than two. When attempt
+                # 1 does not fit, attempt 2 is tried at once (it can go without the calls: see _final_retry).
+                ok = False
+                while tries < FINAL_ATTEMPTS and not ok:
+                    tries += 1
+                    nbody = self._no_think_body(body) if tries == FINAL_ATTEMPTS else body
+                    ok = self._final_retry(p, phys0, loop, nbody, rnd, floor, lu_full, st, msg, mine, tools_r,
+                                           attempt=tries, ref_body=body)
+                if ok:
+                    made += 1
+                    if tries == FINAL_ATTEMPTS:
+                        body, no_think = nbody, True
                     if emit:
-                        info = ("\n[gestore del contesto: ricerca chiusa, %s non eseguita; nuovo tentativo di risposta]\n"
-                                if p.lang == "it" else
-                                "\n[context manager: search closed, %s not run; new answer attempt]\n") % p.recall_name
+                        if tries == FINAL_ATTEMPTS:
+                            info = ("\n[gestore del contesto: ricerca chiusa, %s non eseguita; ultimo tentativo di "
+                                    "risposta, senza ragionamento]\n" if p.lang == "it" else
+                                    "\n[context manager: search closed, %s not run; last answer attempt, reasoning "
+                                    "off]\n") % p.recall_name
+                        else:
+                            info = ("\n[gestore del contesto: ricerca chiusa, %s non eseguita; nuovo tentativo di "
+                                    "risposta]\n" if p.lang == "it" else
+                                    "\n[context manager: search closed, %s not run; new answer attempt]\n") \
+                                % p.recall_name
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_c.append(resp.get("_sent_content", ""))
                         strip_r.append(resp.get("_sent_reasoning", "") + info)
@@ -204,7 +230,7 @@ class Proxy:
                     resp["choices"][0]["finish_reason"] = "stop"
                 self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
                                  names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final,
-                                 retry=retry_made, retry_no_room=retried and not retry_made)
+                                 retry=made > 0, retry_no_room=tries > made, attempts=made, thinking_off=no_think)
                 break
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
             amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
@@ -498,7 +524,17 @@ class Proxy:
                                  prompt=P, floor=floor, fits=P + floor + M <= W)
         return final, tools
 
-    def _final_retry(self, p, phys0, loop, body, rnd, floor, question, st, msg, mine, tools) -> bool:
+    def _no_think_body(self, body: dict) -> dict:
+        """0.3.6: the body of the last final attempt: reasoning off the way Strata (and llama.cpp) honour it -
+        chat_template_kwargs.enable_thinking=false, which wins over reasoning_effort in the template (render.py
+        template_kwargs, as Strata's frontend); no thinking budget (it would have nothing to bound)."""
+        ctk = body.get("chat_template_kwargs") if isinstance(body.get("chat_template_kwargs"), dict) else {}
+        out = {**body, "chat_template_kwargs": {**ctk, "enable_thinking": False}}
+        out.pop("reasoning_budget_tokens", None)
+        return out
+
+    def _final_retry(self, p, phys0, loop, body, rnd, floor, question, st, msg, mine, tools,
+                     attempt: int = 1, ref_body=None) -> bool:
         """0.3.5: a final round answered with internal calls only (recall not offered, called anyway). Adds to the
         loop the assistant message with those calls (reasoning reduced to its conclusion line, as for a finished
         round) and, for each call, a short result with the closing notice (FINAL_NOTE for space, LIMIT_MSG for the
@@ -506,12 +542,23 @@ class Proxy:
         the same check P + F + margin <= W - when the final call itself could not give F (floor_short), it must give
         at least the room the first attempt had. To pay for the added cost only verified copies and finished
         reasoning are removed (bands 0-1, never evidence); if it still does not fit the loop is restored and False is
-        returned (empty answer as before). Journal: final_recall_retry."""
+        returned (empty answer as before). Journal: final_recall_retry.
+        0.3.6: attempt 2 (the last) is made only after attempt 1 returned internal calls only: its calls are answered
+        with ANSWER_NOW (answer now, in the requested format, no tools) and `body` is the reasoning-off body, so the
+        same check P + F + margin <= W is made with the template the engine will render; the answer room `need` is the
+        one of the previous final call (`ref_body`, its own template), never less. If the calls + ANSWER_NOW do not
+        fit even after removing bands 0-1, the last attempt goes BARE: the calls leave (as in a cancelled group), the
+        prompt is the one of the previous final call with the reasoning off - ANSWER_NOW is appended to the last
+        result only if it fits - and the same check is made (bands 0-1 only). Journal: attempt, thinking_off, bare."""
         W, M = int(self.cfg.window), self.wguard.margin
         reason = st.final_reason or st.reason or "round_limit"
         before = self._wcount(phys0 + clean(loop), tools, body)
-        need = max(1, min(floor, W - M - before))
-        if reason == "round_limit":
+        before_ref = before if ref_body is None or ref_body is body else \
+            self._wcount(phys0 + clean(loop), tools, ref_body)
+        need = max(1, min(floor, W - M - before_ref))
+        if attempt >= FINAL_ATTEMPTS:
+            text = (ANSWER_NOW_IT if p.lang == "it" else ANSWER_NOW_EN).replace("{rn}", p.recall_name)
+        elif reason == "round_limit":
             text = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
         else:
             text = (FINAL_NOTE_IT if p.lang == "it" else FINAL_NOTE_EN).strip()
@@ -531,12 +578,29 @@ class Proxy:
             if not self._remove(p, loop, question, SEARCH_BANDS, "final_retry", removed, st):
                 break
         ok = fits()
+        bare = False
+        if not ok and attempt >= FINAL_ATTEMPTS:
+            # 0.3.6: the last attempt without the calls (no added cost but the reasoning-off template)
+            loop[:] = snap
+            removed = []
+            while not fits():
+                if not self._remove(p, loop, question, SEARCH_BANDS, "final_retry", removed, st):
+                    break
+            ok = bare = fits()
+            if ok and loop and loop[-1].get("role") == "tool":
+                last = loop[-1]
+                loop[-1] = {**last, "content": _txt(last.get("content")) + "\n[" + text + "]",
+                            "_final_note": (last.get("_final_note") or "") + "\n[" + text + "]"}
+                if not fits():
+                    loop[-1] = last
         after = self._wcount(phys0 + clean(loop), tools, body) if ok else before
         if ok:
             st.close(reason)              # the next round is final for the same reason (never a search again)
         else:
             loop[:] = snap                # nothing removed to pay for an attempt that is not made
         self.journal.log("final_recall_retry", conv=p.conv, round=rnd, reason=reason, used=ok, calls=len(mine),
+                         attempt=attempt, thinking_off=template_kwargs(body).get("enable_thinking") is False,
+                         bare=bare,
                          names=sorted({(c.get("function") or {}).get("name") for c in mine}),
                          prompt_before=before, prompt=after, need=need, floor=floor,
                          removed=[[e["kind"], e["round"], e["tokens"], e["band"]] for e in removed] if ok else [],
