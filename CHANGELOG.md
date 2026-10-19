@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.7 — unreleased
+
+- **llama-server in router mode** ([#12](https://github.com/lastreload/mnemonic-proxy/issues/12)): llama-server
+  started without `-m` (several models, loaded and unloaded on demand). Before, the router was taken for a generic
+  OpenAI engine (or, with `engine_tokenize`, every request failed on `/tokenize` without a model): no saved state and
+  the window from the configuration, not from the model — a model loaded with a smaller `ctx-size` got prompts it
+  could not hold (verified on llama.cpp b11723: HTTP 400 `exceed_context_size_error`). Now:
+  - **detection**: `GET /props` says `role: router` and `GET /models` lists models with a `status` → engine
+    `llama.cpp` in router mode (also with `engine: llama.cpp` forced). Nothing is loaded to detect it.
+  - **window per model, before the prompt is built**: at every request the proxy reads `GET /models`; if the model
+    is not loaded (or was reloaded) it reads the n_ctx of its slot with `GET /slots?model=…&autoload=true`, which
+    loads it. Window = that n_ctx (or `window` from the config if it is smaller); unset thresholds scaled as for a
+    single-model llama-server. If the n_ctx cannot be read (model missing, load failed) the request is refused with
+    a clear error — never sent with the config window. An unknown model name is refused too, unless `router_model`
+    names the model to use.
+  - **every call to the model of the request**: chat (internal calls included), `/tokenize` (token counts and their
+    cache per model), `/slots/{id}?action=save|restore` (`"model"` in the body, `autoload=false`).
+  - **saved files bound to their model** (`<data>/router-slot-models.json`): a restore with another model, or of a
+    file the proxy did not save in router mode, is refused (409) before it reaches the engine — llama-server itself
+    restores another model's file without complaining. Autorestore picks only files of the current model; an
+    autosave never prunes another model's file as superseded.
+  - **unload / reload**: the engine state is `model#generation`; a model seen unloaded gets a new generation, so the
+    proxy drops any warm-cache assumption and restores only a file of that same model.
+  - Default path unchanged: Strata, ds4, single-model llama.cpp and generic engines behave exactly as before.
+  - Real run on CPU (llama.cpp b11723, two tiny models with n_ctx 32768 / 16384, one broken): A → B → A → unload A
+    → A, 0 requests over the window, A's file restored only on A. Report: `docs/dev-notes/ROUTER-MODE-RESULT.md`.
+
 ## 0.3.6 — unreleased
 
 - **Fix: the final attempt is not left empty when the model calls `recall` again.** With 0.3.5 a final round of

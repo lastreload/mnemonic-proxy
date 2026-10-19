@@ -715,6 +715,14 @@ against a mock engine and with short real client runs, not yet on long real sess
   before a switch, autosave/autorestore, `kv_archive`). The window comes from the server's `n_ctx` unless `window` is
   set; with `--parallel N` the proxy pins one slot (`slot_id`, default 0). Without `--slot-save-path` the proxy runs
   in base mode.
+- **llama.cpp in router mode** (0.3.7, llama-server started without `-m`, models from `--models-preset` or
+  `--models-dir`, loaded on demand) — detected automatically. The client's `model` picks the model; the proxy reads
+  that model's n_ctx (its slot, `GET /slots?model=…`, loading the model if needed) **before** building the prompt, so
+  the window always fits the model that will run it (thresholds scale with it). If the n_ctx cannot be read the
+  request is refused with a clear error; it is never sent with the config window. Saved files are bound to the model
+  that wrote them: a file is never restored into another model. Start every model with `--slot-save-path` (put it
+  in the `[*]` section of the preset) and `parallel = 1`, and give each model a `ctx-size` of at least 16K. Tested on
+  CPU with tiny models only (`docs/dev-notes/ROUTER-MODE-RESULT.md`).
 - **Strata** — works in base mode on any version. **Saved state: Strata ≥ 0.1.40**
   ([PR #668](https://github.com/Niko1221/Strata/pull/668), released in
   [v0.1.40](https://github.com/Niko1221/Strata/releases/tag/v0.1.40)), started with `--slot-save-path DIR`. Session files
@@ -868,6 +876,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `autorestore`, `autorestore_min_gain` | true, 8192 | restore before forwarding when it saves at least this many tokens | default |
 | `kv_archive`, `kv_archive_idle_s`, `kv_archive_min_age_s` | false, 600, 1800 | cold archive of state files (needs Python ≥ 3.14 for `compression.zstd`) | **true** |
 | `engine`, `slot_id`, `engine_tokenize` | "auto", 0, false | engine type, slot, token counting via the engine's `/tokenize` | auto |
+| `router_model`, `router_load_timeout_s` | "", 600 | llama-server router mode: model used when the client's `model` is not served (empty = refuse), how long a model may take to load | default |
 | `live_dump` | false | write `data/live/last_request.json` for the dashboard | **true** |
 
 A config for llama-server with saved state, as recommended above:
@@ -921,6 +930,10 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
   about the past, and we could not reproduce that setup.
 - One sequence: the proxy serialises requests and assumes it is the engine's only client; another client on the
   same engine costs re-reads.
+- llama-server router mode: tested on CPU with two tiny models (stories260K, stories15M) and one slot per model.
+  Not tested: real large models, `--parallel` > 1, `--models-max` evictions under load, `--sleep-idle-seconds`,
+  `/models/sse` (not used: the proxy reads `/models` at every request), `check --live`. While a model loads the
+  proxy sends no keep-alive to a streaming client.
 - Numbers come from single runs on one machine and one kind of workload; treat them as indicative.
 
 ## Security & privacy

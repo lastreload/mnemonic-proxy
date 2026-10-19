@@ -1,0 +1,263 @@
+"""llama-server in router mode (0.3.7, issue #12): detection, per-model window, model switch and unload, saved files
+bound to their model, unknown n_ctx refused. Against ctxproxy.fake_engine.FakeRouter (API verified on llama.cpp b11723).
+
+    python3 -m unittest -v tests.test_router
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+import time
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from ctxproxy import engines  # noqa: E402
+from ctxproxy.core import Config, Journal, Store, TokenCounter  # noqa: E402
+from ctxproxy.router import OWNERS_FILE  # noqa: E402
+from ctxproxy.server import Proxy  # noqa: E402
+from ctxproxy.upstream import Upstream, UpstreamError  # noqa: E402
+from tests.fake_engine import FakeEngine, FakeRouter  # noqa: E402
+from tests.test_proxy import TOOLS, history  # noqa: E402
+
+BIG, SMALL = 65536, 16384
+
+
+class RouterBase(unittest.TestCase):
+    models = {"big": BIG, "small": SMALL}
+    raw_over: dict = {}
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.rt = FakeRouter(self.models, strict_window=True)
+        self.url = self.rt.start()
+        self.addCleanup(self.rt.stop)
+        self.slot_dir = os.path.join(self.tmp.name, "slots")
+        os.makedirs(self.slot_dir)
+        # no window/thresholds in the config: they come from each model's n_ctx (the usual llama-server setup)
+        self.raw = {"slot_dir": self.slot_dir, "slot_save": True, "autosave": True, "autosave_idle_s": 180,
+                    "autosave_min_tokens": 1000, "autorestore_min_gain": 500, "autosave_min_free_gb": 0,
+                    "min_mask_tokens": 200, "engine_tokenize": True, "data_dir": self.tmp.name, **self.raw_over}
+        self.cfg = Config.from_dict(self.raw)
+        self.jpath = os.path.join(self.tmp.name, "journal.jsonl")
+        up = Upstream(self.url)
+        j = Journal(self.jpath)
+        self.tc = TokenCounter(3.5)
+        self.engine = engines.setup(self.cfg, up, j, explicit=set(self.raw), counter=self.tc, log=None)
+        self.proxy = Proxy(self.cfg, up, Store(os.path.join(self.tmp.name, "a.sqlite")), j, self.tc)
+        self.proxy.engine = self.engine
+        self.saver = self.proxy.enable_autosave(start=False)
+        # the engine counts the prompt exactly as the proxy does (strict window: any overflow -> HTTP 400); children
+        # are started on load and take the counter then
+        self.rt.counter = lambda body: self.proxy.wguard.count_body(body)
+
+    def tearDown(self):
+        self.proxy.store.db.close()
+        self.tmp.cleanup()
+
+    def send(self, msgs, model="big", expect=200, **kw):
+        st, r, _ = self.proxy.chat({"model": model, "messages": msgs, "tools": TOOLS, "max_tokens": 1024, **kw})
+        self.assertEqual(st, expect, r)
+        return r
+
+    def events(self, name):
+        with open(self.jpath) as f:
+            return [e for e in map(json.loads, f) if e["event"] == name]
+
+    def violations(self):
+        return [v for ch in self.rt.children.values() for v in ch.violations]
+
+    def tick(self):
+        ev = self.saver.tick(now=time.time() + 200)
+        if ev:
+            with open(os.path.join(self.slot_dir, ev["file"]), "wb") as f:
+                f.write(b"x" * 16)
+        return ev
+
+
+class TestDetect(unittest.TestCase):
+    def router(self, **kw):
+        rt = FakeRouter({"a": 32768, "b": 16384}, **kw)
+        url = rt.start()
+        self.addCleanup(rt.stop)
+        return rt, Upstream(url)
+
+    def test_detected_as_llama_router(self):
+        rt, up = self.router()
+        e = engines.detect(up)
+        self.assertEqual((e.kind, e.router, e.slot_save, e.tokenize, e.detected), ("llama.cpp", True, True, True, True))
+        self.assertIsNone(e.n_ctx, "no window before a request names a model")
+        self.assertEqual(rt.loads, [], "detection does not load any model")
+        self.assertIn("router", e.summary())
+
+    def test_forced_llama_cpp_still_finds_the_router(self):
+        _, up = self.router()
+        e = engines.detect(up, "llama.cpp")
+        self.assertTrue(e.router)
+        self.assertFalse(e.detected)
+
+    def test_no_slot_save_path(self):
+        _, up = self.router(slot_save=False)
+        e = engines.detect(up)
+        self.assertTrue(e.router)
+        self.assertFalse(e.slot_save)
+
+    def test_single_model_llama_unchanged(self):
+        eng = FakeEngine(flavor="llama", n_ctx=16384)
+        url = eng.start()
+        self.addCleanup(eng.stop)
+        e = engines.detect(Upstream(url))
+        self.assertEqual((e.kind, e.router, e.n_ctx), ("llama.cpp", False, 16384))
+        self.assertNotIn("router", e.summary(), "summary of the other engines unchanged")
+
+
+class TestWindowPerModel(RouterBase):
+    def test_window_follows_the_requested_model(self):
+        h = history(4)
+        self.send(h, "big")
+        self.assertEqual(self.cfg.window, BIG)
+        self.send(h, "small")
+        self.assertEqual(self.cfg.window, SMALL)
+        self.send(h, "big")
+        self.assertEqual(self.cfg.window, BIG)
+        ev = self.events("router_model")
+        self.assertEqual([(e["model"], e["n_ctx"], e["window"]) for e in ev],
+                         [("big", BIG, BIG), ("small", SMALL, SMALL), ("big", BIG, BIG)])
+        # thresholds scaled from the startup values (131072 default) as engines.apply does for one model
+        self.assertEqual(ev[1]["scaled"]["mask_trigger"], 10000)
+        self.assertEqual(self.cfg.mask_trigger, 40000)
+        self.assertEqual([m for m, _ in self.rt.chats], ["big", "small", "big"], "each call goes to its model")
+        self.assertEqual(self.violations(), [])
+
+    def test_switch_to_a_smaller_model_never_overflows(self):
+        h = history(40)      # ~40K tokens: fits the big model, not the small one
+        self.send(h, "big")
+        big_prompt = self.events("request")[-1]["prompt_tokens"]
+        self.assertGreater(big_prompt, SMALL, "the test needs a prompt larger than the small window")
+        h2 = h + [{"role": "assistant", "content": "fatto"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "small")
+        req = self.events("request")[-1]
+        self.assertLessEqual(req["prompt_tokens"] + 1024, SMALL, req)
+        self.assertEqual(self.violations(), [], "the strict engine saw no request over its n_ctx")
+        self.assertEqual(self.proxy.wguard.violations, 0)
+
+    def test_internal_calls_go_to_the_same_model(self):
+        self.send(history(3), "small")
+        self.assertTrue(all(b.get("model") == "small" for m, b in self.rt.chats))
+
+    def test_tokenize_per_model(self):
+        self.send(history(2), "big")
+        self.send(history(2), "small")
+        tok = [m for meth, p, m in self.rt.calls if p == "/tokenize"]
+        self.assertIn("big", tok)
+        self.assertIn("small", tok)
+        self.assertNotIn(None, tok)
+
+    def test_alias_and_router_model(self):
+        self.send(history(1), "nope", expect=400)
+        self.assertIn("not served", self.events("router_refused")[-1]["error"])
+        self.assertEqual(self.rt.chats, [], "refused before anything is sent")
+        self.cfg.router_model = "small"
+        self.send(history(1), "nope")
+        self.assertEqual(self.rt.chats[-1][0], "small")
+
+
+class TestUnload(RouterBase):
+    def test_model_unloaded_between_two_requests(self):
+        h = history(4)
+        self.send(h, "big")
+        self.rt.unload("big")
+        self.send(h + [{"role": "assistant", "content": "x"}, {"role": "user", "content": "y"}], "big")
+        self.assertEqual(self.rt.loads, ["big", "big"], "loaded again before the request")
+        st = self.events("router_model_state")
+        self.assertEqual((st[-1]["model"], st[-1]["status"]), ("big", "unloaded"))
+        self.assertEqual(self.events("router_n_ctx")[-1]["generation"], 2, "new load generation")
+        self.assertIn(self.events("strata_state_lost")[-1]["reason"], ("strata_restart", "unloaded"),
+                      "no warm-cache assumption after an unload")
+        self.assertEqual(self.violations(), [])
+
+    def test_engine_status_bound_to_model_and_generation(self):
+        self.send(history(2), "big")
+        s1 = self.proxy.up.status()
+        self.assertEqual((s1["loaded"], s1["started"]), (True, "big#1"))
+        self.rt.unload("big")
+        s2 = self.proxy.up.status()
+        self.assertFalse(s2["loaded"], "status read with autoload=false: an unloaded model is not loaded again")
+        self.assertEqual(self.rt.loads, ["big"])
+
+    def test_reloaded_with_another_n_ctx_unseen(self):
+        """Unloaded and loaded again with another ctx-size between two requests (the proxy never saw it
+        unloaded): meta.n_ctx in /models changed -> new generation, n_ctx read again, smaller window applied."""
+        self.send(history(2), "big")
+        self.rt.unload("big")
+        self.rt.n_ctx["big"] = SMALL
+        self.rt.load("big")
+        self.send(history(40), "big")
+        self.assertEqual(self.cfg.window, SMALL)
+        self.assertEqual(self.events("router_n_ctx")[-1]["generation"], 2)
+        self.assertEqual(self.violations(), [])
+
+    def test_n_ctx_unknown_is_a_clear_error(self):
+        self.rt.fail.add("small")
+        r = self.send(history(1), "small", expect=503)
+        self.assertIn("was not sent", r["error"]["message"])
+        self.assertEqual(self.rt.chats, [])
+        self.assertEqual(self.events("router_refused")[-1]["status"], 503)
+
+
+class TestSavedFiles(RouterBase):
+    def test_restore_refused_with_another_model(self):
+        self.send(history(2), "big")
+        up = self.proxy.up.up          # Tracker -> Upstream
+        up.slot("save", "x-big.bin")
+        self.assertEqual(self.rt.saved_by["x-big.bin"], "big")
+        self.send(history(2), "small")
+        with self.assertRaises(UpstreamError) as cm:
+            up.slot("restore", "x-big.bin")
+        self.assertEqual(cm.exception.status, 409)
+        self.assertEqual(self.rt.restores, [], "the engine would have restored it: the proxy stops it")
+        with open(os.path.join(self.tmp.name, OWNERS_FILE)) as f:
+            self.assertEqual(json.load(f)["x-big.bin"]["model"], "big", "owner persisted in the data folder")
+
+    def test_unknown_file_is_not_restored(self):
+        self.send(history(2), "big")
+        self.rt.files["foreign.bin"] = "x"
+        with self.assertRaises(UpstreamError) as cm:
+            self.proxy.up.up.slot("restore", "foreign.bin")
+        self.assertEqual(cm.exception.status, 409)
+
+    def test_autorestore_only_with_the_same_model(self):
+        h = history(6)
+        self.send(h, "big")
+        ev = self.tick()
+        self.assertIsNotNone(ev, "autosave of the big model's slot")
+        self.assertEqual(self.rt.saved_by[ev["file"]], "big")
+        h2 = h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "small")
+        self.assertEqual(self.rt.restores, [], "another model never restores big's file")
+        self.assertFalse(self.events("autorestore"))
+        self.assertEqual(self.events("autorestore_other_model")[-1]["model"], "small")
+        self.rt.unload("big")
+        self.send(h2 + [{"role": "assistant", "content": "r2"}, {"role": "user", "content": "ancora"}], "big")
+        self.assertEqual(self.rt.restores, [("big", ev["file"], "big")], "same model, reloaded: restored")
+        self.assertEqual(len(self.events("autorestore")), 1)
+        self.assertEqual(self.violations(), [])
+
+    def test_prune_keeps_other_models_files(self):
+        h = history(6)
+        self.send(h, "big")
+        ev_big = self.tick()
+        h2 = h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "small")
+        ev_small = self.tick()
+        self.assertIsNotNone(ev_small)
+        self.assertEqual(self.rt.saved_by[ev_small["file"]], "small")
+        files = {r["file"] for r in self.proxy.store.autosaves(active_only=True)}
+        self.assertIn(ev_big["file"], files, "small's save does not supersede big's file (prefix, other model)")
+        self.assertFalse([e for e in self.events("autosave_prune") if e["file"] == ev_big["file"]])
+
+
+if __name__ == "__main__":
+    unittest.main()

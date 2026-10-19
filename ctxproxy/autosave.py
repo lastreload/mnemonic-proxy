@@ -200,16 +200,25 @@ class Tracker:
         if st and st["plen"] <= len(text) and H(text[:st["plen"]]) == st["phash"]:
             have = st["tokens"]
         best = None
+        ok = getattr(self.up, "slot_file_ok", None)      # router mode (0.3.7): only files of the current model
+        other = []
         for row in self.store.autosaves(active_only=True):
             if row["plen"] <= len(text) and (best is None or row["tokens"] > best["tokens"]) \
                     and H(text[:row["plen"]]) == row["phash"]:
+                if ok is not None and not ok(row["file"]):
+                    other.append(row["file"])
+                    continue
                 best = row
+        if other:
+            self.journal.log("autorestore_other_model", files=other[-5:], n=len(other),
+                             model=getattr(self.up, "router_model", None))
         if best is None or best["tokens"] - have < self.cfg.autorestore_min_gain:
             return
         t0 = time.time()
         reason = "strata_restart" if st is None else "other_state"
-        if not s.get("loaded", True):
+        if not s.get("loaded", True) and getattr(self.up, "router", None) is None:
             # motore spento (scaricato o morto): il restore vuole il modello caricato, lo si carica ora
+            # (router mode, 0.3.7: the model was loaded by Router.select, there is no /load)
             try:
                 self.up.raw("POST", "/load", b"{}")
             except Exception:  # noqa: BLE001
@@ -319,9 +328,10 @@ class AutoSaver:
         cfg = self.cfg
         rows = self.store.autosaves(active_only=True)        # più recenti prima
         drop, kept, total = [], [], 0
-        for r in rows:
+        ok = getattr(self.tr, "slot_file_ok", None)          # router mode (0.3.7): another model's file is not
+        for r in rows:                                       # superseded by this model's save (it stays usable there)
             if r["file"] != keep_file and text is not None and r["plen"] <= len(text) \
-                    and H(text[:r["plen"]]) == r["phash"]:
+                    and H(text[:r["plen"]]) == r["phash"] and (ok is None or ok(r["file"])):
                 drop.append((r, "superseded"))
                 continue
             if r["file"] != keep_file and (len(kept) >= cfg.autosave_keep or

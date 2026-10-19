@@ -283,6 +283,10 @@ class Config:
     engine: str = "auto"
     slot_id: int = 0                # slot del motore (llama-server con --parallel N)
     engine_tokenize: bool = False   # conteggio token esatto via /tokenize del motore (llama.cpp), se non c'è --tokenizer
+    # 0.3.7 llama-server router mode (router.py): model used when the client's "model" is not served by the router
+    # (empty = such a request is refused), and how long to wait for a model to load before refusing the request
+    router_model: str = ""
+    router_load_timeout_s: float = 600.0
     # ds4-server: ds4 rimette nel prompt le tool call campionate prese per id (exact DSML replay), quindi
     # mask_tool_args non serve e viene spento; false solo se ds4-server gira con --disable-exact-dsml-tool-replay
     ds4_exact_tool_replay: bool = True
