@@ -82,8 +82,12 @@ def window_problems(cfg, engine: Engine | None, explicit=()) -> list[tuple[str, 
                     "the engine window must be at least as big: %s" % (MIN_WINDOW, ENGINE_FIX)))
     n = int(getattr(engine, "n_ctx", 0) or 0) if engine is not None else 0
     if n and n < MIN_WINDOW:
+        fix = ENGINE_FIX
+        if getattr(engine, "flavor", None):       # 0.3.8: Ollama / LM Studio
+            from .enginectx import fix_text
+            fix = fix_text(engine.flavor, RECOMMENDED_WINDOW)
         out.append(("engine window n_ctx=%d: the minimum is %d tokens, recommended %d or more"
-                    % (n, MIN_WINDOW, RECOMMENDED_WINDOW), ENGINE_FIX))
+                    % (n, MIN_WINDOW, RECOMMENDED_WINDOW), fix))
     return out
 
 
@@ -100,6 +104,8 @@ class Engine:
     notes: list = dataclasses.field(default_factory=list)
     router: bool = False                  # 0.3.7: llama-server in router mode (router.py)
     router_state: Any = dataclasses.field(default=None, repr=False, compare=False)   # router.Router
+    flavor: str | None = None             # 0.3.8: generic engine that tells its context: ollama | lmstudio
+    ctx_state: Any = dataclasses.field(default=None, repr=False, compare=False)      # enginectx.GenericWindow
 
     # il contatore richieste di llama-server (id_task) cresce di più di 1 per richiesta: va riletto dopo
     @property
@@ -112,6 +118,8 @@ class Engine:
              "notes": self.notes}
         if self.router:            # only in router mode: the other engines keep their summary unchanged
             d["router"] = self.router_state.summary() if self.router_state is not None else True
+        if self.flavor:            # only Ollama / LM Studio (0.3.8)
+            d["flavor"] = self.flavor
         return d
 
 
@@ -209,7 +217,17 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         if en is False:
             e.notes.append("salvataggi spenti: avviare llama-server con --slot-save-path DIR")
         return e
-    return Engine("openai", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
+    e = Engine("openai", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
+    # 0.3.8: Ollama / LM Studio expose the context they run with (enginectx.py); other generic engines: unchanged
+    from .enginectx import NAME, detect_flavor, read_context
+    fl = detect_flavor(up)
+    if fl:
+        e.flavor = fl
+        e.model, n = read_context(up, fl)
+        e.n_ctx = n or None
+        if not n:
+            e.notes.append("%s: no model loaded, its context is read before the first request" % NAME[fl])
+    return e
 
 
 def normalize_status(engine: Engine | None, up) -> dict | None:
@@ -262,7 +280,8 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         cfg.mask_tool_args = False
         warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
                     "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
-    if engine.n_ctx and "window" not in explicit and engine.kind in ("llama.cpp", "ds4", "strata") \
+    if engine.n_ctx and "window" not in explicit and (engine.kind in ("llama.cpp", "ds4", "strata")
+                                                     or getattr(engine, "flavor", None)) \
             and engine.n_ctx != cfg.window:
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window
@@ -297,6 +316,31 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
     return warn
 
 
+def window_mismatch(cfg, engine: Engine | None, explicit=()) -> list[tuple[str, str]]:
+    """0.3.8, Ollama / LM Studio only: config `window` bigger than the context the engine runs with -> [(evidence,
+    fix)]. Those engines cut an over-long prompt in silence, so the proxy refuses to start (and `check` fails)."""
+    if engine is None or not getattr(engine, "flavor", None) or "window" not in set(explicit or ()):
+        return []
+    n, w = int(engine.n_ctx or 0), int(getattr(cfg, "window", 0) or 0)
+    if not n or w <= n:
+        return []
+    from .enginectx import NAME, fix_text
+    return [("config window=%d > %s context %d (%s): prompts would be cut in silence by the engine"
+             % (w, NAME[engine.flavor], n, engine.model or "loaded model"),
+             "remove \"window\" from the config (it is read from the engine) or " + fix_text(engine.flavor, w))]
+
+
+def generic_slack(cfg, engine: Engine, explicit=(), exact: bool = False) -> float | None:
+    """0.3.8: generic engine (kind openai) and no exact tokenizer -> the window guard counts chars/3.5, measured up
+    to ~10% under the real count: default slack GENERIC_SLACK unless the config sets it. -> new slack or None."""
+    from .enginectx import GENERIC_SLACK
+    if engine.kind != "openai" or exact or "window_estimate_slack" in set(explicit or ()):
+        return None
+    if float(getattr(cfg, "window_estimate_slack", 0.0) or 0.0) >= GENERIC_SLACK:
+        return None
+    return GENERIC_SLACK
+
+
 def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engine:
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
     chiesto e possibile, usa /tokenize del motore per contare i token."""
@@ -304,6 +348,22 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engi
     if hasattr(up, "set_engine"):
         up.set_engine(eng, getattr(cfg, "slot_dir", "") or "")
     apply(cfg, eng, journal, explicit, log)
+    if eng.kind == "openai":
+        # 0.3.8: generic engines (Ollama, LM Studio, anything OpenAI-compatible): estimate slack and truncation
+        # watch; for Ollama / LM Studio also the real context before every request
+        from .enginectx import GenericWindow, TruncWatch
+        sl = generic_slack(cfg, eng, explicit, bool(counter is not None and counter.exact))
+        if sl is not None:
+            cfg.window_estimate_slack = sl
+            msg = ("no tokenizer: the window guard is estimated (chars/%.1f), slack %.2f; use --tokenizer for an "
+                   "exact count" % (float(getattr(cfg, "chars_per_token", 3.5) or 3.5), sl))
+            if log:
+                log("[mnemonic-proxy] warning: " + msg)
+            if journal is not None:
+                journal.log("engine_warning", message=msg)
+        up.truncwatch = TruncWatch(cfg, eng, journal, log)
+        if eng.flavor:
+            eng.ctx_state = GenericWindow(up, cfg, eng, journal, explicit, log)
     if eng.router:
         from .router import OWNERS_FILE, Router
         dd = getattr(cfg, "data_dir", "") or ""

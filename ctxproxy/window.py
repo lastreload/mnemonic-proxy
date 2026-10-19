@@ -153,6 +153,7 @@ class WindowGuard:
         self.refused = 0
         self.count_errors = 0        # exact mode: prompts the tokenizer/template could not count (must stay 0)
         self.where = ""              # label of the call in progress (journal)
+        self.last_count: int | None = None   # 0.3.8: prompt count of the last request sent (without slack)
 
     @property
     def exact(self) -> bool:
@@ -195,6 +196,10 @@ class WindowGuard:
         if not getattr(self.cfg, "window_guard", True) or not self.cfg.window:
             return body
         p = self.count_body(body)
+        if not dry:
+            # 0.3.8: the count without the slack, for the engine-truncation watch (Upstream.truncwatch)
+            sl = 0.0 if self.exact else float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0)
+            self.last_count = int(p / (1.0 + sl)) if sl > 0 else p
         room = self.room(p)
         mt = mt_of(body)
         where = self.where or "call"

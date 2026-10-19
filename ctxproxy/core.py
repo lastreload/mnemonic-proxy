@@ -1279,6 +1279,8 @@ class Manager:
         seg, start, notes_msg, _, had_segments = self._segment_for(conv, hs)
         if upstream is not None and hasattr(upstream, "ctx"):
             upstream.ctx = (conv, seg or 0)     # autosave.Tracker: a chi appartiene ciò che Strata legge ora
+        if upstream is not None and getattr(upstream, "truncwatch", None) is not None:
+            upstream.watch_ctx = (conv, seg or 0)   # 0.3.8: engine-truncation watch (generic engines)
         if had_segments and seg is None:
             events.append(self.journal.log("segment_miss", conv=conv,
                                            note="storia modificata prima del taglio: segmenti non applicabili"))

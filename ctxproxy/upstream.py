@@ -28,9 +28,27 @@ class Upstream:
         self.window_guard = None    # window.WindowGuard: every chat request passes through enforce() (0.3.3)
         self.router: Any = None     # 0.3.7: router.Router (llama-server router mode), None otherwise
         self.router_model = None    # model selected for the request in progress (router mode)
+        self.truncwatch: Any = None  # 0.3.8: enginectx.TruncWatch (generic engines), None otherwise
+        self.watch_ctx = None        # (conv, seg) of the request in progress, for truncwatch (set by the proxy)
+
+    def _count(self):
+        g = self.window_guard
+        return getattr(g, "last_count", None) if g is not None else None
+
+    def _watch(self, est, usage):
+        """0.3.8: prompt cut by the engine? (journal + one warning per conversation; the answer is unchanged)"""
+        if self.truncwatch is None or est is None:
+            return
+        try:
+            self.truncwatch.observe(est, usage, getattr(self.window_guard, "where", "") or "", self.watch_ctx)
+        except Exception:  # noqa: BLE001  observability must never break a request
+            pass
 
     def _guard(self, body: dict) -> dict:
-        return self.window_guard.enforce(body) if self.window_guard is not None else body
+        if self.window_guard is None:
+            return body
+        self.window_guard.last_count = None      # set again by enforce() (stale when the guard is off)
+        return self.window_guard.enforce(body)
 
     def _model(self, body: dict) -> dict:
         """Router mode: every call goes to the model whose window was applied (internal calls included)."""
@@ -66,14 +84,22 @@ class Upstream:
     def chat(self, body: dict) -> dict:
         body = self._guard(self._model({**self.extra_body,
                                         **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}))
-        return self.post_json("/v1/chat/completions", body)
+        if self.truncwatch is None:
+            return self.post_json("/v1/chat/completions", body)
+        est = self._count()
+        r = self.post_json("/v1/chat/completions", body)
+        self._watch(est, r.get("usage") if isinstance(r, dict) else None)
+        return r
 
     def chat_stream(self, body: dict) -> "StreamCall":
         """Apre /v1/chat/completions in streaming. Iterare l'oggetto dà i chunk JSON; close() chiude la connessione
         (Strata vede la disconnessione e annulla la generazione)."""
         body = self._guard(self._model({**self.extra_body, **body, "stream": True,
                                         "stream_options": {"include_usage": True}}))
-        return StreamCall(self, body)
+        sc = StreamCall(self, body)
+        if self.truncwatch is not None:
+            sc.est = self._count()
+        return sc
 
     def slot_file_ok(self, filename: str) -> bool:
         """Router mode: may this saved file be restored with the current model? Always True otherwise."""
@@ -115,6 +141,7 @@ class Upstream:
 
 class StreamCall:
     def __init__(self, up: Upstream, body: dict):
+        self.up, self.est = up, None     # est: 0.3.8 prompt count for the truncation watch (generic engines)
         u = urllib.parse.urlsplit(up.base)
         self.conn = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=up.timeout)
         prefix = u.path.rstrip("/")
@@ -135,9 +162,12 @@ class StreamCall:
             if data == b"[DONE]":
                 return
             try:
-                yield json.loads(data)
+                obj = json.loads(data)
             except ValueError:
                 continue
+            if self.est is not None and isinstance(obj, dict) and obj.get("usage"):
+                self.up._watch(self.est, obj.get("usage"))
+            yield obj
 
     def close(self):
         try:

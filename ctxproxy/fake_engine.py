@@ -38,7 +38,7 @@ class FakeEngine:
         id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | ds4
         (ds4-server: /v1/models con owned_by "ds4.c", niente slot, id `call_<hex>` generati dal motore, 400 su un
         risultato di strumento con id sconosciuto, conteggio delle chiamate rimandate con id noto/sconosciuto) | openai
-        (solo /v1/chat/completions)."""
+        (solo /v1/chat/completions) | ollama / lmstudio (0.3.8: contesto esposto, taglio silenzioso, vedi sotto)."""
         self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
         self.id_task = 0
         self.policy = policy or (lambda body: {"role": "assistant", "content": "ok"})
@@ -64,6 +64,66 @@ class FakeEngine:
         self.counter = None
         self.violations: list = []
         self.checked = 0
+        # 0.3.8 flavors "ollama" / "lmstudio": generic engines that expose their runtime context (GET /api/ps,
+        # GET /api/v0/models) and, like the real ones, CUT an over-long prompt in silence and answer 200
+        # (Ollama: oldest messages dropped; LM Studio: the middle dropped). `loaded` False = no model in memory yet:
+        # the first chat request loads it (with `load_ctx`, default n_ctx).
+        self.model = "qwen3:4b-instruct-2507-q4_K_M" if flavor == "ollama" else "qwen3-4b"
+        self.loaded = True
+        self.load_ctx = None
+        self.loads = 0
+        self.truncated: list = []
+        self.read_override = None
+
+    # ---- Ollama / LM Studio (flavor "ollama" | "lmstudio") ----
+    def generic_get(self, path: str):
+        if self.flavor == "ollama":
+            if path.startswith("/api/version"):
+                return 200, {"version": "0.40.6"}
+            if path.startswith("/api/ps"):
+                return 200, {"models": [{"name": self.model, "model": self.model, "size": 1, "digest": "x",
+                                         "details": {"family": "qwen3"}, "expires_at": "2026-10-19T13:00:00Z",
+                                         "size_vram": 1, "context_length": self.n_ctx}] if self.loaded else []}
+            if path.startswith("/v1/models"):
+                return 200, {"object": "list", "data": [{"id": self.model, "object": "model", "owned_by": "library"}]}
+            if path == "/":
+                return 200, "Ollama is running"
+            return 404, {"error": "404 page not found"}
+        if path.startswith("/api/v0/models"):
+            m = {"id": self.model, "object": "model", "type": "llm", "publisher": "qwen", "arch": "qwen3",
+                 "state": "loaded" if self.loaded else "not-loaded", "max_context_length": 262144}
+            if self.loaded:
+                m["loaded_context_length"] = self.n_ctx
+            return 200, {"object": "list", "data": [m]}
+        if path.startswith("/v1/models"):
+            return 200, {"object": "list", "data": [{"id": self.model, "object": "model", "owned_by": "organization_owner"}]}
+        return 200, {"error": "Unexpected endpoint or method. (GET %s)" % path}     # LM Studio answers 200
+
+    def generic_cut(self, body: dict) -> dict:
+        """Silent truncation of the real engines: the body the engine really reads (prompt_tokens follows it)."""
+        if not self.loaded:
+            self.loaded = True
+            self.loads += 1
+            if self.load_ctx:
+                self.n_ctx = self.load_ctx
+        count = (lambda b: int(self.counter(b))) if self.counter else (lambda b: int(len(render(b)) / self.cpt))
+        p = count(body)
+        if p <= self.n_ctx:
+            return body
+        msgs = list(body.get("messages") or [])
+        if self.flavor in ("ollama", "openai_cut"):   # drop the oldest messages after the system prompt
+            head, target = (1 if msgs and msgs[0].get("role") == "system" else 0), self.n_ctx
+            while len(msgs) > head + 1 and count({**body, "messages": msgs}) > target:
+                del msgs[head]
+        else:                                 # LM Studio: keep beginning and end, drop the middle (measured 0.3-0.45)
+            target = int(self.n_ctx * 0.4)
+            while len(msgs) > 2 and count({**body, "messages": msgs}) > target:
+                del msgs[len(msgs) // 2]
+        out = {**body, "messages": msgs}
+        read = min(count(out), target)        # a single long message is cut inside
+        self.truncated.append({"prompt": p, "read": read, "n_ctx": self.n_ctx})
+        self.read_override = read
+        return out
 
     def window_check(self, body: dict) -> str | None:
         self.checked += 1
@@ -151,6 +211,8 @@ class FakeEngine:
         pt = int(len(p) / self.cpt)
         if self.counter is not None:               # strict window: report the same exact count it enforces
             pt = int(self.counter(body))
+        if self.read_override is not None:         # ollama / lmstudio: prompt cut inside a message
+            pt, self.read_override = self.read_override, None
         cached = int(common / self.cpt)
         finish = "tool_calls" if msg.get("tool_calls") else "stop"
         ct = int(len(json.dumps(msg)) / self.cpt)
@@ -178,6 +240,11 @@ class FakeEngine:
                 self.wfile.write(d)
 
             def do_GET(self):
+                if eng.flavor == "openai_cut":
+                    return self._send(404, {"error": {"message": "not found"}})
+                if eng.flavor in ("ollama", "lmstudio"):
+                    st, obj = eng.generic_get(self.path)
+                    return self._send(st, obj)
                 if eng.flavor == "llama":
                     if self.path.startswith("/props"):
                         return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
@@ -211,6 +278,14 @@ class FakeEngine:
                 body = json.loads(self.rfile.read(n) or b"{}")
                 if eng.flavor == "openai" and not self.path.startswith("/v1/chat"):
                     return self._send(404, {"error": {"message": "not found"}})
+                if eng.flavor in ("ollama", "lmstudio", "openai_cut"):
+                    if not self.path.startswith("/v1/chat"):
+                        return self._send(404, {"error": {"message": "not found"}})
+                    name = str(body.get("model") or "")
+                    if eng.flavor == "ollama" and name not in (eng.model, eng.model + ":latest"):
+                        return self._send(404, {"error": {"message": "model \"%s\" not found, try pulling it first"
+                                                          % name, "type": "api_error"}})
+                    body = eng.generic_cut(body)
                 if eng.flavor == "ds4":
                     if not self.path.startswith("/v1/chat/completions"):
                         eng.slots.append(("unexpected", self.path, len(eng.live)))
@@ -537,7 +612,8 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="fake OpenAI-compatible engine (Strata stand-in) for smoke tests")
     ap.add_argument("--port", type=int, default=18095)
-    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai", "router"], default="strata",
+    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai", "router", "ollama", "lmstudio"],
+                    default="strata",
                     help="engine to imitate (llama = llama-server with --slot-save-path; router = llama-server in "
                          "router mode, see --models)")
     ap.add_argument("--n-ctx", type=int, default=131072)

@@ -99,21 +99,31 @@ class Proxy:
                 if err is not None:
                     return err
                 return self._chat_off(req, emit) if self.mode == "off" else self._chat_managed(req, hint, emit)
+        gw = getattr(self.engine, "ctx_state", None) if self.engine is not None else None
+        if gw is not None and self.mode != "off":
+            # 0.3.8 Ollama / LM Studio: the real context of the model is read before the prompt is built
+            with self.lock:
+                err = self._router_select(gw, req, emit, event="engine_refused")
+                if err is not None:
+                    return err
+                return self._chat_managed(req, hint, emit)
         if self.mode == "off":
             return self._chat_off(req, emit)
         with self.lock:
             return self._chat_managed(req, hint, emit)
 
-    def _router_select(self, router, req: dict, emit=None):
+    def _router_select(self, router, req: dict, emit=None, event: str = "router_refused"):
+        from .enginectx import EngineCtxError
         from .router import RouterError
         try:
             if emit is None:
                 router.select(req)
             else:
                 self._router_select_alive(router, req, emit)
-        except RouterError as e:
-            self.journal.log("router_refused", model=req.get("model"), status=e.status, error=e.message[:300])
-            return e.status, {"error": {"message": e.message, "type": "router_error", "code": e.status}}, {}
+        except (RouterError, EngineCtxError) as e:
+            self.journal.log(event, model=req.get("model"), status=e.status, error=e.message[:300])
+            return e.status, {"error": {"message": e.message, "type": "router_error" if event == "router_refused"
+                                        else "engine_context_error", "code": e.status}}, {}
         return None
 
     def _router_select_alive(self, router, req: dict, emit):
@@ -1039,7 +1049,9 @@ class Proxy:
         tm = resp.get("timings") or {}
         est = p.est_tokens if p else None
         real = u.get("prompt_tokens")
-        if p and rnd == 0 and real:
+        tw = getattr(self.up, "truncwatch", None)
+        if p and rnd == 0 and real and not (tw is not None and tw.cut(est, real)):
+            # 0.3.8: a prompt cut by the engine is not a calibration sample (it would teach a ratio of 0.2-0.5)
             self.tc.calibrate(p.est_tokens, real)
         inv = (p.invalidated or {}) if p and rnd == 0 else {}
         self.journal.log("request", mode=kind, conv=p.conv if p else None, round=rnd, messages=nmsg,
@@ -1320,7 +1332,7 @@ def main(argv=None):
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"))
     counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
-    from .engines import setup as setup_engine, window_problems
+    from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, flush=True))
     small = window_problems(cfg, engine, set(raw_cfg))
@@ -1332,6 +1344,12 @@ def main(argv=None):
         journal.log("refused_small_window", problems=[e for e, _ in small])
         raise SystemExit("mnemonic-proxy: refusing to start, the context window is too small.\n" + "\n".join(
             "  %s\n  -> %s" % p for p in small))
+    big = window_mismatch(cfg, engine, set(raw_cfg))
+    if big:
+        # 0.3.8 Ollama / LM Studio: they would cut the prompts in silence
+        journal.log("refused_window_over_engine", problems=[e for e, _ in big])
+        raise SystemExit("mnemonic-proxy: refusing to start, the config window is bigger than the engine context.\n"
+                         + "\n".join("  %s\n  -> %s" % p for p in big))
     proxy = Proxy(cfg, up, Store(os.path.join(a.data, "archive.sqlite")), journal, counter, mode=a.mode)
     proxy.engine = engine
     if cfg.autosave:
@@ -1348,7 +1366,8 @@ def main(argv=None):
     print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
         "yes" if engine.slot_save else "no", a.mode,
-        "per model (n_ctx)" if engine.router else cfg.window, proxy.tc.kind, cfg.mask_anchor), flush=True)
+        "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
+            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor), flush=True)
     srv.serve_forever()
 
 

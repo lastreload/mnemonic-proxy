@@ -26,6 +26,7 @@ import urllib.request
 
 from . import engines
 from .core import Config
+from .enginectx import NAME
 from .upstream import Upstream
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
@@ -166,8 +167,14 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
             rep.add(WARN, "model loaded", "the engine did not list a model (/v1/models %s)" % st_m,
                     "check that the engine has a model loaded")
     # --- window vs n_ctx
+    flavor = getattr(eng, "flavor", None)
     if eng.n_ctx:
-        if "window" in explicit:
+        if "window" in explicit and flavor:
+            if cfg.window <= eng.n_ctx:          # bigger: engines.window_mismatch below (failure)
+                rep.add(OK if cfg.window == eng.n_ctx else WARN, "context window",
+                        "config window=%d, %s context=%d (%s)" % (cfg.window, NAME[flavor], eng.n_ctx, eng.model),
+                        "" if cfg.window == eng.n_ctx else "window smaller than the engine context wastes context")
+        elif "window" in explicit:
             if cfg.window > eng.n_ctx:
                 rep.add(FAIL, "context window", "config window=%d > engine n_ctx=%d: prompts would overflow"
                         % (cfg.window, eng.n_ctx), "remove \"window\" from the config (taken from n_ctx) or start "
@@ -176,12 +183,13 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 rep.add(OK if cfg.window == eng.n_ctx else WARN, "context window",
                         "config window=%d, engine n_ctx=%d" % (cfg.window, eng.n_ctx),
                         "" if cfg.window == eng.n_ctx else "window smaller than n_ctx wastes context")
-        elif eng.kind in ("llama.cpp", "ds4"):   # come engines.apply: finestra da n_ctx / context_length
+        elif eng.kind in ("llama.cpp", "ds4") or flavor:   # come engines.apply: finestra da n_ctx / context_length
             probe = Config.from_dict(raw_cfg)
             engines.apply(probe, eng, None, explicit, log=None)
-            rep.add(OK, "context window", "window from engine n_ctx=%d; thresholds scaled: mask at %d -> %d tokens, "
-                    "protected tail %d" % (eng.n_ctx, probe.mask_trigger, probe.mask_target,
-                                           probe.keep_recent_tokens))
+            rep.add(OK, "context window", "window from engine n_ctx=%d%s; thresholds scaled: mask at %d -> %d tokens, "
+                    "protected tail %d" % (eng.n_ctx, " (%s %s, read again before every request)"
+                                           % (NAME[flavor], eng.model) if flavor else "",
+                                           probe.mask_trigger, probe.mask_target, probe.keep_recent_tokens))
             bad = [k for k in ("notes_max_tokens", "response_floor", "tail_max", "reserve")
                    if k in explicit and getattr(probe, k) * 4 > eng.n_ctx]
             if bad:
@@ -201,6 +209,13 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     desc or "no model listed", "; config window=%d is used as an upper bound" % cfg.window
                     if "window" in explicit else ""),
                 "give each model a ctx-size of at least %d in the preset" % engines.MIN_WINDOW)
+    elif flavor:
+        rep.add(WARN, "context window", "%s: no model loaded, its context is not known yet: the proxy reads it "
+                "before the first request (and loads the model if needed); proxy window=%d is an upper bound only "
+                "if written in the config" % (NAME[flavor], cfg.window),
+                "load the model first and run check again (%s)" % ("ollama run <model> \"\"; ollama ps"
+                                                                     if flavor == "ollama" else
+                                                                     "lms load <model> --context-length 32768; lms ps"))
     elif eng.kind == "openai":
         rep.add(WARN if "window" not in explicit else OK, "context window",
                 "generic engine: n_ctx unknown, proxy window=%d" % cfg.window,
@@ -208,6 +223,16 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     # --- minimum window (0.3.0): the server refuses to start below it, so this is a failure, not a warning
     for evidence, fix in engines.window_problems(cfg, eng, explicit):
         rep.add(FAIL, "context window", evidence + " (the proxy refuses to start)", fix)
+    # --- 0.3.8 Ollama / LM Studio: config window bigger than the engine context (they cut in silence)
+    for evidence, fix in engines.window_mismatch(cfg, eng, explicit):
+        rep.add(FAIL, "context window", evidence + " (the proxy refuses to start)", fix)
+    # --- 0.3.8 generic engines: without a tokenizer the window guard only estimates
+    if eng.kind == "openai" and not getattr(a, "tokenizer", None):
+        sl = engines.generic_slack(cfg, eng, explicit)
+        rep.add(WARN, "token count", "no tokenizer: the window guard is estimated (chars/%.1f%s)"
+                % (cfg.chars_per_token, ", slack %.2f" % sl if sl is not None else
+                   ", slack %.2f from the config" % cfg.window_estimate_slack),
+                "use --tokenizer <tokenizer.json of the model> for an exact count")
     # --- saved state: supported / configured / verified
     configured = [k for k in SAVED_STATE if getattr(cfg, k, False)]
     if eng.slot_save and configured:
@@ -245,8 +270,59 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     "" if live else "check --live verifies it is the engine's --slot-save-path")
     if live:
         _live(rep, up, eng, cfg)
+        if eng.kind == "openai" and not any(
+                i["check"] == "live: generation" and i["status"] == FAIL for i in rep.items):
+            _live_full_window(rep, up, eng, cfg, explicit)
     _reminder(rep)
     return rep
+
+
+FILL_LINE = "Record %05d: the value %05d was checked by the auditor and it is correct.\n"
+
+
+def _live_full_window(rep, up, eng, cfg, explicit):
+    """0.3.8, generic engines: a prompt of ~0.9 x window must reach the engine whole (Ollama and LM Studio answer 200
+    after cutting it in silence). The size is calibrated on the engine itself: two short prompts give the tokens per
+    line of the filler text and the chat-template overhead, so no tokenizer is needed."""
+    w = int(cfg.window if "window" in explicit or not eng.n_ctx else eng.n_ctx)
+    model = (eng.model or "local-model") if getattr(eng, "flavor", None) else "local-model"
+
+    def ask(n):
+        text = "".join(FILL_LINE % (i, (i * 7919) % 100000) for i in range(n))
+        r = up.chat({"model": model, "max_tokens": 1, "temperature": 0, "stream": False,
+                     "messages": [{"role": "user", "content": text + "Reply with the single word: ok"}]})
+        return int((r.get("usage") or {}).get("prompt_tokens") or 0)
+
+    t0 = time.time()
+    try:
+        a, b = ask(20), ask(80)
+        if not a or b <= a:
+            rep.add(WARN, "live: full window", "the engine does not report usage.prompt_tokens: cut prompts cannot "
+                    "be detected", "")
+            return
+        per = (b - a) / 60.0
+        over = max(0.0, a - 20 * per)
+        n = int((0.9 * w - over) / per)
+        want = int(over + n * per)
+        got = ask(n)
+    except Exception as e:  # noqa: BLE001
+        msg = str(e)[:300]
+        rep.add(FAIL, "live: full window", "engine context smaller than window: a prompt of ~%d tokens (0.9 x window "
+                "%d) was refused: %s" % (int(0.9 * w), w, msg), _fill_fix(eng, w))
+        return
+    if got < 0.8 * want:
+        rep.add(FAIL, "live: full window", "engine context smaller than window: sent ~%d tokens (0.9 x window %d), "
+                "the engine read %d (it cut the prompt in silence), %.0f s" % (want, w, got, time.time() - t0),
+                _fill_fix(eng, w))
+    else:
+        rep.add(OK, "live: full window", "sent ~%d tokens (0.9 x window %d), the engine read %d: whole, %.0f s"
+                % (want, w, got, time.time() - t0))
+
+
+def _fill_fix(eng, w):
+    from .enginectx import fix_text
+    return "remove \"window\" from the config or set it to the engine's real context; " + fix_text(
+        getattr(eng, "flavor", None), w)
 
 
 def _live(rep, up, eng, cfg):
@@ -271,8 +347,9 @@ def _live(rep, up, eng, cfg):
                     "not touching the engine; fix saved state first")
             return
     try:
+        lm = (eng.model or "local-model") if getattr(eng, "flavor", None) else "local-model"   # Ollama: real name
         t0 = time.time()
-        r = up.chat({"model": "local-model", "max_tokens": 16, "temperature": 0,
+        r = up.chat({"model": lm, "max_tokens": 16, "temperature": 0,
                      "messages": [{"role": "user", "content": "Reply with the single word: ready"}]})
         txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         rep.add(OK, "live: generation", "%.1f s, reply %r" % (time.time() - t0, txt.strip()[:60]))
@@ -280,7 +357,7 @@ def _live(rep, up, eng, cfg):
         tool = {"type": "function", "function": {
             "name": "get_time", "description": "Return the current time in a city",
             "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}}
-        r = up.chat({"model": "local-model", "max_tokens": 128, "temperature": 0, "tools": [tool],
+        r = up.chat({"model": lm, "max_tokens": 128, "temperature": 0, "tools": [tool],
                      "messages": [{"role": "user", "content": "What time is it in Rome? Use the tool."}]})
         calls = ((r.get("choices") or [{}])[0].get("message") or {}).get("tool_calls") or []
         good = False
