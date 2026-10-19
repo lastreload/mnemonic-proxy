@@ -348,18 +348,30 @@ class FakeRouter:
         self.calls: list = []                     # (method, path, model)
         self.chats: list = []                     # (model, body)
         self.lru: list = []
+        self.load_delay: float | dict = 0         # seconds per load (or model -> seconds), see load()
+        self.loading: set = set()
+        self.bytes_per_token: dict = {}           # model -> n_written per saved token (default: the child's own)
         self.srv = None
         self.mu = threading.RLock()
 
     # ---- model lifecycle ----
     def load(self, mid: str) -> str | None:
-        """-> error message or None."""
+        """-> error message or None. `load_delay` = seconds a load takes (status "loading" meanwhile)."""
         with self.mu:
             if mid in self.children:
                 return None
             if mid in self.fail:
                 self.failed.add(mid)
                 return "model %s failed to load" % mid
+            delay = self.load_delay.get(mid, 0) if isinstance(self.load_delay, dict) else self.load_delay
+            if delay:
+                self.loading.add(mid)
+        if delay:
+            time.sleep(delay)
+        with self.mu:
+            self.loading.discard(mid)
+            if mid in self.children:
+                return None
             if self.models_max and len(self.children) >= self.models_max:
                 self.unload(self.lru[0])
             ch = FakeEngine(policy=self.policy, cpt=self.cpt, flavor="llama", slot_save=self.slot_save,
@@ -393,7 +405,8 @@ class FakeRouter:
     def entry(self, mid: str) -> dict:
         args = ["llama-server", "--port", "0", "--alias", mid, "--ctx-size", str(self.preset_ctx[mid]),
                 "--parallel", "1"] + (["--slot-save-path", "/slots"] if self.slot_save else [])
-        st = {"value": "loaded" if mid in self.children else "unloaded", "args": args}
+        st = {"value": "loaded" if mid in self.children else "loading" if mid in self.loading else "unloaded",
+              "args": args}
         if mid in self.failed:
             st.update(failed=True, exit_code=1)
         e = {"id": mid, "aliases": [], "object": "model", "owned_by": "llamacpp", "status": st,
@@ -453,6 +466,11 @@ class FakeRouter:
                         st, ctype, data = r.status, r.headers.get("Content-Type") or "application/json", r.read()
                 except urllib.error.HTTPError as e:
                     st, ctype, data = e.code, "application/json", e.read()
+                if method == "POST" and path.startswith("/slots/") and st == 200 \
+                        and (query.get("action") or [""])[0] == "save" and model in rt.bytes_per_token:
+                    d = json.loads(data)
+                    d["n_written"] = int(d.get("n_saved") or 0) * rt.bytes_per_token[model]
+                    data = json.dumps(d).encode()
                 self.send_response(st)
                 self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(len(data)))

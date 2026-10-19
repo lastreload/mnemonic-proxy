@@ -118,6 +118,30 @@ di quello di A: stessa conversazione). Nessun ripristino sbagliato, ma B perdeva
 (`AutoSaver.prune` salta i file di altri modelli), test `test_prune_keeps_other_models_files`, verificato in run3
 (il file di A resta dopo l'autosalvataggio di B). Log in `run2-branch-prune-bug/`.
 
+## Prova con modelli veri su AI395 (t_bbf87b95)
+AI395 (Radeon 8060S, Vulkan RADV STRIX_HALO), llama.cpp b11723 Vulkan ufficiale, router con `--models-max 1
+--parallel 1`, `qwen` = Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL (`ctx-size` 65536, dal disco USB), `gemma` = gemma-4-E2B-it
+Q8_0 (32768). Conversazione vera con 3 strumenti finti (`list_files`, `read_file`, `calc`) su un progetto finto di 12
+file (3373 righe), poi gemma → qwen → gemma.
+- **Ramo 0.3.7: 23 richieste su 23 servite, 0 sforamenti** (log del router), finestra giusta per modello prima di
+  ogni prompt (65536 / 32768 dall'n_ctx dello slot), 19 tool call su 19 valide, risposte corrette (totale 3373).
+- Passaggio a gemma con storia di 42441 token stimati: mascherati 10 risultati di strumenti prima dell'invio
+  (→ 10237 stimati), gemma ha ricevuto 8947 token.
+- Caricamento di qwen: 73,0–73,4 s a freddo (disco USB, ~313 MB/s), 12,4 s dalla cache di pagina; gemma 1,9–4,7 s.
+- main 0.3.6 sullo stesso router: con `engine_tokenize` 500 (`tokenize HTTP 400`); senza, gemma respinta dal motore
+  (41134 token > 32768).
+- Picchi: MemAvailable minimo 63,0 GB, GTT 26,5 GB.
+- Problemi trovati e corretti dopo la prova (stessa 0.3.7): **streaming muto durante il caricamento** (un client con
+  timeout di lettura 60 s si staccava a 60,1 s; ora commento SSE `: loading model <id>` ogni `router_keepalive_s`, e
+  rinuncia prima di generare se il client è andato via), **stima dello spazio dell'autosalvataggio** (20000
+  byte/token contro 73 KB/token misurati per qwen e 9 KB/token per gemma; ora byte/token dell'ultimo salvataggio
+  dello stesso modello ×1,25), **motivi del journal** (`router_model_change`, `router_unload` invece di
+  `strata_restart`).
+- **Una sola storia per conversazione**: il mascheramento fatto per far entrare la storia nel modello piccolo resta
+  quando si torna al grande (qwen dopo gemma ha ricevuto 9194 token invece di ~40K e il suo salvataggio precedente non
+  combaciava più). Comportamento voluto; qwen ha riletto con `read_file` quello che serviva e ha risposto bene.
+- In quella prova nessun ripristino è avvenuto (né giusto né sbagliato).
+
 ## Test
 - `tests/test_router.py` (17 test, contro `FakeRouter` in `ctxproxy/fake_engine.py`: ogni modello è un
   FakeEngine llama avviato al caricamento e fermato allo scaricamento, file di slot condivisi come sul motore vero,
@@ -127,14 +151,20 @@ di quello di A: stessa conversazione). Nessun ripristino sbagliato, ma B perdeva
   fra due richieste, stato con `autoload=false`, ricaricato con altro n_ctx senza essere visto scaricato, n_ctx ignoto
   → errore chiaro, restore rifiutato fra modelli, file sconosciuto, autorestore solo stesso modello, pulizia che non
   tocca i file di altri modelli.
+- Dopo la prova AI395 (+11 test): keep-alive SSE durante un caricamento lento finto (client con timeout di lettura
+  1,0 s e caricamento 1,8 s: riceve i commenti e la risposta; API OpenAI, Anthropic con `ping`, Responses), nessun
+  commento se il modello è già caricato, client staccato durante il caricamento → `router_client_gone`, nessuna
+  generazione, lock rilasciato; stima byte/token per modello (prima volta 20000, poi misura del modello ×1,25, mai
+  quella di un altro modello) anche nel salto per disco pieno; motivi `router_model_change` / `router_unload` anche
+  nell'autorestore; modello singolo invariato (nessun campo `est_*`, `strata_restart`).
 - Controprova (mutazioni): togliere il rifiuto del restore fa fallire 3 test; togliere la finestra per modello ne
   fa fallire 3 (compreso "nessuno sforamento"); togliere le generazioni ne fa fallire 2; togliere la correzione della
   pulizia ne fa fallire 1.
 - CI: nuovo passo `check` contro `python -m ctxproxy.fake_engine --flavor router`.
 
 ## Limiti (non provato)
-- Modelli veri grandi (caricamenti di minuti: durante il caricamento il proxy non manda keep-alive a un client in
-  streaming), GPU.
+- GPU e modelli grandi: provati su AI395 (sopra). Un client che si stacca durante un caricamento libera il proxy solo
+  alla fine del caricamento (il proxy non interrompe il caricamento).
 - `--parallel` > 1 (il proxy usa lo slot `slot_id`; l'n_ctx è quello dello slot), `--models-max` con espulsioni
   sotto carico, `sleeping` / `--sleep-idle-seconds`, `/models/sse`.
 - `check --live` in router mode: non implementato (avviso).

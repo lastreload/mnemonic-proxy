@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -174,8 +175,8 @@ class TestUnload(RouterBase):
         st = self.events("router_model_state")
         self.assertEqual((st[-1]["model"], st[-1]["status"]), ("big", "unloaded"))
         self.assertEqual(self.events("router_n_ctx")[-1]["generation"], 2, "new load generation")
-        self.assertIn(self.events("strata_state_lost")[-1]["reason"], ("strata_restart", "unloaded"),
-                      "no warm-cache assumption after an unload")
+        self.assertEqual(self.events("strata_state_lost")[-1]["reason"], "router_unload",
+                         "no warm-cache assumption after an unload (router reason, 0.3.7)")
         self.assertEqual(self.violations(), [])
 
     def test_engine_status_bound_to_model_and_generation(self):
@@ -257,6 +258,240 @@ class TestSavedFiles(RouterBase):
         files = {r["file"] for r in self.proxy.store.autosaves(active_only=True)}
         self.assertIn(ev_big["file"], files, "small's save does not supersede big's file (prefix, other model)")
         self.assertFalse([e for e in self.events("autosave_prune") if e["file"] == ev_big["file"]])
+
+
+class ProxyHTTP(RouterBase):
+    """The proxy behind its real HTTP handler (streaming paths)."""
+
+    def setUp(self):
+        super().setUp()
+        from http.server import ThreadingHTTPServer
+        from ctxproxy.server import make_handler
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(self.proxy))
+        self.srv.daemon_threads = True
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.port = self.srv.server_address[1]
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+
+    def post_stream(self, path, body, timeout):
+        """-> list of (seconds since the request, raw SSE line) until the server closes; socket.timeout propagates
+        (a client with a read timeout shorter than the silence gives up)."""
+        import http.client
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+        t0 = time.time()
+        c.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        r = c.getresponse()
+        self.assertEqual(r.status, 200)
+        self.assertTrue(r.getheader("Content-Type").startswith("text/event-stream"))
+        out = []
+        try:
+            while True:
+                line = r.fp.readline()
+                if not line:
+                    break
+                if line.strip():
+                    out.append((time.time() - t0, line.decode().rstrip("\n")))
+        finally:
+            c.close()
+        return out
+
+    def wait_event(self, name, timeout=10.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            ev = self.events(name)
+            if ev:
+                return ev
+            time.sleep(0.05)
+        self.fail("no %s in the journal" % name)
+
+
+class TestStreamingLoad(ProxyHTTP):
+    """0.3.7 router mode: a stream request to a model that is not loaded gets SSE comments while it loads (on
+    AI395 qwen took 73 s from the USB disk and a client with a 60 s read timeout gave up)."""
+
+    def setUp(self):
+        super().setUp()
+        self.rt.load_delay = 1.8
+        self.cfg.router_keepalive_s = 0.3
+
+    def test_short_read_timeout_survives_a_slow_load(self):
+        lines = self.post_stream("/v1/chat/completions", {"model": "big", "messages": history(2), "tools": TOOLS,
+                                                          "max_tokens": 256, "stream": True}, timeout=1.0)
+        comments = [(t, x) for t, x in lines if x.startswith(":")]
+        data = [(t, x) for t, x in lines if x.startswith("data:")]
+        self.assertGreaterEqual(len(comments), 3, lines)
+        self.assertIn(": loading model big", [x for _, x in comments])
+        self.assertLess(comments[0][0], 1.0, "first sign of life before the client's read timeout")
+        self.assertLess(max(t for t, _ in comments), data[0][0], "comments only before the answer")
+        self.assertEqual(data[-1][1], "data: [DONE]")
+        self.assertTrue(any('"finish_reason"' in x for _, x in data))
+        self.assertEqual(self.rt.loads, ["big"])
+        self.assertEqual(len(self.rt.chats), 1)
+        self.assertEqual(self.cfg.window, BIG, "window read from the n_ctx before the prompt was built")
+        ka = self.events("router_load_keepalive")
+        self.assertEqual(ka[-1]["model"], "big")
+        self.assertGreaterEqual(ka[-1]["keepalives"], 3)
+        self.assertEqual(self.violations(), [])
+
+    def test_loaded_model_gets_no_comment(self):
+        self.rt.load("big")
+        lines = self.post_stream("/v1/chat/completions", {"model": "big", "messages": history(1), "tools": TOOLS,
+                                                          "max_tokens": 256, "stream": True}, timeout=5)
+        self.assertFalse([x for _, x in lines if x.startswith(": loading")], "nothing changes when it is loaded")
+        self.assertFalse(self.events("router_load_keepalive"))
+
+    def test_client_gone_during_the_load_nothing_generated(self):
+        import socket
+        import struct
+        body = json.dumps({"model": "big", "messages": history(2), "tools": TOOLS, "max_tokens": 256,
+                           "stream": True}).encode()
+        s = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        s.sendall(b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                  b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        self.assertIn(b"200", s.recv(4096))
+        time.sleep(0.4)
+        linger = struct.pack("HH" if os.name == "nt" else "ii", 1, 0)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)   # RST: the client is gone
+        s.close()
+        ev = self.wait_event("router_client_gone")[-1]
+        self.assertEqual(ev["model"], "big")
+        self.assertGreaterEqual(ev["load_s"], 1.7, "the load is waited for before the lock is released")
+        self.assertTrue(self.proxy.lock.acquire(timeout=3), "lock released")
+        self.proxy.lock.release()
+        time.sleep(0.3)
+        self.assertEqual(self.rt.chats, [], "nothing generated for a client that went away")
+        self.assertFalse(self.events("request"))
+        # the next request is served normally (model loaded, window known)
+        self.send(history(2), "big")
+        self.assertEqual(self.rt.loads, ["big"])
+
+    def test_anthropic_stream_pings_while_loading(self):
+        lines = self.post_stream("/v1/messages", {"model": "big", "max_tokens": 256, "stream": True,
+                                                   "messages": [{"role": "user", "content": "ciao"}]}, timeout=1.0)
+        evs = [x for _, x in lines if x.startswith("event:")]
+        self.assertGreaterEqual(evs.count("event: ping"), 3, lines)
+        self.assertEqual(evs[-1], "event: message_stop")
+        self.assertEqual(len(self.rt.chats), 1)
+
+    def test_responses_stream_comments_while_loading(self):
+        lines = self.post_stream("/v1/responses", {"model": "big", "input": "ciao", "stream": True,
+                                                    "max_output_tokens": 256}, timeout=1.0)
+        self.assertIn(": loading model big", [x for _, x in lines])
+        self.assertTrue(any("response.completed" in x for _, x in lines), lines)
+        self.assertEqual(len(self.rt.chats), 1)
+
+    def test_non_stream_unchanged(self):
+        """Non-stream requests: no protocol change, the client's timeout must exceed the load time (README)."""
+        r = self.send(history(1), "big")
+        self.assertEqual(r["choices"][0]["message"]["role"], "assistant")
+        self.assertFalse(self.events("router_load_keepalive"))
+
+
+class TestSaveEstimate(RouterBase):
+    """0.3.7: disk needed for an autosave = tokens x bytes/token measured on the last save of the same model (x 1.25);
+    20000 bytes/token until the model has saved once (on AI395: qwen ~73 KB/token, gemma ~9 KB/token)."""
+
+    def setUp(self):
+        super().setUp()
+        self.rt.bytes_per_token = {"big": 70000, "small": 9000}
+
+    def test_estimate_per_model(self):
+        h = history(6)
+        self.send(h, "big")
+        e1 = self.tick()
+        self.assertEqual((e1["est_bpt"], e1["est_from"]), (20000, "default"), "first save: the old value")
+        self.assertEqual(e1["bytes"], e1["n_saved"] * 70000)
+        h2 = h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "big")
+        e2 = self.tick()
+        self.assertEqual((e2["est_bpt"], e2["est_from"]), (87500, e1["file"]), "big: 70000 x 1.25")
+        self.assertEqual(e2["est_bytes"], int(e2["tokens"] * 87500))
+        h3 = h2 + [{"role": "assistant", "content": "r2"}, {"role": "user", "content": "ancora"}]
+        self.send(h3, "small")
+        e3 = self.tick()
+        self.assertEqual(e3["est_from"], "default", "small has no measure of its own: big's is not used")
+        h4 = h3 + [{"role": "assistant", "content": "r3"}, {"role": "user", "content": "e poi"}]
+        self.send(h4, "small")
+        e4 = self.tick()
+        self.assertEqual((e4["est_bpt"], e4["est_from"]), (11250, e3["file"]), "small: 9000 x 1.25")
+
+    def test_disk_low_uses_the_measure(self):
+        from collections import namedtuple
+        from unittest import mock
+        h = history(6)
+        self.send(h, "big")
+        e1 = self.tick()
+        h2 = h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "big")
+        tokens = self.proxy.up.state["tokens"]
+        du = namedtuple("du", "total used free")
+        with mock.patch("ctxproxy.autosave.shutil.disk_usage", return_value=du(0, 0, tokens * 40000)):
+            self.assertIsNone(self.tick(), "40 KB/token free: enough for the old 20000, not for big's 87500")
+        skip = self.events("autosave_skip")[-1]
+        self.assertEqual((skip["reason"], skip["est_bpt"], skip["est_from"]), ("disk_low", 87500, e1["file"]))
+
+
+class TestRouterReasons(RouterBase):
+    """0.3.7: the state lost through a model change or an unload has its own reason in router mode."""
+
+    def test_model_change_and_unload(self):
+        h = history(4)
+        self.send(h, "big")
+        h2 = h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}]
+        self.send(h2, "small")
+        self.assertEqual(self.events("strata_state_lost")[-1]["reason"], "router_model_change")
+        h3 = h2 + [{"role": "assistant", "content": "r2"}, {"role": "user", "content": "ancora"}]
+        self.send(h3, "small")
+        self.rt.unload("small")
+        self.send(h3 + [{"role": "assistant", "content": "r3"}, {"role": "user", "content": "e poi"}], "small")
+        self.assertIn(self.events("strata_state_lost")[-1]["reason"], ("router_unload",))
+        reasons = {e["reason"] for e in self.events("strata_state_lost")}
+        self.assertFalse(reasons & {"strata_restart", "unloaded"}, reasons)
+
+    def test_restore_reason(self):
+        h = history(6)
+        self.send(h, "big")
+        self.assertIsNotNone(self.tick())
+        self.rt.unload("big")
+        self.send(h + [{"role": "assistant", "content": "r"}, {"role": "user", "content": "continua"}], "big")
+        ev = self.events("autorestore")
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[-1]["reason"], "router_unload")
+
+
+class TestSingleModelUnchanged(unittest.TestCase):
+    """Outside router mode the journal is the same as before: no estimate fields, the old reasons."""
+
+    def test_autosave_and_reasons(self):
+        tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.addCleanup(tmp.cleanup)
+        eng = FakeEngine(flavor="llama", n_ctx=BIG)
+        url = eng.start()
+        self.addCleanup(eng.stop)
+        slot_dir = os.path.join(tmp.name, "slots")
+        os.makedirs(slot_dir)
+        raw = {"slot_dir": slot_dir, "slot_save": True, "autosave": True, "autosave_idle_s": 180,
+               "autosave_min_tokens": 1000, "autosave_min_free_gb": 0, "data_dir": tmp.name}
+        cfg = Config.from_dict(raw)
+        jpath = os.path.join(tmp.name, "j.jsonl")
+        up, j, tc = Upstream(url), Journal(jpath), TokenCounter(3.5)
+        e = engines.setup(cfg, up, j, explicit=set(raw), counter=tc, log=None)
+        store = Store(os.path.join(tmp.name, "a.sqlite"))
+        self.addCleanup(store.db.close)
+        p = Proxy(cfg, up, store, j, tc)
+        p.engine = e
+        saver = p.enable_autosave(start=False)
+        st, r, _ = p.chat({"model": "x", "messages": history(6), "tools": TOOLS, "max_tokens": 1024})
+        self.assertEqual(st, 200, r)
+        ev = saver.tick(now=time.time() + 200)
+        self.assertIsNotNone(ev)
+        self.assertFalse([k for k in ev if k.startswith("est_")], ev)
+        p.up._set({**p.up.state, "started": "other"})
+        p.up.check(where="test")
+        with open(jpath) as f:
+            lost = [x for x in map(json.loads, f) if x["event"] == "strata_state_lost"]
+        self.assertEqual(lost[-1]["reason"], "strata_restart")
 
 
 if __name__ == "__main__":

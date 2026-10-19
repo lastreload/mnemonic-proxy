@@ -26,6 +26,23 @@
   - Default path unchanged: Strata, ds4, single-model llama.cpp and generic engines behave exactly as before.
   - Real run on CPU (llama.cpp b11723, two tiny models with n_ctx 32768 / 16384, one broken): A → B → A → unload A
     → A, 0 requests over the window, A's file restored only on A. Report: `docs/dev-notes/ROUTER-MODE-RESULT.md`.
+  - Real run on AI395 (Vulkan, Qwen3.6-35B-A3B 64K + Gemma 4 E2B 32K, `--models-max 1`): 23/23 requests served, 0
+    over the window, 19/19 valid tool calls; main 0.3.6 on the same router: 500 on `/tokenize` or 400 from the engine
+    (41134 tokens > 32768). Three issues found there, fixed below.
+  - **streaming while a model loads**: before, the client got the SSE headers and then nothing for the whole load
+    (73 s for qwen from a USB disk: a client with a 60 s read timeout gave up, and the proxy generated the answer
+    anyway). Now, with `stream: true`, an SSE comment `: loading model <id>` (Anthropic API: `ping`) every
+    `router_keepalive_s` (10 s) until the model is loaded and its n_ctx read; the window is still settled before the
+    prompt is built. A keep-alive that cannot be written = client gone: nothing is generated, journal
+    `router_client_gone`, the lock is released when the load ends. Non-stream: unchanged (README: the client's
+    timeout must exceed the load time).
+  - **disk estimate per model before an autosave**: `tokens × bytes/token` of the last save of the same model
+    (`bytes / n_saved`, ×1.25), 20000 until the model has saved once (measured: qwen ~73 KB/token, gemma ~9 KB/token;
+    20000 was too low for qwen). The `autosave` event carries `est_bytes`, `est_bpt`, `est_from` in router mode only.
+    Single-model engines: unchanged (same 20000, same journal).
+  - **own journal reasons**: state lost through a model change is `router_model_change`, through an unload/reload
+    `router_unload` (was `strata_restart` / `unloaded`); an autorestore in router mode carries the same reason.
+    Non-router paths: unchanged.
 
 ## 0.3.6 — unreleased
 

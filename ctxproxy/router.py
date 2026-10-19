@@ -36,6 +36,8 @@ import urllib.parse
 
 OWNERS_FILE = "router-slot-models.json"
 LOAD_TIMEOUT_S = 600.0
+KEEPALIVE_S = 10.0          # streaming: one SSE comment every KEEPALIVE_S seconds while a model loads (0.3.7)
+SAVE_MARGIN = 1.25          # disk check before an autosave: measured bytes/token of the model x SAVE_MARGIN (0.3.7)
 
 
 class RouterError(Exception):
@@ -179,6 +181,7 @@ class Router:
         self.owners = SlotOwners(owners_path)
         self.switches = 0
         self.loads = 0
+        self.loading: str | None = None          # model being loaded by select() (text of the streaming keep-alive)
 
     # ---------- engine state ----------
     def started(self, model: str | None) -> str | None:
@@ -260,7 +263,11 @@ class Router:
         if stv == "loaded" and known and known[0] == self.gen.get(mid, 0):
             n = known[1]
         else:
-            n = self.read_n_ctx(mid)
+            self.loading = mid
+            try:
+                n = self.read_n_ctx(mid)
+            finally:
+                self.loading = None
             m2 = self.models().get(mid) or {}
             meta2 = (m2.get("meta") or {}).get("n_ctx") if isinstance(m2.get("meta"), dict) else None
             self.nctx[mid] = (self.gen.get(mid, 0), n, meta2)
@@ -329,6 +336,23 @@ class Router:
         if owner != cur:
             return "%s was saved by model %s, the current model is %s" % (filename, owner, cur)
         return None
+
+    def bytes_per_token(self, store, model: str | None = None) -> tuple[float | None, str | None]:
+        """Disk estimate for an autosave of `model` (default: the current one): bytes/token of the last save
+        of that model (`bytes / n_saved`; saved files are bound to their model) x SAVE_MARGIN. -> (bytes per token,
+        file measured), or (None, None) when the model has no measured save yet (the caller keeps its default)."""
+        model = model or self.current
+        if not model or store is None:
+            return None, None
+        best = None
+        for r in store.autosaves(active_only=False):        # pruned saves still count as a measure
+            if self.owners.get(r["file"]) != model or not r.get("n_saved") or not r.get("bytes"):
+                continue
+            if best is None or (r.get("created") or 0) > (best.get("created") or 0):
+                best = r
+        if best is None:
+            return None, None
+        return best["bytes"] / float(best["n_saved"]) * SAVE_MARGIN, best["file"]
 
     def summary(self) -> dict:
         return {"current": self.current, "n_ctx": self.applied[1] if self.applied else None,

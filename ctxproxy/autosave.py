@@ -71,6 +71,7 @@ class Tracker:
         self.saved: dict[str, dict] = {}                     # file salvati da questo processo -> stato
         self.skip_restore = False
         self.text = None                                     # testo dell'ultimo prompt letto da Strata (questo processo)
+        self.lost_why = None                                 # last reason of strata_state_lost (router mode restores)
         self.mu = threading.RLock()
         self.state = self._load()
 
@@ -115,14 +116,20 @@ class Tracker:
         if s is None:
             why = "status_unavailable"
         elif not s.get("loaded", True):
-            why = "unloaded"
+            why = "unloaded" if getattr(self.up, "router", None) is None else "router_unload"
         elif st.get("started") is not None and s.get("started") != st.get("started"):
             why = "strata_restart"
+            if getattr(self.up, "router", None) is not None:
+                # router mode (0.3.7): started = "<model>#<load generation>"; another model, or the same model
+                # unloaded and loaded again, is not a Strata restart
+                old, new = str(st.get("started")).rpartition("#")[0], str(s.get("started") or "").rpartition("#")[0]
+                why = "router_model_change" if old != new else "router_unload"
         elif st.get("requests") is not None and \
                 (s.get("activity") or {}).get("requests") not in (st["requests"], st["requests"] - 1):
             # -1: il totale di Strata può aggiornarsi un attimo dopo la fine della risposta
             why = "foreign_request"
         if why:
+            self.lost_why = why
             self.journal.log("strata_state_lost", reason=why, conv=st.get("conv"), seg=st.get("seg"),
                              tokens=st.get("tokens"), where=where)
             self._set(None)
@@ -216,6 +223,9 @@ class Tracker:
             return
         t0 = time.time()
         reason = "strata_restart" if st is None else "other_state"
+        if st is None and getattr(self.up, "router", None) is not None:
+            # router mode (0.3.7): why the engine state was lost (model change, unload), not a Strata restart
+            reason = self.lost_why if (self.lost_why or "").startswith("router_") else "router_no_state"
         if not s.get("loaded", True) and getattr(self.up, "router", None) is None:
             # motore spento (scaricato o morto): il restore vuole il modello caricato, lo si carica ora
             # (router mode, 0.3.7: the model was loaded by Router.select, there is no /load)
@@ -296,11 +306,21 @@ class AutoSaver:
             st = tr.check(s, "autosave")
             if st is None:
                 return None
+            est = {}
             if cfg.slot_dir:
                 free = shutil.disk_usage(cfg.slot_dir).free
-                need = cfg.autosave_min_free_gb * 2 ** 30 + st["tokens"] * 20000
+                per_tok = 20000
+                router = getattr(tr.up, "router", None)
+                if router is not None:
+                    # router mode (0.3.7): bytes/token measured on the last save of this model (qwen 35B-A3B ~73 KB,
+                    # gemma E2B ~9 KB on AI395), 20000 until the model has saved once
+                    bpt, src = router.bytes_per_token(self.store, getattr(tr.up, "router_model", None))
+                    per_tok = bpt if bpt else per_tok
+                    est = {"est_bytes": int(st["tokens"] * per_tok), "est_bpt": round(per_tok),
+                           "est_from": src or "default"}
+                need = cfg.autosave_min_free_gb * 2 ** 30 + st["tokens"] * per_tok
                 if free < need:
-                    return self._skip("disk_low", free_gb=round(free / 2 ** 30, 1))
+                    return self._skip("disk_low", free_gb=round(free / 2 ** 30, 1), **est)
             fn = "%s-seg%d-auto-%s.bin" % (st["conv"], st.get("seg") or 0, st["phash"][:10])
             t0 = time.time()
             try:
@@ -314,7 +334,7 @@ class AutoSaver:
                                     nbytes, int(r.get("n_saved") or 0))
             ev = self.journal.log("autosave", conv=st["conv"], seg=st.get("seg") or 0, file=fn, tokens=st["tokens"],
                                   n_saved=r.get("n_saved"), bytes=nbytes, ms=ms, idle_s=round(now - st["t_end"]),
-                                  phash=st["phash"][:16])
+                                  phash=st["phash"][:16], **est)
             # lo stato di Strata non cambia con un save (requests non conta i save): resta valido
             self.prune(keep_file=fn, text=getattr(tr, "text", None) if H(getattr(tr, "text", "") or "") == st["phash"]
                        else None)

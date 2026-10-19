@@ -52,6 +52,14 @@ class ClientGone(Exception):
     """Il client ha chiuso la connessione durante lo stream."""
 
 
+class Comment(str):
+    """emit(Comment(text)): an SSE comment line (`: text`) for the client, like emit(None) but with a reason
+    (0.3.7 router mode: `loading model <id>` while the model loads). Clients ignore it."""
+
+    def __new__(cls, text):
+        return super().__new__(cls, " ".join(str(text).split()))
+
+
 class Proxy:
     def __init__(self, cfg: Config, upstream: Upstream, store: Store, journal: Journal, counter: TokenCounter,
                  mode: str = "tools"):
@@ -87,7 +95,7 @@ class Proxy:
         if router is not None:
             # 0.3.7 router mode: model, n_ctx and window are settled before anything is built or sent
             with self.lock:
-                err = self._router_select(router, req)
+                err = self._router_select(router, req, emit)
                 if err is not None:
                     return err
                 return self._chat_off(req, emit) if self.mode == "off" else self._chat_managed(req, hint, emit)
@@ -96,14 +104,55 @@ class Proxy:
         with self.lock:
             return self._chat_managed(req, hint, emit)
 
-    def _router_select(self, router, req: dict):
+    def _router_select(self, router, req: dict, emit=None):
         from .router import RouterError
         try:
-            router.select(req)
+            if emit is None:
+                router.select(req)
+            else:
+                self._router_select_alive(router, req, emit)
         except RouterError as e:
             self.journal.log("router_refused", model=req.get("model"), status=e.status, error=e.message[:300])
             return e.status, {"error": {"message": e.message, "type": "router_error", "code": e.status}}, {}
         return None
+
+    def _router_select_alive(self, router, req: dict, emit):
+        """Streaming: select() (which may load the model: 70+ s from a slow disk) runs in a thread while this one
+        sends `: loading model <id>` every `router_keepalive_s`, so a client with a read timeout does not give up.
+        The window is still settled before anything is built. A keep-alive that cannot be written = the client is
+        gone: nothing is generated; the thread is joined first (the load itself cannot be stopped and the router
+        state must be settled before the lock is released), then ClientGone."""
+        from .router import KEEPALIVE_S
+        box: dict = {}
+
+        def run():
+            try:
+                router.select(req)
+            except BaseException as e:  # noqa: BLE001
+                box["e"] = e
+        t0 = time.time()
+        t = threading.Thread(target=run, daemon=True, name="router-select")
+        t.start()
+        every = float(getattr(self.cfg, "router_keepalive_s", KEEPALIVE_S) or KEEPALIVE_S)
+        sent, model = 0, None
+        while True:
+            t.join(every)
+            if not t.is_alive():
+                break
+            model = router.loading or model or req.get("model")
+            try:
+                emit(Comment("loading model %s" % model))
+                sent += 1
+            except ClientGone:
+                waited = round(time.time() - t0, 1)
+                t.join()
+                self.journal.log("router_client_gone", model=model, waited_s=waited, keepalives=sent,
+                                 load_s=round(time.time() - t0, 1), error=str(box.get("e") or "")[:200] or None)
+                raise
+        if sent:
+            self.journal.log("router_load_keepalive", model=model, keepalives=sent, s=round(time.time() - t0, 1))
+        if "e" in box:
+            raise box["e"]
 
     def _chat_off(self, req: dict, emit=None):
         """mode off: plain pass-through (one round, no prompt management)."""
@@ -1171,6 +1220,8 @@ def make_handler(proxy: Proxy):
                     with wlock:
                         if obj is None:
                             self.wfile.write(b": keep-alive\n\n")
+                        elif isinstance(obj, str):
+                            self.wfile.write(b": " + obj.encode("utf-8") + b"\n\n")
                         else:
                             self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n")
                         self.wfile.flush()

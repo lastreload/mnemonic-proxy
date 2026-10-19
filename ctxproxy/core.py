@@ -287,6 +287,8 @@ class Config:
     # (empty = such a request is refused), and how long to wait for a model to load before refusing the request
     router_model: str = ""
     router_load_timeout_s: float = 600.0
+    # streaming only: while the model loads the client gets an SSE comment (": loading model <id>") this often
+    router_keepalive_s: float = 10.0
     # ds4-server: ds4 rimette nel prompt le tool call campionate prese per id (exact DSML replay), quindi
     # mask_tool_args non serve e viene spento; false solo se ds4-server gira con --disable-exact-dsml-tool-replay
     ds4_exact_tool_replay: bool = True

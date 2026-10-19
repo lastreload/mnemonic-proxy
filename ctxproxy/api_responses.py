@@ -324,6 +324,9 @@ class StreamWriter:
         if ch is None:
             self.write(b": keep-alive\n\n")
             return
+        if isinstance(ch, str):                   # SSE comment (router load, 0.3.7)
+            self.write(b": " + ch.encode("utf-8") + b"\n\n")
+            return
         if ch.get("error"):
             self.error(_err_message(ch))
             return
