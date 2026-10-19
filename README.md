@@ -119,6 +119,9 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
   inside WSL.
 - **macOS**: not tested yet; follow the Linux commands (llama.cpp from Homebrew or built with Metal), see
   [Platforms](#platforms).
+- **Android (Termux)**: `pkg install python git`, then `pip install git+https://github.com/lastreload/mnemonic-proxy`;
+  tested in Waydroid (Android 13, x86_64) in front of an online API, not yet on an ARM phone, see
+  [Platforms](#platforms).
 
 ## How it works
 
@@ -633,6 +636,34 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
   `Get-FileHash -Algorithm SHA256`.
 - **Windows, WSL 2**: follow the Linux commands inside WSL. Keep the engine, the proxy and the `slots` folder all
   inside WSL, so that `slot_dir` and `--slot-save-path` are the same path. Not yet tested.
+- **Android (Termux)** (0.3.8; tested in Waydroid 1.6.2 on Linux — Android 13, x86_64 — with Termux 0.118.3 and its
+  Python 3.14.8; not yet on an ARM phone). The proxy is plain Python, nothing is compiled:
+
+  ```sh
+  pkg update -y && pkg upgrade -y
+  pkg install -y python git
+  pip install git+https://github.com/lastreload/mnemonic-proxy    # 0.3.8 (about 25 s)
+  mnemonic-proxy demo                                              # PASS
+  ```
+
+  Use case: an agent on the phone in front of an online API (no model on the phone), base mode:
+
+  ```sh
+  curl -LO https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/examples/config.openai-32k.json
+  mnemonic-proxy --upstream https://openrouter.ai/api --api-key "$OPENROUTER_API_KEY" \
+    --port 8096 --data ./data --config config.openai-32k.json
+  ```
+
+  then point the agent at `http://127.0.0.1:8096/v1`. Measured run (OpenRouter, `meta/muse-spark-1.3-contributor`, a
+  small stdlib client with 3 tools reading ten ~5K-token logs, 15 turns, history 55K tokens at the end): the proxy
+  never sent more than 24K tokens; prompt tokens 353K with the proxy (all rounds, the 9 `recall` rounds included) vs
+  447K for the same 15 requests sent directly (−21%; −56% counting only the 15 client turns); 12 valid tool calls,
+  0 errors; the final question about the first log (masked by then) was answered right through `recall`. Prefix
+  caching on the API side made the direct requests cheap, so in dollars the two were close (about 0.03–0.04 USD each).
+  Limits: no saved state (online API); `--api-key` is visible in the process list of the Termux user; `check --live`
+  tries the first model the API lists, so do not use `--live` against a catalogue like OpenRouter; online APIs can
+  answer HTTP 429 (rate limit), which the proxy passes to the client unchanged (the client must retry). A proxy on a
+  computer can also be reached from Termux with `adb reverse tcp:8096 tcp:8096` (tested with a fake engine).
 
 ## Uninstall
 
