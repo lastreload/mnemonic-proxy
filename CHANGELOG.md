@@ -37,12 +37,20 @@
     `router_client_gone`, the lock is released when the load ends. Non-stream: unchanged (README: the client's
     timeout must exceed the load time).
   - **disk estimate per model before an autosave**: `tokens × bytes/token` of the last save of the same model
-    (`bytes / n_saved`, ×1.25), 20000 until the model has saved once (measured: qwen ~73 KB/token, gemma ~9 KB/token;
-    20000 was too low for qwen). The `autosave` event carries `est_bytes`, `est_bpt`, `est_from` in router mode only.
-    Single-model engines: unchanged (same 20000, same journal).
+    (`bytes / n_saved`, ×1.25), 20000 until the model has saved once (measured on AI395: qwen 37–73 KB/token, not
+    constant with the length; gemma 7.6–9 KB/token; 20000 was too low for qwen). It is an estimate: a longer prompt
+    can need more per token than the last save (`autosave_min_free_gb` stays as the margin). The `autosave` event
+    carries `est_bytes`, `est_bpt`, `est_from` in router mode only. Single-model engines: unchanged (same 20000,
+    same journal).
   - **own journal reasons**: state lost through a model change is `router_model_change`, through an unload/reload
     `router_unload` (was `strata_restart` / `unloaded`); an autorestore in router mode carries the same reason.
     Non-router paths: unchanged.
+  - Second run on AI395 with these fixes (a9bfb87): stream to qwen not loaded (cold, 73 s load) with client read
+    timeouts of 60 s and 300 s: both got `: loading model qwen` every 10 s (7 comments, first at 10 s) and the answer
+    at 74 s; client gone at 20 s: `router_client_gone`, nothing generated; restore from the same model after an
+    unload (`autorestore`, reason `router_unload`, 23689 tokens, 155 ms; next answer correct, 23689 cached tokens);
+    gemma does not restore qwen's file (`autorestore_other_model`); estimate for qwen's second save 1.08 GB vs
+    0.95 GB written; 0 requests over the window.
 
 ## 0.3.6 — unreleased
 

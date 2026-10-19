@@ -390,7 +390,7 @@ class TestStreamingLoad(ProxyHTTP):
 
 class TestSaveEstimate(RouterBase):
     """0.3.7: disk needed for an autosave = tokens x bytes/token measured on the last save of the same model (x 1.25);
-    20000 bytes/token until the model has saved once (on AI395: qwen ~73 KB/token, gemma ~9 KB/token)."""
+    20000 bytes/token until the model has saved once (on AI395: qwen 37-73 KB/token, gemma 7.6-9 KB/token)."""
 
     def setUp(self):
         super().setUp()

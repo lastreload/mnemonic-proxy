@@ -312,8 +312,8 @@ class AutoSaver:
                 per_tok = 20000
                 router = getattr(tr.up, "router", None)
                 if router is not None:
-                    # router mode (0.3.7): bytes/token measured on the last save of this model (qwen 35B-A3B ~73 KB,
-                    # gemma E2B ~9 KB on AI395), 20000 until the model has saved once
+                    # router mode (0.3.7): bytes/token measured on the last save of this model (on AI395 qwen 35B-A3B
+                    # 37-73 KB, gemma E2B 7.6-9 KB), 20000 until the model has saved once
                     bpt, src = router.bytes_per_token(self.store, getattr(tr.up, "router_model", None))
                     per_tok = bpt if bpt else per_tok
                     est = {"est_bytes": int(st["tokens"] * per_tok), "est_bpt": round(per_tok),

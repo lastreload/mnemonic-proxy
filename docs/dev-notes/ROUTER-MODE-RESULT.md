@@ -134,13 +134,31 @@ file (3373 righe), poi gemma → qwen → gemma.
 - Problemi trovati e corretti dopo la prova (stessa 0.3.7): **streaming muto durante il caricamento** (un client con
   timeout di lettura 60 s si staccava a 60,1 s; ora commento SSE `: loading model <id>` ogni `router_keepalive_s`, e
   rinuncia prima di generare se il client è andato via), **stima dello spazio dell'autosalvataggio** (20000
-  byte/token contro 73 KB/token misurati per qwen e 9 KB/token per gemma; ora byte/token dell'ultimo salvataggio
+  byte/token contro 37–73 KB/token misurati per qwen e 7,6–9 KB/token per gemma; ora byte/token dell'ultimo salvataggio
   dello stesso modello ×1,25), **motivi del journal** (`router_model_change`, `router_unload` invece di
   `strata_restart`).
 - **Una sola storia per conversazione**: il mascheramento fatto per far entrare la storia nel modello piccolo resta
   quando si torna al grande (qwen dopo gemma ha ricevuto 9194 token invece di ~40K e il suo salvataggio precedente non
   combaciava più). Comportamento voluto; qwen ha riletto con `read_file` quello che serviva e ha risposto bene.
 - In quella prova nessun ripristino è avvenuto (né giusto né sbagliato).
+
+## Seconda prova su AI395 con le correzioni (a9bfb87)
+Stesso router e modelli, guardia 30 min, ~10 min effettivi, tutto spento alla fine (MemAvailable minimo 65,6 GB, GTT
+massimo 25,7 GB). Dati: `out/router-fixes-013/ai395/` (cartella di lavoro, fuori dal repo).
+- Stream a qwen non caricato (cache di pagina svuotata, caricamento 73,4 s) con timeout di lettura del client 60 s e
+  300 s: entrambi ricevono `: loading model qwen` ogni 10,0 s (7 commenti, il primo a 10 s), poi la risposta a 74,1 s
+  e `[DONE]`. Prima (0.3.7 senza correzione) il client da 60 s si staccava a 60,1 s.
+- Client che si stacca a 20 s durante il caricamento: `router_client_gone` (2 keep-alive, caricamento finito a 73,3 s),
+  nessuna richiesta inviata al modello (nessun `request` nel journal, nessun nuovo `launch_slot_` nel log del router).
+- Ripristino dallo stesso modello: qwen salvato (23689 token), scaricato dal router, richiesta successiva della stessa
+  conversazione a qwen → `strata_state_lost` `router_unload`, `autorestore` `router_unload` (23689 token, 155 ms),
+  risposta giusta con 23689 token in cache. Poi gemma: `router_model_change`, `autorestore_other_model` (il file di
+  qwen non è toccato).
+- Stima spazio: primo salvataggio di qwen 20000 B/token (`default`, scritti 36,6 KB/token), secondo 45,7 KB/token
+  stimati (1,08 GB) contro 40,0 KB/token scritti (0,95 GB); gemma prima volta `default`, scritti 7,6 KB/token. Il
+  rapporto byte/token di qwen non è costante (37–73 KB/token fra le due prove): la stima è un'euristica, il margine
+  resta `autosave_min_free_gb`.
+- 0 richieste oltre la finestra (log del router).
 
 ## Test
 - `tests/test_router.py` (17 test, contro `FakeRouter` in `ctxproxy/fake_engine.py`: ogni modello è un
