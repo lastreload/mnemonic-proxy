@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.8 — unreleased
+
+- **Ollama and LM Studio: the window is read from the engine** (`ctxproxy/enginectx.py`). Both run in base mode and
+  both cut an over-long prompt in silence (HTTP 200): with 0.3.7 the proxy used the config `window` (or 131072) and
+  `check` said `READY` with an engine of 4096. Now, in the detection of a generic engine:
+  - Ollama: recognised by `GET /api/version`; context = `context_length` of the loaded model in `GET /api/ps` (the
+    context it runs with, = `OLLAMA_CONTEXT_LENGTH`; `POST /api/show` gives the training context, 262144 for
+    Qwen3-4B, and is not used). LM Studio: `GET /api/v0/models`, `loaded_context_length` of the loaded model.
+  - the context is the window (thresholds scaled as for llama-server) and it is read again before every request,
+    before the prompt is built; a model that is not loaded is loaded with a 1-token request and read again; if it
+    still cannot be read the request is refused (503), never sent with a guessed window. Below the minimum window the
+    request is refused (400).
+  - a config `window` bigger than the engine context: the proxy refuses to start and `check` fails, with the fix
+    (`OLLAMA_CONTEXT_LENGTH=… ollama serve` / `lms load … --context-length …`); if the engine shrinks later the
+    window is lowered to it with a warning. Never over the engine.
+  - other generic engines: unchanged.
+- **Engine truncation detected**: on every generic engine, `usage.prompt_tokens` < 0.8 × the window guard's count
+  (≥ 1024 tokens) → `engine_truncated` in the journal (each time) and one warning per conversation in the log. Answers
+  are not changed; a cut prompt is not used to calibrate the token estimate. `check --live` on a generic engine sends
+  a prompt of ~0.9 × window (sized on the engine's own `prompt_tokens`) and fails with "engine context smaller than
+  window" if it is cut or refused; it also uses the engine's model name (Ollama answered 404 to `local-model`).
+- **Estimate margin on generic engines**: without `--tokenizer`, `window_estimate_slack` defaults to 0.15 (measured:
+  chars/3.5 was 6.5% low on a 33K notes request, ~10% on code with digits); a value in the config wins. `check` warns
+  "no tokenizer: the window guard is estimated". Strata, llama.cpp (single and router), ds4: unchanged (slack 0, no
+  truncation watch, same journal and prompts).
+- Fake engine: flavors `ollama` and `lmstudio` (context endpoints, model loaded on demand, silent truncation like
+  the real ones). Tests: `tests/test_engine_window.py`.
+- Real run on AI395 (Ollama 0.40.6, LM Studio llmster 0.0.25, Qwen3-4B-Instruct-2507 Q4_K_M):
+  `docs/dev-notes/ENGINE-WINDOW-038-RESULT.md`.
+
 ## 0.3.7 — unreleased
 
 - **llama-server in router mode** ([#12](https://github.com/lastreload/mnemonic-proxy/issues/12)): llama-server
