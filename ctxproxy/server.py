@@ -1340,13 +1340,12 @@ def main(argv=None):
         # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
         from .router import OWNERS_FILE, SlotOwners
         engine.router_state.owners = SlotOwners(os.path.join(os.path.abspath(a.data), OWNERS_FILE))
+    big = window_mismatch(cfg, engine, set(raw_cfg))     # 0.3.8 Ollama / LM Studio: they would cut in silence
     if small:
-        journal.log("refused_small_window", problems=[e for e, _ in small])
+        journal.log("refused_small_window", problems=[e for e, _ in small + big])
         raise SystemExit("mnemonic-proxy: refusing to start, the context window is too small.\n" + "\n".join(
-            "  %s\n  -> %s" % p for p in small))
-    big = window_mismatch(cfg, engine, set(raw_cfg))
+            "  %s\n  -> %s" % p for p in small + big))
     if big:
-        # 0.3.8 Ollama / LM Studio: they would cut the prompts in silence
         journal.log("refused_window_over_engine", problems=[e for e, _ in big])
         raise SystemExit("mnemonic-proxy: refusing to start, the config window is bigger than the engine context.\n"
                          + "\n".join("  %s\n  -> %s" % p for p in big))

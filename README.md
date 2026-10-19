@@ -65,29 +65,40 @@ save folder:
 | llama-server | `llama-server -m model.gguf -c 32768 --parallel 1 --jinja --slot-save-path ./slots --port 8095` | `config.llama-server.json` | yes |
 | llama-server, router mode (several models) | `llama-server --models-preset preset.ini --models-max 1 --port 8095`; preset: `[*]` with `slot-save-path` and `parallel = 1`, a `ctx-size` (`c`) ≥ 16384 per model | `config.llama-server-router.json` + `preset.router.example.ini` | yes, per model |
 | ds4-server | `ds4-server -m MODEL.gguf --ctx 65536 --kv-disk-dir ./kv --port 8110` | `config.ds4.json` | kept by ds4 itself |
-| Ollama, LM Studio | engine context set to 32768 (see below); proxy with `--tokenizer` | `config.openai-32k.json` | no (base mode) |
+| Ollama, LM Studio | engine context set to 32768 (see below); `--tokenizer` recommended | `config.openai-32k.json`, or no `window` (read from the engine) | no (base mode) |
 | any OpenAI-compatible (vLLM, online APIs) | — | `config.openai-32k.json` at 32K; at 131072 none is needed (the defaults are for 131072) | no (base mode) |
 
-The proxy reads the window from Strata, llama-server (`n_ctx`, per model in router mode) and ds4-server
-(`--ctx`), and scales its thresholds to it, unless `window` is written in the config (the two Strata examples
-set 131072: change it if Strata runs with another window). From any other engine it cannot: `window` in the config
-is used as it is (131072 when missing), so write the engine's real context there; `config.openai-32k.json` has
-the thresholds the proxy itself uses at 32K. Details per engine: [Engines](#engines).
+The proxy reads the window from Strata, llama-server (`n_ctx`, per model in router mode), ds4-server (`--ctx`),
+Ollama and LM Studio (the context of the loaded model, 0.3.8), and scales its thresholds to it, unless `window` is
+written in the config (the two Strata examples set 131072: change it if Strata runs with another window). From any
+other engine it cannot: `window` in the config is used as it is (131072 when missing), so write the engine's real
+context there; `config.openai-32k.json` has the thresholds the proxy itself uses at 32K. Details per engine:
+[Engines](#engines).
 
 **Ollama and LM Studio** (tested on Linux, small model, details in [Tested combinations](#tested-combinations)). Both
 serve an OpenAI-compatible API (Ollama `http://127.0.0.1:11434/v1`, LM Studio `http://127.0.0.1:1234/v1`;
 `--upstream` is the same address without `/v1`) and the proxy runs in base mode: masking, archive, `recall`, segment
-switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no saved state. Three things to know:
-- **Set the engine's context yourself, and write the same value as `window`.** The proxy cannot read it from these
-  engines, and `check` says `READY` whatever it is. With their defaults on our machine (Ollama 4096 on CPU; LM Studio
-  8192) both answered HTTP 200 to longer prompts after dropping part of them, without telling the client: Ollama
-  dropped the oldest messages, LM Studio kept the beginning and the end and dropped the middle.
+switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no saved state. What to know:
+- **Give the engine a context of 32768 (at least 16384).** With their defaults on our machine (Ollama 4096 on CPU;
+  LM Studio 8192) both answer HTTP 200 to longer prompts after dropping part of them, without telling the client:
+  Ollama drops the oldest messages, LM Studio keeps the beginning and the end and drops the middle.
   Ollama: `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`; `ollama ps` shows the context in use (column `CONTEXT`).
   LM Studio: `lms load <model> --context-length 32768`, then `lms server start`; `lms ps` shows it.
-- **Start the proxy with `--tokenizer`** pointing at the model's `tokenizer.json` (`pip install
-  'mnemonic-proxy[exact]'`). Without it the proxy estimates chars/3.5: the notes request it sends at a segment switch
-  was estimated at 31.3K tokens but was 33.4K real tokens, and both engines cut it without an error. With the
-  tokenizer (tried on LM Studio) the same request was 30.8K tokens and nothing was cut.
+- **The proxy reads that context** (0.3.8): Ollama `GET /api/ps` (`context_length` of the loaded model: the context
+  it runs with, not the training context of `POST /api/show`), LM Studio `GET /api/v0/models`
+  (`loaded_context_length`). It reads it again before every request (one cheap GET; a model that is not loaded is
+  loaded first with a 1-token request), so the window follows the engine and a prompt never goes over it. Below
+  16384 the proxy refuses to start; a `window` in the config bigger than the engine context also refuses the start
+  and fails `check`, with the command that fixes it. You can leave `window` out of the config.
+- **`--tokenizer` is still recommended** (the model's `tokenizer.json`, `pip install 'mnemonic-proxy[exact]'`).
+  Without it the proxy estimates chars/3.5, which was up to ~10% low on code with many digits; on generic engines
+  the estimate now gets a 15% margin by default (`window_estimate_slack` 0.15) and `check` warns. With 0.3.7 the
+  notes request at a segment switch was estimated at 31.3K tokens but was 33.4K real tokens and both engines cut it;
+  with 0.3.8 and no tokenizer it was 27.7K real tokens on Ollama and nothing was cut (numbers in Tested
+  combinations).
+- **A cut prompt is reported**: when the engine says (`usage.prompt_tokens`) it read less than 0.8× what the proxy
+  counted, the journal gets `engine_truncated` and the log one warning per conversation; `check --live` sends a
+  prompt of 0.9× the window and fails with "engine context smaller than window" if it does not come back whole.
 - Ollama ignores an integrated GPU by default and runs on the CPU (much slower); `OLLAMA_IGPU_ENABLE=1` makes it use
   it. With it, Ollama chose a default context of 262144 from the shared memory: set `OLLAMA_CONTEXT_LENGTH` anyway.
 
@@ -356,7 +367,9 @@ the client instead of sending. With `--tokenizer` the count is the engine's own,
 (`window_guard` events in the journal carry `guarantee=exact`). Without it the count is the calibrated chars/3.5
 estimate and the guarantee is only as good as that estimate (`guarantee=estimated`): on text with many digits or
 symbols the real count can be well above it, so use `--tokenizer` (or raise `window_estimate_slack`, e.g. `0.3`)
-when the window is small. `"window_guard": false` restores the 0.3.2 behaviour.
+when the window is small. On generic engines (Ollama, LM Studio, any OpenAI-compatible) without `--tokenizer` the
+slack is 0.15 by default (0.3.8); Strata, llama.cpp and ds4 keep 0. `"window_guard": false` restores the 0.3.2
+behaviour.
 
 Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
 history.
@@ -500,6 +513,20 @@ engine. The proxy's own:
 | `GET /v1/strata/journal` | the last 200 journal events |
 
 ## Tested combinations
+
+**0.3.8, Ollama and LM Studio: window read from the engine** (2026-10-19): same machine, engines and model as the
+0.3.7 run below (Ollama with the integrated GPU, `OLLAMA_IGPU_ENABLE=1`, context set with `OLLAMA_CONTEXT_LENGTH`;
+LM Studio `lms load … [--context-length 32768]`), no `--tokenizer`. Report: `docs/dev-notes/ENGINE-WINDOW-038-RESULT.md`.
+
+| test | Ollama | LM Studio |
+|---|---|---|
+| context read by the proxy (`/api/ps`, `/api/v0/models`) | 4096, 32768 | 8192, 32768 |
+| small context, `check` without config / with `window` 32768; proxy start | NOT READY: 4096 < 16384 / also "config window=32768 > Ollama context 4096"; start refused | same with 8192 |
+| small context, proxy allowed below the minimum (development switch), prompts of 5.4K and 10.8K estimated | window 4096: segment switches, 0.97K / 0.93K sent, codeword right, nothing cut | window 8192: 6.0K and 1.1K sent, notes 6.5K, codeword right, nothing cut |
+| forced cut: engine hidden behind a plain `/v1` forwarder, config `window` 32768 | `engine_truncated` ×2 (11.2K counted → 3.7K read; 22.0K → 3.2K), 1 warning; `check --live` fails ("request (29473 tokens) exceeds … 4096") | ×2 (11.2K → 3.8K; 22.0K → 3.2K), 1 warning; `check --live` fails (… 8192) |
+| context 32768: `check --live` full-window probe | 29,473 tokens sent, 29,473 read | 29,473 / 29,473 |
+| context 32768: the notes request that 0.3.7 cut (prompt ≈ 35.7K real) | 21 of 28 messages kept, notes request 27.7K real tokens, not cut; codeword right | 27.7K, not cut; codeword right |
+| context 32768, no `window` in the config: tool conversation (12 files) | — | 21 requests all 200, 19/19 valid tool calls, 1 mask (21.8K → 7.3K), 1 `recall` served, 0 `engine_truncated` |
 
 **0.3.7, Ollama and LM Studio** (2026-10-19): Linux, Ryzen AI Max+ 395 (Radeon 8060S integrated GPU, Vulkan), both
 engines installed in user space (Ollama 0.40.6 official tarball; LM Studio headless `llmster` 0.0.25 with its
@@ -971,7 +998,8 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 
 | field | default | meaning | recommended |
 |---|---|---|---|
-| `window` | 131072 | physical context of the engine (llama-server: taken from `n_ctx` if unset) | 131072 |
+| `window` | 131072 | physical context of the engine (llama-server, ds4, Strata, Ollama, LM Studio: taken from the engine if unset; Ollama / LM Studio: a bigger value refuses the start) | 131072 |
+| `window_margin`, `window_estimate_slack` | 64, 0 (0.15 on generic engines without `--tokenizer`) | window guard: tokens kept free; inflation of the estimated prompt count | default |
 | `mask_trigger` / `mask_target` | 80000 / 40000 | start a masking block above trigger, mask oldest-first down to target | default |
 | `min_batch_tokens` | 16000 | a block runs only if it frees at least this much | default |
 | `keep_recent_tokens` / `min_age_turns` | 16000 / 2 | protected tail, never masked | default |

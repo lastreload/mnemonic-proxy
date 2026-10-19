@@ -146,7 +146,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
             "" if eng.kind != "openai" or cfg.engine != "auto" else
-            "llama-server, Strata and ds4-server are recognised; anything else runs in base mode (no saved state)")
+            "llama-server, Strata and ds4-server are recognised (Ollama and LM Studio: base mode with the window read "
+            "from the engine); anything else runs in base mode (no saved state)")
     # --- model loaded
     if st_h == 503:
         rep.add(FAIL, "model loaded", "/health answers 503: the engine is still loading the model",
@@ -163,6 +164,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     % (", ".join(map(str, ids[:8])) or "none listed"), "" if ids else "add models to the preset")
         elif ids or eng.model:
             rep.add(OK, "model loaded", "model: %s" % (eng.model or ", ".join(map(str, ids[:3]))))
+            if eng.kind == "openai" and not eng.model and ids:
+                eng.model = ids[0]        # 0.3.8: --live asks a generic engine for a model it has (Ollama: 404 else)
         else:
             rep.add(WARN, "model loaded", "the engine did not list a model (/v1/models %s)" % st_m,
                     "check that the engine has a model loaded")
@@ -271,7 +274,7 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     if live:
         _live(rep, up, eng, cfg)
         if eng.kind == "openai" and not any(
-                i["check"] == "live: generation" and i["status"] == FAIL for i in rep.items):
+                i["check"].startswith("live") and i["status"] == FAIL for i in rep.items):
             _live_full_window(rep, up, eng, cfg, explicit)
     _reminder(rep)
     return rep
@@ -285,7 +288,7 @@ def _live_full_window(rep, up, eng, cfg, explicit):
     after cutting it in silence). The size is calibrated on the engine itself: two short prompts give the tokens per
     line of the filler text and the chat-template overhead, so no tokenizer is needed."""
     w = int(cfg.window if "window" in explicit or not eng.n_ctx else eng.n_ctx)
-    model = (eng.model or "local-model") if getattr(eng, "flavor", None) else "local-model"
+    model = (eng.model or "local-model") if eng.kind == "openai" else "local-model"
 
     def ask(n):
         text = "".join(FILL_LINE % (i, (i * 7919) % 100000) for i in range(n))
@@ -347,7 +350,7 @@ def _live(rep, up, eng, cfg):
                     "not touching the engine; fix saved state first")
             return
     try:
-        lm = (eng.model or "local-model") if getattr(eng, "flavor", None) else "local-model"   # Ollama: real name
+        lm = (eng.model or "local-model") if eng.kind == "openai" else "local-model"   # Ollama: real name
         t0 = time.time()
         r = up.chat({"model": lm, "max_tokens": 16, "temperature": 0,
                      "messages": [{"role": "user", "content": "Reply with the single word: ready"}]})
