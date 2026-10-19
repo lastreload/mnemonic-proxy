@@ -312,17 +312,17 @@ class TestStreamingLoad(ProxyHTTP):
 
     def setUp(self):
         super().setUp()
-        self.rt.load_delay = 1.8
+        self.rt.load_delay = 4.0   # > the client read timeout below (3.0 s): without keep-alive it fails
         self.cfg.router_keepalive_s = 0.3
 
     def test_short_read_timeout_survives_a_slow_load(self):
         lines = self.post_stream("/v1/chat/completions", {"model": "big", "messages": history(2), "tools": TOOLS,
-                                                          "max_tokens": 256, "stream": True}, timeout=1.0)
+                                                          "max_tokens": 256, "stream": True}, timeout=3.0)
         comments = [(t, x) for t, x in lines if x.startswith(":")]
         data = [(t, x) for t, x in lines if x.startswith("data:")]
         self.assertGreaterEqual(len(comments), 3, lines)
         self.assertIn(": loading model big", [x for _, x in comments])
-        self.assertLess(comments[0][0], 1.0, "first sign of life before the client's read timeout")
+        self.assertLess(comments[0][0], 3.0, "first sign of life before the client's read timeout")
         self.assertLess(max(t for t, _ in comments), data[0][0], "comments only before the answer")
         self.assertEqual(data[-1][1], "data: [DONE]")
         self.assertTrue(any('"finish_reason"' in x for _, x in data))
@@ -356,7 +356,7 @@ class TestStreamingLoad(ProxyHTTP):
         s.close()
         ev = self.wait_event("router_client_gone")[-1]
         self.assertEqual(ev["model"], "big")
-        self.assertGreaterEqual(ev["load_s"], 1.7, "the load is waited for before the lock is released")
+        self.assertGreaterEqual(ev["load_s"], 3.9, "the load is waited for before the lock is released")
         self.assertTrue(self.proxy.lock.acquire(timeout=3), "lock released")
         self.proxy.lock.release()
         time.sleep(0.3)
@@ -368,7 +368,7 @@ class TestStreamingLoad(ProxyHTTP):
 
     def test_anthropic_stream_pings_while_loading(self):
         lines = self.post_stream("/v1/messages", {"model": "big", "max_tokens": 256, "stream": True,
-                                                   "messages": [{"role": "user", "content": "ciao"}]}, timeout=1.0)
+                                                   "messages": [{"role": "user", "content": "ciao"}]}, timeout=3.0)
         evs = [x for _, x in lines if x.startswith("event:")]
         self.assertGreaterEqual(evs.count("event: ping"), 3, lines)
         self.assertEqual(evs[-1], "event: message_stop")
@@ -376,7 +376,7 @@ class TestStreamingLoad(ProxyHTTP):
 
     def test_responses_stream_comments_while_loading(self):
         lines = self.post_stream("/v1/responses", {"model": "big", "input": "ciao", "stream": True,
-                                                    "max_output_tokens": 256}, timeout=1.0)
+                                                    "max_output_tokens": 256}, timeout=3.0)
         self.assertIn(": loading model big", [x for _, x in lines])
         self.assertTrue(any("response.completed" in x for _, x in lines), lines)
         self.assertEqual(len(self.rt.chats), 1)

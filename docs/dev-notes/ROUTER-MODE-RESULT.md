@@ -170,7 +170,7 @@ massimo 25,7 GB). Dati: `out/router-fixes-013/ai395/` (cartella di lavoro, fuori
   → errore chiaro, restore rifiutato fra modelli, file sconosciuto, autorestore solo stesso modello, pulizia che non
   tocca i file di altri modelli.
 - Dopo la prova AI395 (+11 test): keep-alive SSE durante un caricamento lento finto (client con timeout di lettura
-  1,0 s e caricamento 1,8 s: riceve i commenti e la risposta; API OpenAI, Anthropic con `ping`, Responses), nessun
+  3,0 s e caricamento 4,0 s: riceve i commenti e la risposta; API OpenAI, Anthropic con `ping`, Responses), nessun
   commento se il modello è già caricato, client staccato durante il caricamento → `router_client_gone`, nessuna
   generazione, lock rilasciato; stima byte/token per modello (prima volta 20000, poi misura del modello ×1,25, mai
   quella di un altro modello) anche nel salto per disco pieno; motivi `router_model_change` / `router_unload` anche
