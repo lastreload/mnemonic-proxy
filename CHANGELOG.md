@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.3.7 — unreleased
+
+- **llama-server in router mode** ([#12](https://github.com/lastreload/mnemonic-proxy/issues/12)): llama-server
+  started without `-m` (several models, loaded and unloaded on demand). Before, the router was taken for a generic
+  OpenAI engine (or, with `engine_tokenize`, every request failed on `/tokenize` without a model): no saved state and
+  the window from the configuration, not from the model — a model loaded with a smaller `ctx-size` got prompts it
+  could not hold (verified on llama.cpp b11723: HTTP 400 `exceed_context_size_error`). Now:
+  - **detection**: `GET /props` says `role: router` and `GET /models` lists models with a `status` → engine
+    `llama.cpp` in router mode (also with `engine: llama.cpp` forced). Nothing is loaded to detect it.
+  - **window per model, before the prompt is built**: at every request the proxy reads `GET /models`; if the model
+    is not loaded (or was reloaded) it reads the n_ctx of its slot with `GET /slots?model=…&autoload=true`, which
+    loads it. Window = that n_ctx (or `window` from the config if it is smaller); unset thresholds scaled as for a
+    single-model llama-server. If the n_ctx cannot be read (model missing, load failed) the request is refused with
+    a clear error — never sent with the config window. An unknown model name is refused too, unless `router_model`
+    names the model to use.
+  - **every call to the model of the request**: chat (internal calls included), `/tokenize` (token counts and their
+    cache per model), `/slots/{id}?action=save|restore` (`"model"` in the body, `autoload=false`).
+  - **saved files bound to their model** (`<data>/router-slot-models.json`): a restore with another model, or of a
+    file the proxy did not save in router mode, is refused (409) before it reaches the engine — llama-server itself
+    restores another model's file without complaining. Autorestore picks only files of the current model; an
+    autosave never prunes another model's file as superseded.
+  - **unload / reload**: the engine state is `model#generation`; a model seen unloaded gets a new generation, so the
+    proxy drops any warm-cache assumption and restores only a file of that same model.
+  - Default path unchanged: Strata, ds4, single-model llama.cpp and generic engines behave exactly as before.
+  - Real run on CPU (llama.cpp b11723, two tiny models with n_ctx 32768 / 16384, one broken): A → B → A → unload A
+    → A, 0 requests over the window, A's file restored only on A. Report: `docs/dev-notes/ROUTER-MODE-RESULT.md`.
+  - Real run on AI395 (Vulkan, Qwen3.6-35B-A3B 64K + Gemma 4 E2B 32K, `--models-max 1`): 23/23 requests served, 0
+    over the window, 19/19 valid tool calls; main 0.3.6 on the same router: 500 on `/tokenize` or 400 from the engine
+    (41134 tokens > 32768). Three issues found there, fixed below.
+  - **streaming while a model loads**: before, the client got the SSE headers and then nothing for the whole load
+    (73 s for qwen from a USB disk: a client with a 60 s read timeout gave up, and the proxy generated the answer
+    anyway). Now, with `stream: true`, an SSE comment `: loading model <id>` (Anthropic API: `ping`) every
+    `router_keepalive_s` (10 s) until the model is loaded and its n_ctx read; the window is still settled before the
+    prompt is built. A keep-alive that cannot be written = client gone: nothing is generated, journal
+    `router_client_gone`, the lock is released when the load ends. Non-stream: unchanged (README: the client's
+    timeout must exceed the load time).
+  - **disk estimate per model before an autosave**: `tokens × bytes/token` of the last save of the same model
+    (`bytes / n_saved`, ×1.25), 20000 until the model has saved once (measured on AI395: qwen 37–73 KB/token, not
+    constant with the length; gemma 7.6–9 KB/token; 20000 was too low for qwen). It is an estimate: a longer prompt
+    can need more per token than the last save (`autosave_min_free_gb` stays as the margin). The `autosave` event
+    carries `est_bytes`, `est_bpt`, `est_from` in router mode only. Single-model engines: unchanged (same 20000,
+    same journal).
+  - **own journal reasons**: state lost through a model change is `router_model_change`, through an unload/reload
+    `router_unload` (was `strata_restart` / `unloaded`); an autorestore in router mode carries the same reason.
+    Non-router paths: unchanged.
+  - Second run on AI395 with these fixes (a9bfb87): stream to qwen not loaded (cold, 73 s load) with client read
+    timeouts of 60 s and 300 s: both got `: loading model qwen` every 10 s (7 comments, first at 10 s) and the answer
+    at 74 s; client gone at 20 s: `router_client_gone`, nothing generated; restore from the same model after an
+    unload (`autorestore`, reason `router_unload`, 23689 tokens, 155 ms; next answer correct, 23689 cached tokens);
+    gemma does not restore qwen's file (`autorestore_other_model`); estimate for qwen's second save 1.08 GB vs
+    0.95 GB written; 0 requests over the window.
+
 ## 0.3.6 — unreleased
 
 - **Fix: the final attempt is not left empty when the model calls `recall` again.** With 0.3.5 a final round of

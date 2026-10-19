@@ -312,7 +312,7 @@ class StreamWriter:
 
     def feed(self, ch):
         self.start()
-        if ch is None:
+        if ch is None or isinstance(ch, str):     # keep-alive (str: SSE comment of the router load, 0.3.7)
             self.event("ping", {})
             return
         if ch.get("error"):

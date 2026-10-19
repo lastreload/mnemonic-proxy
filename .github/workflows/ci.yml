@@ -56,6 +56,12 @@ jobs:
           /tmp/venv/bin/mnemonic-proxy check --json --upstream http://127.0.0.1:18097 --port 18096 \
             --data ./data --config config.llama-server.json > check8k.json || true
           /tmp/venv/bin/python -c "import json; d = json.load(open('check8k.json')); assert not d['ready'] and d['exit_code'] == 1, d"
+          # llama-server router mode (0.3.7): detected, ready, window per model
+          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor router --models big=65536,small=16384 --port 18098 &
+          for i in $(seq 1 50); do curl -sf localhost:18098/health > /dev/null && break; sleep 0.2; done
+          /tmp/venv/bin/mnemonic-proxy check --json --upstream http://127.0.0.1:18098 --port 18096 \
+            --data ./data --config config.llama-server.json > check-router.json || true
+          /tmp/venv/bin/python -c "import json; d = json.load(open('check-router.json')); assert d['ready'] and d['exit_code'] == 0, d; assert any('router mode' in c['evidence'] for c in d['checks']), d"
 
   # PyPI package (0.3.2): sdist + wheel built once, twine check, then the wheel installed in a clean venv on Linux
   # and Windows (pip and uvx). Nothing is uploaded here: publishing is publish.yml, on a GitHub release.

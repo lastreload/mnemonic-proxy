@@ -157,6 +157,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
             loaded = bool(s.get("loaded"))
             rep.add(OK if loaded else FAIL, "model loaded", "Strata /v1/status loaded=%s" % s.get("loaded"),
                     "" if loaded else "load a model in Strata")
+        elif getattr(eng, "router", False):
+            rep.add(OK if ids else WARN, "model loaded", "llama-server router mode: models loaded on demand (%s)"
+                    % (", ".join(map(str, ids[:8])) or "none listed"), "" if ids else "add models to the preset")
         elif ids or eng.model:
             rep.add(OK, "model loaded", "model: %s" % (eng.model or ", ".join(map(str, ids[:3]))))
         else:
@@ -187,6 +190,17 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                         "remove them from the config: unset thresholds scale with n_ctx")
         else:
             rep.add(INFO, "context window", "engine n_ctx=%d, proxy window=%d" % (eng.n_ctx, cfg.window))
+    elif getattr(eng, "router", False):
+        from .router import list_models
+        ms = list_models(up) or []
+        desc = ", ".join("%s %s%s" % (m["id"], (m.get("status") or {}).get("value"),
+                                      " n_ctx=%s" % (m.get("meta") or {}).get("n_ctx") if (m.get("meta") or {}).get(
+                                          "n_ctx") else "") for m in ms[:8])
+        rep.add(INFO, "context window", "llama-server router mode: the window is read from the n_ctx of the requested "
+                "model at every request, before the prompt is built (%s)%s" % (
+                    desc or "no model listed", "; config window=%d is used as an upper bound" % cfg.window
+                    if "window" in explicit else ""),
+                "give each model a ctx-size of at least %d in the preset" % engines.MIN_WINDOW)
     elif eng.kind == "openai":
         rep.add(WARN if "window" not in explicit else OK, "context window",
                 "generic engine: n_ctx unknown, proxy window=%d" % cfg.window,
@@ -236,6 +250,10 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
 
 
 def _live(rep, up, eng, cfg):
+    if getattr(eng, "router", False):
+        rep.add(WARN, "live", "llama-server router mode: --live (real save/restore) is not implemented for the router "
+                "yet", "check the saved state with a real request: the journal shows save/restore per model")
+        return
     up.timeout = 600
     up.set_engine(eng, cfg.slot_dir)
     st = engines.normalize_status(eng, up) or {}

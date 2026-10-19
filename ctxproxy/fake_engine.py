@@ -12,6 +12,9 @@ from __future__ import annotations
 import json
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -313,17 +316,240 @@ class FakeEngine:
             self.srv.server_close()
 
 
+class FakeRouter:
+    """llama-server in router mode (0.3.7, issue #12), as verified on llama.cpp b11723: several models, each one a
+    child FakeEngine(flavor="llama") started on load and stopped on unload (its in-memory state is lost), slot files
+    shared by all models (the real engine restores another model's file without complaining).
+
+    - GET /props without model: the router's own props (role router, n_ctx 0); GET /props|/slots with ?model=;
+      POST bodies carry "model"; missing -> 400 "model name is missing from the request".
+    - autoload: on by default, `?autoload=false` (GET and POST) -> 400 "model is not loaded".
+    - GET /models (= /v1/models): status.value unloaded|loaded, status.args with --ctx-size/--slot-save-path,
+      meta.n_ctx when loaded; `context_length` is the preset value (`preset_ctx`), which can differ from the real slot
+      n_ctx (the real server caps -c to the training context).
+    - POST /models/load|unload {"model"}; `fail` = models whose load fails (status failed, 503 on autoload).
+    - models_max: loading one more model unloads the least recently used one.
+    """
+
+    def __init__(self, models: dict, slot_save: bool = True, cpt: float = 3.5, policy=None, preset_ctx=None,
+                 fail=(), models_max: int = 0, strict_window: bool = False, counter=None):
+        self.n_ctx = dict(models)                 # model id -> real slot n_ctx
+        self.preset_ctx = dict(preset_ctx or models)
+        self.slot_save, self.cpt, self.policy = slot_save, cpt, policy
+        self.fail, self.models_max = set(fail), models_max
+        self.strict_window, self.counter = strict_window, counter
+        self.children: dict[str, FakeEngine] = {}
+        self.urls: dict[str, str] = {}
+        self.failed: set = set()
+        self.files: dict[str, str] = {}           # shared slot directory
+        self.saved_by: dict[str, str] = {}        # file -> model that saved it (engine side)
+        self.restores: list = []                  # (model, file, saved_by)
+        self.loads: list = []                     # models loaded, in order
+        self.calls: list = []                     # (method, path, model)
+        self.chats: list = []                     # (model, body)
+        self.lru: list = []
+        self.load_delay: float | dict = 0         # seconds per load (or model -> seconds), see load()
+        self.loading: set = set()
+        self.bytes_per_token: dict = {}           # model -> n_written per saved token (default: the child's own)
+        self.srv = None
+        self.mu = threading.RLock()
+
+    # ---- model lifecycle ----
+    def load(self, mid: str) -> str | None:
+        """-> error message or None. `load_delay` = seconds a load takes (status "loading" meanwhile)."""
+        with self.mu:
+            if mid in self.children:
+                return None
+            if mid in self.fail:
+                self.failed.add(mid)
+                return "model %s failed to load" % mid
+            delay = self.load_delay.get(mid, 0) if isinstance(self.load_delay, dict) else self.load_delay
+            if delay:
+                self.loading.add(mid)
+        if delay:
+            time.sleep(delay)
+        with self.mu:
+            self.loading.discard(mid)
+            if mid in self.children:
+                return None
+            if self.models_max and len(self.children) >= self.models_max:
+                self.unload(self.lru[0])
+            ch = FakeEngine(policy=self.policy, cpt=self.cpt, flavor="llama", slot_save=self.slot_save,
+                            n_ctx=self.n_ctx[mid])
+            ch.files = self.files
+            ch.strict_window, ch.counter = self.strict_window, self.counter
+            self.urls[mid] = ch.start(0)
+            self.children[mid] = ch
+            self.failed.discard(mid)
+            self.loads.append(mid)
+            self.lru.append(mid)
+            return None
+
+    def unload(self, mid: str) -> bool:
+        with self.mu:
+            ch = self.children.pop(mid, None)
+            if ch is None:
+                return False
+            ch.stop()
+            self.urls.pop(mid, None)
+            if mid in self.lru:
+                self.lru.remove(mid)
+            return True
+
+    def touch(self, mid: str):
+        with self.mu:
+            if mid in self.lru:
+                self.lru.remove(mid)
+                self.lru.append(mid)
+
+    def entry(self, mid: str) -> dict:
+        args = ["llama-server", "--port", "0", "--alias", mid, "--ctx-size", str(self.preset_ctx[mid]),
+                "--parallel", "1"] + (["--slot-save-path", "/slots"] if self.slot_save else [])
+        st = {"value": "loaded" if mid in self.children else "loading" if mid in self.loading else "unloaded",
+              "args": args}
+        if mid in self.failed:
+            st.update(failed=True, exit_code=1)
+        e = {"id": mid, "aliases": [], "object": "model", "owned_by": "llamacpp", "status": st,
+             "context_length": self.preset_ctx[mid]}
+        if mid in self.children:
+            e["meta"] = {"n_ctx": self.n_ctx[mid], "n_ctx_train": self.n_ctx[mid]}
+        return e
+
+    def start(self, port: int = 0):
+        rt = self
+
+        class H(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *a):
+                pass
+
+            def _send(self, st, obj, ctype="application/json"):
+                d = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
+                self.send_response(st)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(d)))
+                self.end_headers()
+                self.wfile.write(d)
+
+            def _err(self, st, msg):
+                return self._send(st, {"error": {"code": st, "message": msg, "type": "invalid_request_error"}})
+
+            def _route(self, method, path, query, model, body: bytes | None):
+                rt.calls.append((method, path, model))
+                if not model:
+                    return self._err(400, "model name is missing from the request")
+                if model not in rt.n_ctx:
+                    return self._err(400, "model '%s' not found" % model)
+                if model not in rt.children:
+                    if (query.get("autoload") or ["true"])[0] == "false":
+                        return self._err(400, "model is not loaded")
+                    err = rt.load(model)
+                    if err:
+                        return self._send(503, {"error": {"code": 503, "message": err, "type": "unavailable_error"}})
+                rt.touch(model)
+                if method == "POST" and path.startswith("/slots/"):
+                    action = (query.get("action") or [""])[0]
+                    fn = json.loads(body or b"{}").get("filename")
+                    if action == "save":
+                        rt.saved_by[fn] = model
+                    elif action == "restore" and fn in rt.files:
+                        rt.restores.append((model, fn, rt.saved_by.get(fn)))
+                if method == "POST" and path.startswith("/v1/chat"):
+                    rt.chats.append((model, json.loads(body or b"{}")))
+                q = [(k, v) for k, vs in query.items() for v in vs if k not in ("model", "autoload")]
+                url = rt.urls[model] + path + ("?" + urllib.parse.urlencode(q) if q else "")
+                req = urllib.request.Request(url, data=body, method=method,
+                                             headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=60) as r:
+                        st, ctype, data = r.status, r.headers.get("Content-Type") or "application/json", r.read()
+                except urllib.error.HTTPError as e:
+                    st, ctype, data = e.code, "application/json", e.read()
+                if method == "POST" and path.startswith("/slots/") and st == 200 \
+                        and (query.get("action") or [""])[0] == "save" and model in rt.bytes_per_token:
+                    d = json.loads(data)
+                    d["n_written"] = int(d.get("n_saved") or 0) * rt.bytes_per_token[model]
+                    data = json.dumps(d).encode()
+                self.send_response(st)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                if ctype.startswith("text/event-stream"):
+                    self.send_header("Connection", "close")
+                    self.close_connection = True
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                u = urllib.parse.urlsplit(self.path)
+                query = urllib.parse.parse_qs(u.query)
+                model = (query.get("model") or [None])[0]
+                if u.path == "/health":
+                    return self._send(200, {"status": "ok"})
+                if u.path in ("/models", "/v1/models"):
+                    with rt.mu:
+                        return self._send(200, {"object": "list", "data": [rt.entry(m) for m in rt.n_ctx]})
+                if u.path == "/props" and not model:
+                    return self._send(200, {"role": "router", "max_instances": rt.models_max or 4,
+                                            "models_autoload": True, "model_alias": "llama-server",
+                                            "model_path": "none",
+                                            "default_generation_settings": {"params": None, "n_ctx": 0}})
+                if u.path in ("/props", "/slots", "/metrics"):
+                    return self._route("GET", u.path, query, model, None)
+                return self._err(404, "File Not Found")
+
+            def do_POST(self):
+                u = urllib.parse.urlsplit(self.path)
+                query = urllib.parse.parse_qs(u.query)
+                n = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(n) if n else b""
+                try:
+                    body = json.loads(raw or b"{}")
+                except ValueError:
+                    body = {}
+                model = body.get("model") if isinstance(body, dict) else None
+                if u.path == "/models/load":
+                    if model not in rt.n_ctx:
+                        return self._send(404, {"error": {"code": 404, "message": "File Not Found"}})
+                    if model in rt.children:
+                        return self._err(400, "model is already running")
+                    err = rt.load(model)
+                    return self._send(200, {"success": True}) if not err else self._err(500, err)
+                if u.path == "/models/unload":
+                    return self._send(200, {"success": True}) if rt.unload(model) else \
+                        self._err(400, "model is not running")
+                return self._route("POST", u.path, query, model, raw)
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        return "http://127.0.0.1:%d" % self.srv.server_address[1]
+
+    def stop(self):
+        for m in list(self.children):
+            self.unload(m)
+        if self.srv:
+            self.srv.shutdown()
+            self.srv.server_close()
+
+
 if __name__ == "__main__":
     # Stand-alone fake engine for smoke tests:  python3 -m ctxproxy.fake_engine --port 18095
     import argparse
     ap = argparse.ArgumentParser(description="fake OpenAI-compatible engine (Strata stand-in) for smoke tests")
     ap.add_argument("--port", type=int, default=18095)
-    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai"], default="strata",
-                    help="engine to imitate (llama = llama-server with --slot-save-path)")
+    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai", "router"], default="strata",
+                    help="engine to imitate (llama = llama-server with --slot-save-path; router = llama-server in "
+                         "router mode, see --models)")
     ap.add_argument("--n-ctx", type=int, default=131072)
+    ap.add_argument("--models", default="big=65536,small=16384",
+                    help="router flavor: model=n_ctx,... (each model a llama-server, loaded on demand)")
     ap.add_argument("--no-slot-save", action="store_true", help="llama flavor: as if started without --slot-save-path")
     a = ap.parse_args()
-    url = FakeEngine(flavor=a.flavor, n_ctx=a.n_ctx, slot_save=not a.no_slot_save).start(a.port)
+    if a.flavor == "router":
+        ms = {k: int(v) for k, v in (p.split("=", 1) for p in a.models.split(",") if p)}
+        url = FakeRouter(ms, slot_save=not a.no_slot_save).start(a.port)
+    else:
+        url = FakeEngine(flavor=a.flavor, n_ctx=a.n_ctx, slot_save=not a.no_slot_save).start(a.port)
     print("[fake-engine] listening on %s" % url, flush=True)
     try:
         while True:

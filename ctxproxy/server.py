@@ -52,6 +52,14 @@ class ClientGone(Exception):
     """Il client ha chiuso la connessione durante lo stream."""
 
 
+class Comment(str):
+    """emit(Comment(text)): an SSE comment line (`: text`) for the client, like emit(None) but with a reason
+    (0.3.7 router mode: `loading model <id>` while the model loads). Clients ignore it."""
+
+    def __new__(cls, text):
+        return super().__new__(cls, " ".join(str(text).split()))
+
+
 class Proxy:
     def __init__(self, cfg: Config, upstream: Upstream, store: Store, journal: Journal, counter: TokenCounter,
                  mode: str = "tools"):
@@ -83,22 +91,84 @@ class Proxy:
     def chat(self, req: dict, hint: str | None = None, emit=None) -> tuple[int, dict, dict]:
         """-> (status, corpo risposta non-stream, header extra). Con `emit` (callable(chunk_dict|None)) la risposta
         viene anche trasmessa in streaming chunk per chunk; None = keep-alive."""
+        router = getattr(self.engine or getattr(self.up, "engine", None), "router_state", None)
+        if router is not None:
+            # 0.3.7 router mode: model, n_ctx and window are settled before anything is built or sent
+            with self.lock:
+                err = self._router_select(router, req, emit)
+                if err is not None:
+                    return err
+                return self._chat_off(req, emit) if self.mode == "off" else self._chat_managed(req, hint, emit)
         if self.mode == "off":
-            t0 = time.time()
-            try:
-                r = self._round(req, emit, None) if emit else self.up.chat(req)
-            except UpstreamError as e:
-                return e.status, _err_body(e), {}
-            self._log_request("off", None, r, t0, 0, 0)
-            if emit:
-                r.pop("_sent_content", None)
-                r.pop("_sent_reasoning", None)
-                fin = {k: r.get(k) for k in ("id", "created", "model")}
-                emit({**fin, "object": "chat.completion.chunk", "usage": r.get("usage"), "timings": r.get("timings"),
-                      "choices": [{"index": 0, "delta": {}, "finish_reason": r["choices"][0].get("finish_reason")}]})
-            return 200, r, {}
+            return self._chat_off(req, emit)
         with self.lock:
             return self._chat_managed(req, hint, emit)
+
+    def _router_select(self, router, req: dict, emit=None):
+        from .router import RouterError
+        try:
+            if emit is None:
+                router.select(req)
+            else:
+                self._router_select_alive(router, req, emit)
+        except RouterError as e:
+            self.journal.log("router_refused", model=req.get("model"), status=e.status, error=e.message[:300])
+            return e.status, {"error": {"message": e.message, "type": "router_error", "code": e.status}}, {}
+        return None
+
+    def _router_select_alive(self, router, req: dict, emit):
+        """Streaming: select() (which may load the model: 70+ s from a slow disk) runs in a thread while this one
+        sends `: loading model <id>` every `router_keepalive_s`, so a client with a read timeout does not give up.
+        The window is still settled before anything is built. A keep-alive that cannot be written = the client is
+        gone: nothing is generated; the thread is joined first (the load itself cannot be stopped and the router
+        state must be settled before the lock is released), then ClientGone."""
+        from .router import KEEPALIVE_S
+        box: dict = {}
+
+        def run():
+            try:
+                router.select(req)
+            except BaseException as e:  # noqa: BLE001
+                box["e"] = e
+        t0 = time.time()
+        t = threading.Thread(target=run, daemon=True, name="router-select")
+        t.start()
+        every = float(getattr(self.cfg, "router_keepalive_s", KEEPALIVE_S) or KEEPALIVE_S)
+        sent, model = 0, None
+        while True:
+            t.join(every)
+            if not t.is_alive():
+                break
+            model = router.loading or model or req.get("model")
+            try:
+                emit(Comment("loading model %s" % model))
+                sent += 1
+            except ClientGone:
+                waited = round(time.time() - t0, 1)
+                t.join()
+                self.journal.log("router_client_gone", model=model, waited_s=waited, keepalives=sent,
+                                 load_s=round(time.time() - t0, 1), error=str(box.get("e") or "")[:200] or None)
+                raise
+        if sent:
+            self.journal.log("router_load_keepalive", model=model, keepalives=sent, s=round(time.time() - t0, 1))
+        if "e" in box:
+            raise box["e"]
+
+    def _chat_off(self, req: dict, emit=None):
+        """mode off: plain pass-through (one round, no prompt management)."""
+        t0 = time.time()
+        try:
+            r = self._round(req, emit, None) if emit else self.up.chat(req)
+        except UpstreamError as e:
+            return e.status, _err_body(e), {}
+        self._log_request("off", None, r, t0, 0, 0)
+        if emit:
+            r.pop("_sent_content", None)
+            r.pop("_sent_reasoning", None)
+            fin = {k: r.get(k) for k in ("id", "created", "model")}
+            emit({**fin, "object": "chat.completion.chunk", "usage": r.get("usage"), "timings": r.get("timings"),
+                  "choices": [{"index": 0, "delta": {}, "finish_reason": r["choices"][0].get("finish_reason")}]})
+        return 200, r, {}
 
     def _prepare(self, req, hint, emit):
         """prepare() può durare (pacchetto mask + ancora, switch con note): in streaming tiene viva la connessione."""
@@ -1150,6 +1220,8 @@ def make_handler(proxy: Proxy):
                     with wlock:
                         if obj is None:
                             self.wfile.write(b": keep-alive\n\n")
+                        elif isinstance(obj, str):
+                            self.wfile.write(b": " + obj.encode("utf-8") + b"\n\n")
                         else:
                             self.wfile.write(b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8") + b"\n\n")
                         self.wfile.flush()
@@ -1252,6 +1324,10 @@ def main(argv=None):
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, flush=True))
     small = window_problems(cfg, engine, set(raw_cfg))
+    if engine.router_state is not None:
+        # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
+        from .router import OWNERS_FILE, SlotOwners
+        engine.router_state.owners = SlotOwners(os.path.join(os.path.abspath(a.data), OWNERS_FILE))
     if small:
         journal.log("refused_small_window", problems=[e for e, _ in small])
         raise SystemExit("mnemonic-proxy: refusing to start, the context window is too small.\n" + "\n".join(
@@ -1269,9 +1345,10 @@ def main(argv=None):
         enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
     srv.daemon_threads = True
-    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%d tokens=%s anchor=%s" % (
-        a.host, a.port, a.upstream, engine.kind, "yes" if engine.slot_save else "no", a.mode, cfg.window,
-        proxy.tc.kind, cfg.mask_anchor), flush=True)
+    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
+        a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
+        "yes" if engine.slot_save else "no", a.mode,
+        "per model (n_ctx)" if engine.router else cfg.window, proxy.tc.kind, cfg.mask_anchor), flush=True)
     srv.serve_forever()
 
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+from typing import Any
 
 KINDS = ("strata", "llama.cpp", "ds4", "openai")
 ALIASES = {"llama": "llama.cpp", "llamacpp": "llama.cpp", "llama-server": "llama.cpp", "llama_cpp": "llama.cpp",
@@ -97,6 +98,8 @@ class Engine:
     model: str | None = None
     detected: bool = False                # True = rilevato dagli endpoint, False = forzato/di serie
     notes: list = dataclasses.field(default_factory=list)
+    router: bool = False                  # 0.3.7: llama-server in router mode (router.py)
+    router_state: Any = dataclasses.field(default=None, repr=False, compare=False)   # router.Router
 
     # il contatore richieste di llama-server (id_task) cresce di più di 1 per richiesta: va riletto dopo
     @property
@@ -104,9 +107,12 @@ class Engine:
         return self.status_kind == "llama.cpp"
 
     def summary(self) -> dict:
-        return {"kind": self.kind, "slot_save": self.slot_save, "slot_id": self.slot_id, "status": self.status_kind,
-                "tokenize": self.tokenize, "n_ctx": self.n_ctx, "model": self.model, "detected": self.detected,
-                "notes": self.notes}
+        d = {"kind": self.kind, "slot_save": self.slot_save, "slot_id": self.slot_id, "status": self.status_kind,
+             "tokenize": self.tokenize, "n_ctx": self.n_ctx, "model": self.model, "detected": self.detected,
+             "notes": self.notes}
+        if self.router:            # only in router mode: the other engines keep their summary unchanged
+            d["router"] = self.router_state.summary() if self.router_state is not None else True
+        return d
 
 
 def norm_kind(k: str | None) -> str:
@@ -173,6 +179,10 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
             e.notes.append("/v1/models non risponde come ds4-server (motore spento o non raggiungibile)")
         return e
     props = _get_json(up, "/props") if kind in ("auto", "llama.cpp") else None
+    if kind in ("auto", "llama.cpp") and isinstance(props, dict):
+        from .router import detect_router, is_router_props, list_models
+        if is_router_props(props) and list_models(up) is not None:
+            return detect_router(up, slot_id, detected=kind == "auto")
     if kind == "llama.cpp" or (kind == "auto" and isinstance(props, dict) and "default_generation_settings" in props):
         e = Engine("llama.cpp", slot_save=False, slot_id=slot_id, status_kind="llama.cpp", tokenize=True,
                    detected=kind == "auto")
@@ -206,6 +216,22 @@ def normalize_status(engine: Engine | None, up) -> dict | None:
     """Stato del motore nella forma di /v1/status di Strata (la usano Tracker e Archiver)."""
     if engine is None or engine.status_kind == "strata":
         return _get_json(up, "/v1/status")
+    if engine.status_kind == "llama.cpp" and engine.router:
+        # router: the slot of the current model, without loading it (autoload=false). Not loaded -> loaded False;
+        # started = model + load generation, so a model switch or a reload drops the "warm cache" state
+        r, m = engine.router_state, getattr(up, "router_model", None)
+        if r is None or not m:
+            return None
+        from .router import q
+        slots = _get_json(up, "/slots?model=%s&autoload=false" % q(m))
+        mine = next((x for x in slots if isinstance(x, dict) and x.get("id") == engine.slot_id), None) \
+            if isinstance(slots, list) else None
+        if mine is None:
+            return {"service": "llama.cpp", "loaded": False, "started": r.started(m),
+                    "activity": {"requests": None, "in_flight": 0, "n_prompt_tokens": None}}
+        return {"service": "llama.cpp", "loaded": True, "started": r.started(m),
+                "activity": {"requests": mine.get("id_task"), "in_flight": int(bool(mine.get("is_processing"))),
+                             "n_prompt_tokens": mine.get("n_prompt_tokens")}}
     if engine.status_kind == "llama.cpp":
         slots = _get_json(up, "/slots")
         if not isinstance(slots, list):
@@ -278,6 +304,12 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engi
     if hasattr(up, "set_engine"):
         up.set_engine(eng, getattr(cfg, "slot_dir", "") or "")
     apply(cfg, eng, journal, explicit, log)
+    if eng.router:
+        from .router import OWNERS_FILE, Router
+        dd = getattr(cfg, "data_dir", "") or ""
+        eng.router_state = Router(up, cfg, eng, journal, counter, explicit,
+                                  os.path.join(dd, OWNERS_FILE) if dd else "")
+        up.router = eng.router_state
     if counter is not None and getattr(cfg, "engine_tokenize", False) and eng.tokenize and not counter.exact:
         counter.tk = RemoteTokenizer(up)
         counter.kind = "esatto:/tokenize"
@@ -296,8 +328,11 @@ class RemoteTokenizer:
         self.up = up
 
     def encode(self, text, add_special_tokens=False):
-        st, _, data = self.up.raw("POST", "/tokenize", json.dumps({"content": text, "add_special": bool(
-            add_special_tokens)}, ensure_ascii=False).encode("utf-8"))
+        body = {"content": text, "add_special": bool(add_special_tokens)}
+        m = getattr(self.up, "router_model", None)
+        if m:                      # router mode: the tokenizer of the current model
+            body["model"] = m
+        st, _, data = self.up.raw("POST", "/tokenize", json.dumps(body, ensure_ascii=False).encode("utf-8"))
         if st != 200:
             raise RuntimeError("tokenize HTTP %d" % st)
         return self._Enc(json.loads(data).get("tokens") or [])
