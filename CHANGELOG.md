@@ -51,6 +51,16 @@
     unload (`autorestore`, reason `router_unload`, 23689 tokens, 155 ms; next answer correct, 23689 cached tokens);
     gemma does not restore qwen's file (`autorestore_other_model`); estimate for qwen's second save 1.08 GB vs
     0.95 GB written; 0 requests over the window.
+- **Docs**: the README starts with a short **Install** section (`#install`): one table engine → engine command →
+  example config (Strata with and without saved state, llama-server, router mode, ds4-server, Ollama / LM Studio
+  marked "not tested yet", any OpenAI-compatible server), one table agent → base URL → what to turn off, and the
+  OS. The benchmark and measurement sections moved after Quick start / Uninstall, unchanged; every heading (and so
+  every link anchor) is kept. New examples: `examples/config.llama-server-router.json` +
+  `examples/preset.router.example.ini` (router mode) and `examples/config.openai-32k.json` (base mode at 32K: the
+  proxy cannot read the window from a generic engine, these are the thresholds it uses itself at 32K); `check`
+  READY on each against the fake engine, and the preset parsed by llama-server b11723 in router mode. The line
+  "0.1.40 has not been re-measured" now says what was run on 0.1.40 (AgentLongBench, recall tests) and what was not
+  (restore times). Project page: router mode and a link to Install.
 
 ## 0.3.6 — unreleased
 

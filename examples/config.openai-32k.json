@@ -1,0 +1,16 @@
+{
+  "window": 32768,
+  "mask_trigger": 20000,
+  "mask_target": 10000,
+  "keep_recent_tokens": 4000,
+  "min_batch_tokens": 4000,
+  "tail_max": 6000,
+  "reserve": 2048,
+  "default_response": 4096,
+  "notes_max_tokens": 2048,
+  "pins_max_tokens": 2048,
+  "recall_max_tokens": 1500,
+  "recall_struct_max_tokens": 1024,
+  "auto_recall_max_tokens": 1000,
+  "mask_tool_args": true
+}

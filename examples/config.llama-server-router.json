@@ -1,0 +1,12 @@
+{
+  "slot_dir": "./slots",
+  "slot_save": true,
+  "mask_anchor": true,
+  "autosave": true,
+  "autosave_idle_s": 60,
+  "mask_tool_args": true,
+  "engine_tokenize": true,
+  "router_model": "",
+  "router_load_timeout_s": 600,
+  "router_keepalive_s": 10
+}
