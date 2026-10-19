@@ -65,7 +65,7 @@ save folder:
 | llama-server | `llama-server -m model.gguf -c 32768 --parallel 1 --jinja --slot-save-path ./slots --port 8095` | `config.llama-server.json` | yes |
 | llama-server, router mode (several models) | `llama-server --models-preset preset.ini --models-max 1 --port 8095`; preset: `[*]` with `slot-save-path` and `parallel = 1`, a `ctx-size` (`c`) ≥ 16384 per model | `config.llama-server-router.json` + `preset.router.example.ini` | yes, per model |
 | ds4-server | `ds4-server -m MODEL.gguf --ctx 65536 --kv-disk-dir ./kv --port 8110` | `config.ds4.json` | kept by ds4 itself |
-| Ollama, LM Studio | **not tested yet**, see below | `config.openai-32k.json` | no (base mode) |
+| Ollama, LM Studio | engine context set to 32768 (see below); proxy with `--tokenizer` | `config.openai-32k.json` | no (base mode) |
 | any OpenAI-compatible (vLLM, online APIs) | — | `config.openai-32k.json` at 32K; at 131072 none is needed (the defaults are for 131072) | no (base mode) |
 
 The proxy reads the window from Strata, llama-server (`n_ctx`, per model in router mode) and ds4-server
@@ -74,13 +74,22 @@ set 131072: change it if Strata runs with another window). From any other engine
 is used as it is (131072 when missing), so write the engine's real context there; `config.openai-32k.json` has
 the thresholds the proxy itself uses at 32K. Details per engine: [Engines](#engines).
 
-**Ollama and LM Studio: not tested yet.** Both serve an OpenAI-compatible API (Ollama `http://127.0.0.1:11434/v1`,
-LM Studio `http://127.0.0.1:1234/v1`; `--upstream` is the same address without `/v1`), so the proxy should run in
-base mode: masking, archive and `recall`, no saved state. Set the engine's context to at least 32768 and use the same
-value as `window`, otherwise the engine may silently truncate the prompt. Ollama: `OLLAMA_CONTEXT_LENGTH=32768 ollama
-serve`, the context slider in the app, or `PARAMETER num_ctx 32768` in a Modelfile; `ollama ps` shows the context in
-use. LM Studio: `lms load <model> --context-length 32768`, then `lms server start`. A report helps
-([User reports](#user-reports)).
+**Ollama and LM Studio** (tested on Linux, small model, details in [Tested combinations](#tested-combinations)). Both
+serve an OpenAI-compatible API (Ollama `http://127.0.0.1:11434/v1`, LM Studio `http://127.0.0.1:1234/v1`;
+`--upstream` is the same address without `/v1`) and the proxy runs in base mode: masking, archive, `recall`, segment
+switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no saved state. Three things to know:
+- **Set the engine's context yourself, and write the same value as `window`.** The proxy cannot read it from these
+  engines, and `check` says `READY` whatever it is. With their defaults on our machine (Ollama 4096 on CPU; LM Studio
+  8192) both answered HTTP 200 to longer prompts after dropping part of them, without telling the client: Ollama
+  dropped the oldest messages, LM Studio kept the beginning and the end and dropped the middle.
+  Ollama: `OLLAMA_CONTEXT_LENGTH=32768 ollama serve`; `ollama ps` shows the context in use (column `CONTEXT`).
+  LM Studio: `lms load <model> --context-length 32768`, then `lms server start`; `lms ps` shows it.
+- **Start the proxy with `--tokenizer`** pointing at the model's `tokenizer.json` (`pip install
+  'mnemonic-proxy[exact]'`). Without it the proxy estimates chars/3.5: the notes request it sends at a segment switch
+  was estimated at 31.3K tokens but was 33.4K real tokens, and both engines cut it without an error. With the
+  tokenizer (tried on LM Studio) the same request was 30.8K tokens and nothing was cut.
+- Ollama ignores an integrated GPU by default and runs on the CPU (much slower); `OLLAMA_IGPU_ENABLE=1` makes it use
+  it. With it, Ollama chose a default context of 262144 from the shared memory: set `OLLAMA_CONTEXT_LENGTH` anyway.
 
 **Your agent.** Turn off the agent's own auto-compaction, otherwise two context managers fight over the same history:
 
@@ -491,6 +500,26 @@ engine. The proxy's own:
 | `GET /v1/strata/journal` | the last 200 journal events |
 
 ## Tested combinations
+
+**0.3.7, Ollama and LM Studio** (2026-10-19): Linux, Ryzen AI Max+ 395 (Radeon 8060S integrated GPU, Vulkan), both
+engines installed in user space (Ollama 0.40.6 official tarball; LM Studio headless `llmster` 0.0.25 with its
+llama.cpp Vulkan runtime 2.41.0), same model in both: Qwen3-4B-Instruct-2507 Q4_K_M. Proxy from `main` with
+`config.openai-32k.json`, one request at a time from a small Python client (no agent).
+
+| test | Ollama | LM Studio |
+|---|---|---|
+| `check` | `READY` (exit 0); without a config `READY with warnings`: window unknown, 131072 | `READY` (exit 0) |
+| engine context by default | 4096 (CPU; with `OLLAMA_IGPU_ENABLE=1`: 262144) | 8192 |
+| longer prompts at the default context (Ollama ≈ 6–36K real tokens, LM Studio ≈ 8.6–21K), straight to the engine and through the proxy | HTTP 200, prompt cut to 2.7–3.7K tokens, a codeword from the first message lost | HTTP 200, prompt cut to 2.7–3.8K tokens, beginning and end kept |
+| engine context 32768: tool conversation over 12 files (`list_files`, `read_file`, `calc`) | 23 requests, all 200; 21 tool calls, all valid; 1 mask (prompt 19.4K → 7.4K); largest prompt 19.4K; nothing cut | 23 requests, all 200; 21 tool calls, all valid; 1 mask (19.3K → 7.3K); largest prompt 21.3K; nothing cut |
+| engine context 32768: one prompt of ≈ 35.7K real tokens | straight: cut to 29.8K, codeword lost; proxy: segment switch, 6.3K sent, codeword right | straight: cut to 14.8K; proxy: segment switch, 6.2K sent, codeword right |
+| the proxy's own notes request at that switch (no `--tokenizer`) | estimated 31.3K, cut by the engine to 30.5K | estimated 31.3K, real 33.4K, cut to 15.1K; with `--tokenizer`: 30.8K, not cut |
+| streaming, `/v1/messages`, `/v1/responses` | streamed (11 chunks), 200, 200 | streamed (11 chunks), 200, 200 |
+
+The model stopped before reading every file (10 of 12 on Ollama, 11 of 12 on LM Studio; the sums it made were right
+for the files it read) and, asked about a file that was still in view, called `recall` for the wrong piece and said
+it could not quote it: the proxy served the piece the model asked for. These are limits of the 4B model, not of the
+engines.
 
 **0.3.0, engine `-c 32768`** (2026-10-06): T1 run as written above, on the CPU of a Ryzen 7 5700G (16 threads, no
 GPU, llama-server at `nice 19`), in a fresh folder with its own `HOME`: llama.cpp `b11430` CPU build, pi 1.0.3,

@@ -61,6 +61,12 @@
   READY on each against the fake engine, and the preset parsed by llama-server b11723 in router mode. The line
   "0.1.40 has not been re-measured" now says what was run on 0.1.40 (AgentLongBench, recall tests) and what was not
   (restore times). Project page: router mode and a link to Install.
+- **Docs: Ollama and LM Studio tested** (Ollama 0.40.6, LM Studio `llmster` 0.0.25, Qwen3-4B-Instruct-2507 Q4_K_M,
+  Linux): base mode works (masking, `recall`, segment switch, tool calls, streaming, Anthropic and Responses APIs)
+  with the engine's context set to 32768 and `config.openai-32k.json`. With their default context (4096 and 8192 on
+  the test machine) both engines cut longer prompts silently (HTTP 200); without `--tokenizer` the proxy's own notes
+  request at a segment switch went past 32768 real tokens and was cut too. Install section and Tested combinations
+  updated; no code change.
 
 ## 0.3.6 — unreleased
 
