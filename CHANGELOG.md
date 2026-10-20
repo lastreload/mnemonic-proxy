@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.8 — unreleased
+## 0.3.8 — 2026-10-19
 
 - **Ollama and LM Studio: the window is read from the engine** (`ctxproxy/enginectx.py`). Both run in base mode and
   both cut an over-long prompt in silence (HTTP 200): with 0.3.7 the proxy used the config `window` (or 131072) and
@@ -30,7 +30,7 @@
 - Real run on AI395 (Ollama 0.40.6, LM Studio llmster 0.0.25, Qwen3-4B-Instruct-2507 Q4_K_M):
   `docs/dev-notes/ENGINE-WINDOW-038-RESULT.md`.
 
-## 0.3.7 — unreleased
+## 0.3.7 — not released separately (in 0.3.8)
 
 - **llama-server in router mode** ([#12](https://github.com/lastreload/mnemonic-proxy/issues/12)): llama-server
   started without `-m` (several models, loaded and unloaded on demand). Before, the router was taken for a generic
@@ -98,7 +98,7 @@
   request at a segment switch went past 32768 real tokens and was cut too. Install section and Tested combinations
   updated; no code change.
 
-## 0.3.6 — unreleased
+## 0.3.6 — not released separately (in 0.3.8)
 
 - **Fix: the final attempt is not left empty when the model calls `recall` again.** With 0.3.5 a final round of
   internal calls only got one new attempt, but Flash Next called `recall` again in it too (it reasoned up to the
@@ -118,7 +118,7 @@
   instruction from the system head, so the engine's prefix cache is lost for that one call (full prefill).
   See `docs/dev-notes/FINAL-ATTEMPT-036-RESULT.md`.
 
-## 0.3.5 — unreleased
+## 0.3.5 — not released separately (in 0.3.8)
 
 - **Fix: a search round never consumes the evidence already acquired (window guard, correction 2).** On a small
   window (AgentLongBench 16K) the guard made room for one more `recall` round by removing results the model had
