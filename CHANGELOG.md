@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **Oversized output limits no longer force segment switches.** Treat `max_completion_tokens` (preferred when both
+  fields exist) / `max_tokens` as a ceiling, cap it to the available context after preparing the prompt, and send
+  the reduced value to the engine. A genuinely large prompt still triggers a switch to preserve a useful response
+  budget (`response_floor`, or up to `default_response`, bounded to a quarter of the window). Each reduction is
+  recorded as `response_clamped` in the journal, with one log warning per conversation (persisted across restarts).
+  The final window guard still enforces prompt + response + margin and refuses prompts with no room for a token.
+  Fixes repeated switches with large client output ceilings reported by DarkJezter (pi.dev + Strata).
+
 ## 0.3.8 — 2026-10-19
 
 - **Ollama and LM Studio: the window is read from the engine** (`ctxproxy/enginectx.py`). Both run in base mode and

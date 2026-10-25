@@ -1023,6 +1023,21 @@ Reports (Italian): [DS4-LONG-RESULT.md](https://github.com/lastreload/mnemonic-p
 
 ## Configuration
 
+Output limits in managed mode: `max_completion_tokens` takes precedence over `max_tokens` when both are supplied;
+without either field, `default_response` is used (16384 by default). These values are ceilings, not a reason to
+switch segments. After masking and any necessary switch, the proxy caps the response to
+`window - estimated_prompt - reserve - 8` and sends the reduced limit to the engine (both fields are synchronized
+when present). The final window guard may reduce it further for its margin and estimate slack; it refuses a
+prompt with no space for even one generated token. Exact guarantees require `--tokenizer`; otherwise counts are
+estimates, not proof of the engine's actual token usage.
+
+A genuinely large prompt still triggers a segment switch when there is not enough room for a useful response:
+`max(response_floor, min(requested_output, default_response))`, bounded to at least one token and at most a quarter
+of the window. A floor never raises the actual output ceiling requested by the client. Every reduction produces
+`response_clamped` in `journal.jsonl` (requested and sent limits, prompt estimate, window and reserve), plus one
+warning per conversation in the process log, remembered across restarts. No new option is required; for example,
+a client ceiling of 120000 in a 131072 window no longer causes a switch on every short turn.
+
 `--config` takes a JSON object with any field of `ctxproxy.core.Config`. Defaults below are the real ones in the
 code. Most features are off by default so that 0.1 behaviour is unchanged; the last column is what we recommend
 with an engine that has saved state (`examples/config.example.json` plus the options the benchmarks above support).
@@ -1039,7 +1054,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `slot_dir` | "" | the engine's `--slot-save-path` folder, same host (anchor cleanup, autosave, `kv_archive`) | set |
 | `segments_enabled`, `tail_max`, `notes_max_tokens` | true, 24000, 8192 | segment switch with handoff notes | true, 24000, **12288** |
 | `slot_save` / `seal_experimental` | false / false | save the old segment to disk before switching (saved state) | **true / true** |
-| `response_floor` | 0 | minimum response size assumed in the window check | **16384** |
+| `response_floor` | 0 | minimum useful response budget for segment switching (bounded to a quarter of the window) | **16384** |
 | `inject_recall`, `max_recall_rounds`, `recall_max_tokens` | true, 4, 6000 | the `recall` tool | default |
 | `recall_tool_name` / `tools_tool_name` | "recall" / "tools" | names of the proxy's tools for new conversations | default |
 | `prompt_language` | "en" | language of the texts the proxy writes into the prompt, for NEW conversations: `"en"` or `"it"`; stored per conversation at first use; conversations from before 0.3.1 stay Italian | default |

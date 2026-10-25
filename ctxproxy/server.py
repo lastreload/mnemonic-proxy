@@ -32,7 +32,7 @@ from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
                      NO_ROOM_EN, NO_ROOM_IT, NOTICE_MIN, RESULT_MIN, RESULT_R, SEARCH_BANDS, SearchState, WindowGuard,
                      _text as _txt, clean, conclusion, idents, pieces, remove_piece, removal_entry, removal_order,
-                     sources_from_meta)
+                     set_mt, sources_from_meta)
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
              "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
@@ -212,6 +212,8 @@ class Proxy:
         recalls, recall_logs = [], []
         strip_c, strip_r = [], []
         body = {k: v for k, v in req.items() if k not in ("messages", "tools", "stream", "stream_options")}
+        if p.response_limit is not None:
+            body = set_mt(body, p.response_limit)
         resp = None
         msgs_c = req.get("messages") or []
         last_user = max((i for i, m in enumerate(msgs_c) if is_human_user(m)), default=None)
