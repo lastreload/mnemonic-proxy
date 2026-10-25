@@ -237,7 +237,7 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
         <span class="opts"><button id="copyResp" title="copia la risposta negli appunti">copia</button></span></div>
       <div class="resp" id="resp"><span class="dim">—</span></div>
       <div class="pinfo"><span>Prompt fisico dell'ultima richiesta</span><span id="phcount" class="num dim"></span>
-        <span class="opts"><label class="mu"><input type="checkbox" id="onlyPh"> solo con segnaposto</label><button id="expand">espandi</button><button id="collapse">comprimi</button></span></div>
+        <span class="opts"><button id="copyAll" title="copia prompt e risposta">copia tutto</button><button id="expMd" title="esporta il prompt in Markdown">prompt .md</button><button id="expJson" title="esporta il prompt in JSON">prompt .json</button><button id="expHist" title="esporta la storia completa in Markdown">storia .md</button><button id="expHistJ" title="esporta la storia completa in JSON">storia .json</button><label class="mu"><input type="checkbox" id="onlyPh"> solo con segnaposto</label><button id="expand">espandi</button><button id="collapse">comprimi</button></span></div>
       <div class="plist" id="prompt"><div class="empty">Il proxy non scrive ancora <code>live/last_request.json</code> (opzione <code>live_dump</code>).</div></div>
     </div>
     <div class="sh" style="margin-top:10px"><h2>📌 Punti fermi e 🗑 usa e getta</h2><span class="mu" id="mkinfo" style="font-size:12px"></span></div>
@@ -715,19 +715,20 @@ function download(name, data, type) {
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], {type}));
   a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
+function onClick(id, handler) { const el = $(id); if (el) el.addEventListener("click", handler); }
 function needLive(btn) { if (S.lastLive) return true; if (btn) { const o = btn.textContent; btn.textContent = "nessun prompt"; setTimeout(() => btn.textContent = o, 1400); } return false; }
-$("copyResp").onclick = ev => copyText($("resp").textContent || "", ev.target);
-$("copyAll").onclick = ev => { if (needLive(ev.target)) copyText(promptMarkdown(S.lastLive), ev.target); };
-$("expMd").onclick = ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.md`, promptMarkdown(S.lastLive), "text/markdown;charset=utf-8"); };
-$("expJson").onclick = ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.json`, JSON.stringify(S.lastLive, null, 2), "application/json"); };
+onClick("copyResp", ev => copyText($("resp").textContent || "", ev.target));
+onClick("copyAll", ev => { if (needLive(ev.target)) copyText(promptMarkdown(S.lastLive), ev.target); });
+onClick("expMd", ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.md`, promptMarkdown(S.lastLive), "text/markdown;charset=utf-8"); });
+onClick("expJson", ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.json`, JSON.stringify(S.lastLive, null, 2), "application/json"); });
 function exportHistory(fmt, btn) {
   const conv = S.conv || (S.lastLive || {}).conv;
   if (!conv) { const o = btn.textContent; btn.textContent = "nessuna conversazione"; setTimeout(() => btn.textContent = o, 1400); return; }
   const a = document.createElement("a"); a.href = `/api/export?conv=${encodeURIComponent(conv)}&fmt=${fmt}`;
   document.body.appendChild(a); a.click(); a.remove();
 }
-$("expHist").onclick = ev => exportHistory("md", ev.target);
-$("expHistJ").onclick = ev => exportHistory("json", ev.target);
+onClick("expHist", ev => exportHistory("md", ev.target));
+onClick("expHistJ", ev => exportHistory("json", ev.target));
 $("collapse").onclick = () => document.querySelectorAll("#prompt .msg").forEach(m => m.classList.add("c"));
 $("onlyPh").addEventListener("change", () => { for (const m of document.querySelectorAll("#prompt .msg")) m.style.display = $("onlyPh").checked && !m._ph ? "none" : ""; });
 function renderPrompt(lr) {
