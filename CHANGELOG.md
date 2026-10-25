@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.3.9 — 2026-10-25
+
+- **Dashboard no longer crashes on load.** Five copy/export buttons used by the script (`copyAll`, `expMd`, `expJson`,
+  `expHist`, `expHistJ`) were missing from `dashboard/index.html`, so the page stopped before rendering. Restored, and a
+  missing control no longer breaks the rest of the page; a test checks that every id the script uses exists.
+  Reported by DarkJezter.
 
 - **Oversized output limits no longer force segment switches.** Treat `max_completion_tokens` (preferred when both
   fields exist) / `max_tokens` as a ceiling, cap it to the available context after preparing the prompt, and send
