@@ -16,6 +16,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -985,6 +986,7 @@ class Prepared:
     masked: int
     masked_tokens: int            # token ARCHIVIATI dei pezzi nascosti (testo originale)
     masked_saved: int = 0         # riduzione fisica misurata (somma dei Δ dei pacchetti)
+    response_limit: int | None = None  # generation ceiling after prepare; final window guard may lower it further
     catalog: dict = dataclasses.field(default_factory=dict)      # strumenti caricabili con lo strumento tools
     invalidated: dict = dataclasses.field(default_factory=dict)  # token di cache invalidati e causa
     recall_name: str = RECALL_NAME     # nomi degli strumenti del proxy in questa conversazione
@@ -1306,10 +1308,13 @@ class Manager:
                     events.extend(self._anchor(conv, seg or 0, req, phys, origin, per, tools, ev, upstream))
 
         # ---- livello 2: segmenti ----
-        resp = int(req.get("max_tokens") or req.get("max_completion_tokens") or cfg.default_response)
-        if resp <= 0:
-            resp = cfg.default_response
-        resp = max(resp, cfg.response_floor)
+        requested = int(req.get("max_completion_tokens") or req.get("max_tokens") or cfg.default_response)
+        if requested <= 0:
+            requested = cfg.default_response
+        # A client's output ceiling is not evidence that the prompt needs a new segment.
+        # Keep a useful generation budget, not the entire requested maximum, for switching.
+        floor = max(1, min(max(cfg.response_floor, min(requested, cfg.default_response)), cfg.window // 4))
+        resp = max(floor, min(requested, cfg.window - est - cfg.reserve - 8))
         if cfg.segments_enabled and est + resp + cfg.reserve + 8 > cfg.window and upstream is not None:
             ev = self._switch(conv, req, msgs, hs, phys, origin, per, tools, seg or 0, upstream, est, resp)
             events.extend(ev)
@@ -1326,6 +1331,21 @@ class Manager:
                 if ev.get("injected"):
                     phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
                     est, per = self.estimate(phys, tools)
+
+        # Recompute after masking, segmentation and auto-recall. Never raise a client's ceiling.
+        room = cfg.window - est - cfg.reserve - 8
+        response_limit = max(1, min(requested, room))
+        if response_limit < requested:
+            events.append(self.journal.log("response_clamped", conv=conv, requested=requested,
+                                           max_tokens=response_limit, prompt=est, window=cfg.window,
+                                           reserve=cfg.reserve, floor=floor,
+                                           message="Output limit reduced to available context; no output-only switch"))
+            warning_key = "response_clamp_warned:" + conv
+            if not self.store.kv_get(warning_key):
+                logging.getLogger(__name__).warning(
+                    "mnemonic-proxy conversation %s: requested output %d reduced to %d tokens to fit window %d",
+                    conv, requested, response_limit, cfg.window)
+                self.store.kv_set(warning_key, "1")
 
         masks = self.store.masks_for(hs + [h + THINK_SUFFIX for h in hs] + [h + ARGS_SUFFIX for h in hs]
                                      + [h + DROP_SUFFIX for h in hs])
@@ -1344,7 +1364,7 @@ class Manager:
                     else rec["ratio_planned"]
                 self.journal.log("mask_cost", **rec)
         return Prepared(conv=conv, messages=phys, tools=tools, hs=hs, seg=seg or 0, est_tokens=est,
-                        virtual_tokens=virtual, events=events, masked=len(masks),
+                        virtual_tokens=virtual, events=events, masked=len(masks), response_limit=response_limit,
                         masked_tokens=sum(n for _, n in masks.values()),
                         masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
                         invalidated=inv, recall_name=self.rn, tools_name=self.tn, lang=self.lang,
