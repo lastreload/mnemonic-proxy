@@ -4,7 +4,7 @@
   "recall_struct": true,
   "recall_flex": true,
   "recall_multi": true,
-  "auto_recall_hint": true,
+  "auto_recall": false,
   "tools_paging": true,
   "checkpoint_align_tokens": 0,
   "live_dump": true

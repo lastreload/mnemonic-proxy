@@ -1059,7 +1059,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `recall_tool_name` / `tools_tool_name` | "recall" / "tools" | names of the proxy's tools for new conversations | default |
 | `prompt_language` | "en" | language of the texts the proxy writes into the prompt, for NEW conversations: `"en"` or `"it"`; stored per conversation at first use; conversations from before 0.3.1 stay Italian | default |
 | `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** |
-| `auto_recall` / `auto_recall_hint` | false / false | on each new user message, add relevant hidden pieces / only a one-line hint with ids | false / **true** |
+| `auto_recall` / `auto_recall_hint` | false / false | `auto_recall` enables automatic retrieval on new user messages; `auto_recall_hint` only selects a one-line hint with ids instead of pieces and requires `auto_recall: true` | false / false (automatic retrieval off) |
 | `recall_leaf_select` | false | on structured outputs (yaml/toml (Python ≥ 3.11)/xml/json, tables, diffs, logs, git log, pytest) `recall` returns only the matching record and the key lines of its ancestors, verbatim, with `⋮` markers and offsets for the gaps; falls back to the normal recall when unsure ([dev note](docs/dev-notes/LEAF-SELECT-RESULT.md)) | default (experimental) |
 | `answer_thinking_after_recall`, `answer_thinking_budget` | false, 512 | turn thinking on only for the answer that follows a recall (fixes answers cut in the middle of a value) | default (experimental) |
 | `truncation_guard` | false | replay once, with thinking, a short answer that ends on a prefix of a recalled token | default (experimental) |
@@ -1081,11 +1081,20 @@ A config for llama-server with saved state, as recommended above:
   "mask_anchor": true, "slot_dir": "/path/to/slots",
   "slot_save": true, "seal_experimental": true,
   "notes_max_tokens": 12288, "response_floor": 16384,
-  "recall_struct": true, "recall_flex": true, "recall_multi": true, "auto_recall_hint": true,
+  "recall_struct": true, "recall_flex": true, "recall_multi": true,
+  "auto_recall": false,
   "tools_paging": true,
   "autosave": true
 }
 ```
+
+The recommended config above and `examples/config.ds4.json` keep automatic retrieval off
+(`auto_recall: false`). The 100-question AgentLongBench confirmation run also used no automatic
+retrieval: its journals contain 379 model-requested `recall` calls and zero `auto_recall` events.
+`auto_recall_hint: true` alone does not enable hints: it only changes the mode when
+`auto_recall: true` is also set. To opt into automatic hints, set both options to `true`.
+The previously listed hint setting was inert and has been removed from the recommended examples;
+this documentation correction does not enable automatic retrieval or change their effective behavior.
 
 On a generic OpenAI engine drop the saved-state fields (`mask_anchor`, `slot_dir`, `slot_save`,
 `seal_experimental`, `autosave`, `kv_archive`); the proxy turns them off anyway, with a warning.
