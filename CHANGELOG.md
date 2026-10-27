@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Share the available result budget across distinct id recalls in the same batch (#25), returning exact
+  pages instead of letting the first id consume the remaining window. Reuse unused shares and, when
+  feasible, reserve room for one more search round. Single-id recalls retain the 0.3.13 output; the
+  window guard, answer floor and per-result ceiling are unchanged.
+
 ## 0.3.13 — 2026-10-27
 
 Measured on 20 AgentLongBench questions picked for heavy paging (Strata 0.1.40, 32K window, 0.3.12 vs this

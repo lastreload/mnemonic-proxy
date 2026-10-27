@@ -328,6 +328,22 @@ class Proxy:
                 st.saw_generation((resp.get("usage") or {}).get("completion_tokens"),
                                   resp["choices"][0].get("finish_reason") or "")
             done = []                    # calls that got a result (the assistant message keeps only these)
+            # Only explicit, distinct id recalls share a batch budget. Queries, tool definitions and single-id
+            # rounds retain the 0.3.13 path, including its byte-for-byte result rendering.
+            id_calls = []
+            ids = set()
+            for call in mine:
+                if call in blocked or (call.get("function") or {}).get("name") not in p.recall_aliases:
+                    continue
+                args = (call.get("function") or {}).get("arguments")
+                try:
+                    args = json.loads(args) if isinstance(args, str) else args
+                except (ValueError, TypeError):
+                    continue
+                if isinstance(args, dict) and isinstance(args.get("id"), str) and args["id"]:
+                    id_calls.append(call)
+                    ids.add(args["id"])
+            batch_left = len(id_calls) if guard_on and len(ids) > 1 else 0
             for c in mine:
                 ts = time.time()
                 a = (c.get("function") or {}).get("arguments")
@@ -375,10 +391,15 @@ class Proxy:
                     # on this round is already final (0.3.5): only the guard-off path gets here.
                     out = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
                 elif guard_on:
+                    limit = None
+                    if batch_left and c in id_calls:
+                        limit = self._batch_result_cap(p, phys0, loop, new, body, rnd, floor, lu_full,
+                                                       st, batch_left)
+                        batch_left -= 1
                     out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta,
-                                          max_tokens=self.cfg.recall_max_tokens)
+                                          max_tokens=self.cfg.recall_max_tokens if limit is None else limit)
                     got = self._fit_result(p, phys0, loop, new, body, rnd, floor, lu_full, a, out, meta,
-                                           last_user, st)
+                                           last_user, st, result_limit=limit)
                     if got is None:
                         continue                  # not even the "no room" notice fits: the call leaves the group
                     out, src, note = got
@@ -766,7 +787,28 @@ class Proxy:
                              cap=cap, need=need)
         return cap
 
-    def _fit_result(self, p, phys0, loop, new, body, rnd, floor, question, a, out, meta, last_user, state=None):
+    def _batch_result_cap(self, p, phys0, loop, new, body, rnd, floor, question, state, remaining):
+        """Share current result room, reusing unused shares, without changing window/floor invariants.
+
+        Reserve RESULT_R per pending id (including this one), plus conservative message frames. If those
+        shares and the next round's INV-3 reserve fit, keep that round too. Otherwise spend the reserve on
+        this batch, fairly; tiny windows still go through the normal no-room path. Only bands 0-1 may be freed.
+        """
+        H = self._frame_tokens(p, phys0 + clean(loop + new), body)
+        frames = (remaining - 1) * H
+        future = (max(state.s_est, CALL_ALLOWANCE + RESULT_R + floor) + H - floor
+                  if rnd + 1 < self.cfg.max_recall_rounds else 0)
+        minimum = min(RESULT_R, self.cfg.recall_max_tokens)
+        room = self._free_search(p, phys0, loop, new, body, rnd, floor, question,
+                                 remaining * minimum + frames + future, "batch")
+        reserve = future if room >= remaining * minimum + frames + future else 0
+        cap = min(self.cfg.recall_max_tokens, max(0, room - frames - reserve) // remaining)
+        self.journal.log("recall_batch_budget", conv=p.conv, round=rnd, remaining=remaining,
+                         room=room, frames=frames, future=reserve, cap=cap)
+        return cap
+
+    def _fit_result(self, p, phys0, loop, new, body, rnd, floor, question, a, out, meta, last_user, state=None,
+                    result_limit=None):
         """A recall result never takes the room the answer floor (and the closing note) needs (0.3.5):
         cap = W - margin - F - note - P(with an empty result). If the result does not fit, only verified copies and
         finished reasoning (this round's too) are removed, up to what the result needs; then the leaf selector
@@ -777,6 +819,8 @@ class Proxy:
         st = state if state is not None else SearchState()
         need = self.tc.count(out)
         cap = self._free_search(p, phys0, loop, new, body, rnd, floor, question, need, "result")
+        if result_limit is not None:
+            cap = min(cap, result_limit)  # a retry must not consume another id's or the next round's share
         if need <= cap:
             return out, sources_from_meta(meta), None
         # Retry id paging (and the optional leaf selector) in the actual remaining window budget.
