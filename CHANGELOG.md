@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.14 — 2026-10-27
 
 - Share the available result budget across distinct id recalls in the same batch (#25), returning exact
   pages instead of letting the first id consume the remaining window. Reuse unused shares and, when
