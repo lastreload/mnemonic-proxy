@@ -279,6 +279,7 @@ def main(argv=None):
     ap.add_argument("--dry-run", action="store_true", help="report without changing stored data")
     a = ap.parse_args(argv)
     a.engine = None
+    a.config = a.config or os.environ.get("MNEMONIC_CONFIG")   # forget only: the server itself needs --config
     if a.list and a.dry_run:
         ap.error("--dry-run requires --conv")
     if a.conv is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", a.conv):

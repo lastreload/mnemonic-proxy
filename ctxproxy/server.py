@@ -1303,12 +1303,11 @@ def load_config(a) -> tuple[dict, Config]:
     """-> (fields written in the config file / on the command line, Config). Relative `slot_dir` and
     `kv_archive_dir` are resolved against the current directory, like `--data`."""
     raw_cfg = {}
-    config_path = a.config or os.environ.get("MNEMONIC_CONFIG")
-    if config_path:
-        with open(config_path, encoding="utf-8") as f:
+    if a.config:
+        with open(a.config, encoding="utf-8") as f:
             raw_cfg = json.load(f)
         if not isinstance(raw_cfg, dict):
-            raise ValueError("%s: expected a JSON object" % config_path)
+            raise ValueError("%s: expected a JSON object" % a.config)
     if a.engine:
         raw_cfg["engine"] = a.engine
     cfg = Config.from_dict(raw_cfg)
@@ -1378,8 +1377,9 @@ def serve(a, raw_cfg, cfg):
                              % sys.version_info[:2])
         enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
-    # Join request workers before releasing the lifetime data lock.
-    srv.daemon_threads = False
+    # Request threads stay daemonic: with HTTP/1.1 keep-alive an idle client connection would otherwise block
+    # shutdown forever. The data lock is released by the OS when the process exits.
+    srv.daemon_threads = True
     print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
         "yes" if engine.slot_save else "no", a.mode,

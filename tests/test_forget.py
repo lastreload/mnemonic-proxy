@@ -465,6 +465,45 @@ class TestForgetHTTP(unittest.TestCase):
             with DataLock(data):
                 pass
 
+    @unittest.skipIf(os.name == "nt", "SIGINT semantics differ on Windows")
+    def test_sigint_exits_promptly_with_idle_keepalive_connection(self):
+        # A client that keeps an HTTP/1.1 connection open must not block shutdown (and so the data lock).
+        with tempfile.TemporaryDirectory() as root:
+            data = Path(root) / "data"
+            engine = FakeEngine()
+            url = engine.start(0)
+            self.addCleanup(engine.stop)
+            sock = socket.socket()
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            sock.close()
+            p = subprocess.Popen([sys.executable, "-m", "ctxproxy.server", "--data", str(data),
+                                  "--upstream", url, "--port", str(port)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 15
+                while True:
+                    try:
+                        conn = socket.create_connection(("127.0.0.1", port), timeout=1)
+                        break
+                    except OSError:
+                        if time.monotonic() > deadline:
+                            self.fail("proxy never started")
+                        time.sleep(.05)
+                conn.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
+                self.assertTrue(conn.recv(64).startswith(b"HTTP/1.1"))
+                t0 = time.monotonic()
+                p.send_signal(signal.SIGINT)
+                p.wait(timeout=10)
+                self.assertLess(time.monotonic() - t0, 10)
+                conn.close()
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+            with DataLock(data):
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()
