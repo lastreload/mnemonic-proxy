@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Fix typed receipts for Claude Code (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`) and Codex
+  (`shell`, `exec_command`, `apply_patch`), including their argument names and argv commands (#21).
+  Unknown tools keep the existing fallback; pi receipts are unchanged.
+  Receipts are rebuilt on every request, not stored in the masks table: already-hidden outputs change too.
+  An ongoing Claude Code/Codex conversation re-reads its prompt once after upgrading, because the engine
+  cache no longer matches from the first changed receipt.
+
 ## 0.3.11 — 2026-10-27
 
 - **`mnemonic-proxy forget`: delete one conversation in one step** (#19, suggested by a review on Radyz.cz).
