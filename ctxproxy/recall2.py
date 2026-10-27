@@ -455,12 +455,25 @@ class Recall2:
         path = str(args.get("path") or "").strip()
         if mode == "tree":
             return self.tree(conv, args, max_idx)
+        if rid and mode in ("output", "uscita") and any(args.get(k) not in (None, "") for k in ("query", "offset")):
+            r = self._row(rid, conv)
+            if r and r[3] == "tool":
+                # Output ids already name the requested text. Do not discard query/offset as navigation.
+                return self.mgr._recall_page(conv, args, max_idx, meta,
+                                             self.cfg.recall_max_tokens if max_tokens is None else max_tokens,
+                                             head_fn=self._id_head)
+            return self.L("recall: mode=output con query/offset richiede un id di uscita; usa prima mode=output "
+                          "senza query per trovare gli id collegati",
+                          "recall: mode=output with query/offset requires an output id; first use mode=output "
+                          "without query to find the linked ids")
         if rid and mode in ("neighbors", "vicini", "output", "uscita", "reasoning", "ragionamento", "call",
                             "chiamata"):
             return self.around(conv, rid, mode, args, max_idx, meta)
         if rid:
             # propaga solo i campi presenti: un offset assente non è offset=0
             fwd = {"id": rid, **{k: args[k] for k in ("offset", "query") if args.get(k) not in (None, "")}}
+            if max_tokens is not None:
+                return self.mgr._recall_page(conv, fwd, max_idx, meta, max_tokens, head_fn=self._id_head)
             return self.mgr.recall_legacy(conv, fwd, max_idx, meta, head_fn=self._id_head)
         if path:
             return self.file(conv, path, mode or "timeline", args, max_idx, meta)

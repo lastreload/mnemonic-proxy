@@ -375,7 +375,8 @@ class Proxy:
                     # on this round is already final (0.3.5): only the guard-off path gets here.
                     out = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
                 elif guard_on:
-                    out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta)
+                    out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta,
+                                          max_tokens=self.cfg.recall_max_tokens)
                     got = self._fit_result(p, phys0, loop, new, body, rnd, floor, lu_full, a, out, meta,
                                            last_user, st)
                     if got is None:
@@ -778,7 +779,8 @@ class Proxy:
         cap = self._free_search(p, phys0, loop, new, body, rnd, floor, question, need, "result")
         if need <= cap:
             return out, sources_from_meta(meta), None
-        if self.cfg.recall_leaf_select:
+        # Retry id paging (and the optional leaf selector) in the actual remaining window budget.
+        if cap >= NOTICE_MIN:
             meta.clear()
             out = self.mgr.recall(p.conv, a, max_idx=last_user, meta=meta, max_tokens=cap)
             need = self.tc.count(out)

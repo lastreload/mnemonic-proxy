@@ -2066,6 +2066,75 @@ class Manager:
                 hi = mid - 1
         return text[:lo] + note
 
+    def _recall_page(self, conv, args, max_idx, meta, max_tokens, head_fn=None):
+        """One verbatim id span, including its frame in both the result and window budgets.
+
+        Keep an entire remainder when it fits. Otherwise center a bounded page on the first query hit;
+        never trim a one-line JSON document from its beginning and thereby lose the queried value.
+        None means this is not an id read; legacy navigation/search keeps its own rendering.
+        """
+        rid = str(args.get("id") or "").strip().removeprefix("recall:").removeprefix("id=")
+        if not rid:
+            return None
+        r = self.store.get(rid, conv)
+        if r is None or (max_idx is not None and r[2] >= max_idx):
+            return self.L("recall: id %s non trovato", "recall: id %s not found") % rid
+        text = r[5] or ""
+        try:
+            start = min(len(text), max(0, int(args.get("offset") or 0)))
+        except (TypeError, ValueError):
+            start = 0
+        cap = max(0, min(int(max_tokens), int(self.cfg.recall_max_tokens)))
+        chars = max(0, int(self.cfg.recall_max_chars))
+
+        def render(a, b):
+            head = (head_fn(r, a, b - a, len(text)) if head_fn else
+                    self.L("[recall:%s — messaggio %d (%s%s), %d token, caratteri %d–%d di %d]\n",
+                           "[recall:%s — message %d (%s%s), %d tokens, characters %d–%d of %d]\n") %
+                    (rid, r[2] + 1, r[3], (" " + r[4]) if r[4] else "", r[6], a, b, len(text)))
+            tail = "" if b >= len(text) else self.L("\n[continua: %s id=%s offset=%d]",
+                                                      "\n[continues: %s id=%s offset=%d]") % (self.rn, rid, b)
+            if a > start:
+                tail += self.L("\n[inizio omesso %d–%d: %s id=%s offset=%d]",
+                               "\n[omitted prefix %d–%d: %s id=%s offset=%d]") % (start, a, self.rn, rid, start)
+            return head + text[a:b] + tail
+
+        a, b = start, len(text)
+        if b - a > chars or self.tc.count(render(a, b)) > cap:
+            q = str(args.get("query") or "").strip()
+            pos = -1
+            if q:
+                # Regex offsets refer to the original Unicode text (lower() may change its length).
+                hits = list(re.finditer(re.escape(q), text[start:], re.IGNORECASE))
+                if not hits:
+                    terms = re.findall(r"\w+", q)
+                    hits = [m for t in terms for m in re.finditer(re.escape(t), text[start:], re.IGNORECASE)]
+                if not hits:
+                    return self.L("[recall:%s — nessuna corrispondenza per %r da offset=%d; totale=%d]",
+                                  "[recall:%s — no match for %r from offset=%d; total=%d]") % (rid, q, start, len(text))
+                pos = start + min(m.start() for m in hits)
+
+            def span(n):
+                left = start if pos < 0 else max(start, min(pos - n // 2, len(text) - n))
+                return left, min(len(text), left + n)
+
+            lo, hi = 0, min(chars, len(text) - start)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                aa, bb = span(mid)
+                if self.tc.count(render(aa, bb)) <= cap:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            a, b = span(lo)
+            if b == a or self.tc.count(render(a, b)) > cap:
+                # Leave a nonempty notice for the server's no-room handling, not a silent empty result.
+                return self.L("recall: spazio insufficiente; continua con id=%s offset=%d (totale=%d)",
+                              "recall: insufficient space; continue with id=%s offset=%d (total=%d)") % (rid, start, len(text))
+        if meta is not None:
+            meta.append({"rid": rid, "idx": r[2], "rank": 0, "tokens": r[6], "offset": a, "chars": b - a})
+        return render(a, b)
+
     def _recall_lines(self, rid, r, text, q, meta, head_fn) -> str:
         lines = text.splitlines()
         low = q.lower()
@@ -2107,7 +2176,7 @@ class Manager:
         (FTS5 bm25 + sottostringa esatta per percorsi/identificatori). Filtro di catena: max_idx esclude la domanda
         corrente e i rami successivi; l'archivio è per conversazione. Tetto: recall_max_tokens.
         meta (facoltativo): riceve un dict per pezzo restituito {rid, idx, rank, tokens} (giornale recall).
-        max_tokens (solo con recall_leaf_select): spazio rimasto nel contesto per il risultato."""
+        max_tokens: remaining context budget for an id page or the optional leaf selector."""
         if isinstance(args, str):
             try:
                 args = json.loads(args or "{}")
@@ -2122,6 +2191,10 @@ class Manager:
             return self._recall2.recall(conv, args, max_idx, meta, max_tokens=max_tokens)
         if getattr(self.cfg, "recall_leaf_select", False):
             out = self._leaf_recall(conv, args, max_idx, meta, max_tokens)
+            if out is not None:
+                return out
+        if max_tokens is not None:
+            out = self._recall_page(conv, args, max_idx, meta, max_tokens)
             if out is not None:
                 return out
         return self.recall_legacy(conv, args, max_idx, meta)
