@@ -1,17 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.3.11 — 2026-10-27
 
-- Add `mnemonic-proxy forget --data DIR --conv ID` with configuration-aware saved-state/cold-archive paths,
-  `--list` (ids, logical sizes, UTC timestamps) and a byte-preserving `--dry-run`. Discover conversation tables
-  from SQLite's schema, remove per-conversation KV metadata and tracker state, rebuild FTS, drop the lazy recall
-  index, vacuum/checkpoint SQLite, delete state and full-prompt sidecars, garbage-collect cold archives, atomically
-  filter the journal, and clear matching live/router metadata. Report incomplete removal with a nonzero exit.
-  Share a non-blocking data-directory lifetime lock with the server so offline deletion cannot race it. Respect
-  `MNEMONIC_CONFIG` as the fallback to `--config` in the common configuration loader. Document privacy limits and
-  test two real HTTP proxy conversations against the CPU-only fake engine, including masking, segment switches,
-  saves, exact surviving recall, FTS erasure, immutable previews, active-server refusal and partial failures.
-  Fixes #19.
+- **`mnemonic-proxy forget`: delete one conversation in one step** (#19, suggested by a review on Radyz.cz).
+  `forget --data DIR --conv ID` removes its rows from every table that has a `conv` column (read from the schema,
+  so future tables are included), its per-conversation `kv` entries, the lazy structured-recall index (rebuilt on
+  demand), then rebuilds FTS and vacuums; it deletes the conversation's saved-state files and prompt sidecars,
+  its `kv-archive` manifests and unreferenced blocks, rewrites `journal.jsonl` without its lines (atomically) and
+  clears matching live/router metadata. `--list` shows ids, sizes and timestamps; `--dry-run` shows what would be
+  removed and changes nothing. Paths come from `--slot-dir`/`--kv-archive`, else `--config`, else
+  `MNEMONIC_CONFIG`; if saved-state records exist and the state folder is unknown, it refuses. Exit code is non-zero
+  if anything could not be removed. Not a forensic wipe (SSD, snapshots, backups, engine memory).
+- The proxy now holds a non-blocking lock on its data folder for as long as it runs; a second proxy or `forget`
+  on the same folder is refused. Proxies older than 0.3.11 do not take it: stop them before running `forget`.
+- On Ctrl-C the proxy now stops its background workers (autosave, kv-archive) before exiting.
 
 ## 0.3.10 — 2026-10-27
 
