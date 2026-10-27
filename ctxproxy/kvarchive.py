@@ -250,15 +250,17 @@ def _lower_priority():
 # --------------------------------------------------------------------------- archivio
 class KvArchive:
     def __init__(self, root: str, level: int = 3, threads: int = 4, codecs: dict | None = None,
-                 low_priority: bool = False):
-        if zstd is None:
+                 low_priority: bool = False, metadata_only: bool = False):
+        # Offline inspection/deletion needs JSON metadata, not compression support, and must not create folders.
+        if zstd is None and not metadata_only:
             raise KvaError("serve Python >= 3.14 (compression.zstd)")
         self.root = os.path.abspath(root)
         self.level, self.threads = level, max(1, threads)
         self.codecs = {**DEFAULT_CODECS, **(codecs or {})}
         self.low_priority = low_priority
-        os.makedirs(os.path.join(self.root, "blocks"), exist_ok=True)
-        os.makedirs(os.path.join(self.root, "manifests"), exist_ok=True)
+        if not metadata_only:
+            os.makedirs(os.path.join(self.root, "blocks"), exist_ok=True)
+            os.makedirs(os.path.join(self.root, "manifests"), exist_ok=True)
         self._tlock = threading.RLock()
 
     # ---------- percorsi / lock ----------
@@ -567,7 +569,7 @@ class KvArchive:
         with self.lock():
             return self._gc_locked()
 
-    def _gc_locked(self) -> dict:
+    def _gc_locked(self, strict: bool = False) -> dict:
         live = self.refcounts()
         freed, nb = 0, 0
         bd = os.path.join(self.root, "blocks")
@@ -585,7 +587,8 @@ class KvArchive:
                     os.remove(p)
                     nb += 1
                 except OSError:
-                    pass
+                    if strict:
+                        raise
         return {"freed_bytes": freed, "freed_blocks": nb}
 
 
