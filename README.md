@@ -861,6 +861,13 @@ history and tokens in the last request), restore time, how many `recall` calls a
 own. `data/journal.jsonl` holds most of it; check it before sharing, it contains your recall queries. Open an issue
 with the [user report](https://github.com/lastreload/mnemonic-proxy/issues/new?template=user-report.md) template.
 
+## Written about it
+
+- [Radyz.cz](https://radyz.cz/nazory/mnemonic-proxy-agenticka-pamet-kontextove-okno/) (Czech, 25 Oct 2026):
+  *"AI si nepamatuje. Jen si vede spis."* ("AI doesn't remember. It just keeps a file."). An independent review of how
+  the proxy works, the session and benchmark numbers with their limits, and the privacy side. It points out that there
+  is no command yet to delete a conversation; that is tracked in [#19](https://github.com/lastreload/mnemonic-proxy/issues/19).
+
 ## Engines
 
 | client \ engine | Strata | llama-server | ds4-server | any OpenAI-compatible |
