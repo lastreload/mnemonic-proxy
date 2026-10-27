@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.10 — 2026-10-27
 
 - **`check --live` works on a fresh Strata 0.2.x session.** Skip the initial backup and final restore when the engine
   refuses the backup with `no complete session`; still verify save/restore after generation. The slot's
