@@ -33,13 +33,15 @@ def render(body: dict) -> str:
 
 class FakeEngine:
     def __init__(self, policy=None, cpt: float = 3.5, flavor: str = "strata", slot_save: bool = True,
-                 n_slots: int = 1, n_ctx: int = 131072):
+                 n_slots: int = 1, n_ctx: int = 131072, reject_empty_save: bool = False):
         """flavor: strata (/v1/status) | llama (llama-server: /props, /slots, /tokenize, 400 per file mancante,
         id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | ds4
         (ds4-server: /v1/models con owned_by "ds4.c", niente slot, id `call_<hex>` generati dal motore, 400 su un
         risultato di strumento con id sconosciuto, conteggio delle chiamate rimandate con id noto/sconosciuto) | openai
         (solo /v1/chat/completions) | ollama / lmstudio (0.3.8: contesto esposto, taglio silenzioso, vedi sotto)."""
         self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
+        # Strata 0.2.x: /slots reports the empty slot, whose state cannot be saved.
+        self.reject_empty_save = reject_empty_save
         self.id_task = 0
         self.policy = policy or (lambda body: {"role": "assistant", "content": "ok"})
         self.requests: list[dict] = []
@@ -269,6 +271,9 @@ class FakeEngine:
                             mk("qwen3.8-flash-next"), mk("qwen3.8-flash-next-chat"),
                             mk("qwen3.8-flash-next-reasoner")]})
                     return self._send(404, {"error": {"message": "unknown endpoint"}})
+                if eng.flavor == "strata" and eng.reject_empty_save and self.path == "/slots":
+                    return self._send(200, [{k: s[k] for k in ("id", "n_ctx", "is_processing", "n_prompt_tokens")}
+                                            for s in eng.slots_list()])
                 if self.path.startswith("/v1/status"):
                     return self._send(200, eng.status())
                 self._send(200, {"status": "ok", "fake": True})
@@ -326,6 +331,9 @@ class FakeEngine:
                     action = self.path.split("action=")[-1]
                     eng.slots.append((action, body.get("filename"), len(eng.live)))
                     if action == "save":
+                        if eng.reject_empty_save and not eng.live:
+                            return self._send(400, {"error": {"code": 400, "message": "no complete session to save",
+                                                              "type": "invalid_request_error", "kind": "invalid"}})
                         eng.files[body.get("filename")] = eng.live
                     elif action == "restore":
                         if body.get("filename") not in eng.files:
@@ -616,6 +624,8 @@ if __name__ == "__main__":
                     default="strata",
                     help="engine to imitate (llama = llama-server with --slot-save-path; router = llama-server in "
                          "router mode, see --models)")
+    ap.add_argument("--reject-empty-save", action="store_true",
+                    help="Strata 0.2.x: expose /slots and reject saving an empty session with HTTP 400")
     ap.add_argument("--n-ctx", type=int, default=131072)
     ap.add_argument("--models", default="big=65536,small=16384",
                     help="router flavor: model=n_ctx,... (each model a llama-server, loaded on demand)")
@@ -625,7 +635,8 @@ if __name__ == "__main__":
         ms = {k: int(v) for k, v in (p.split("=", 1) for p in a.models.split(",") if p)}
         url = FakeRouter(ms, slot_save=not a.no_slot_save).start(a.port)
     else:
-        url = FakeEngine(flavor=a.flavor, n_ctx=a.n_ctx, slot_save=not a.no_slot_save).start(a.port)
+        url = FakeEngine(flavor=a.flavor, n_ctx=a.n_ctx, slot_save=not a.no_slot_save,
+                         reject_empty_save=a.reject_empty_save).start(a.port)
     print("[fake-engine] listening on %s" % url, flush=True)
     try:
         while True:
