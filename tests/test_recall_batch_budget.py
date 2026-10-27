@@ -116,6 +116,16 @@ class TestBatchBudget(unittest.TestCase):
         budgets = [e for e in events if e['event'] == 'recall_batch_budget']
         self.assertGreater(budgets[1]['cap'], budgets[0]['cap'])
 
+    def test_interleaved_query_cannot_consume_later_id_share(self):
+        _, events, _ = run_batch([{'id': WRONG}, {'query': '0726'}, {'id': RIGHT}], filler=11000)
+        budgets = [e for e in events if e['event'] == 'recall_batch_budget']
+        recalls = [e for e in events if e['event'] == 'recall']
+        self.assertEqual([e['remaining'] for e in budgets], [3, 2, 1])
+        self.assertEqual(len(recalls), 3)
+        self.assertEqual(recalls[-1]['results'][0]['rid'], RIGHT)
+        self.assertGreaterEqual(recalls[-1]['tokens'], window.RESULT_R)
+        self.assertFalse(any(e.get('reason') == 'space' for e in events))
+
     def test_explicit_result_ceiling_is_respected(self):
         _, events, _ = run_batch([{'id': WRONG}, {'id': RIGHT}], filler=11000, ceiling=512)
         recalls = [e for e in events if e['event'] == 'recall']

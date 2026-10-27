@@ -328,22 +328,23 @@ class Proxy:
                 st.saw_generation((resp.get("usage") or {}).get("completion_tokens"),
                                   resp["choices"][0].get("finish_reason") or "")
             done = []                    # calls that got a result (the assistant message keeps only these)
-            # Only explicit, distinct id recalls share a batch budget. Queries, tool definitions and single-id
+            # Only batches with distinct explicit ids share a budget. Once active, include other recall
+            # results too: an interleaved query must not consume a later id's share. Single-id and query-only
             # rounds retain the 0.3.13 path, including its byte-for-byte result rendering.
-            id_calls = []
+            batch_calls = []
             ids = set()
             for call in mine:
                 if call in blocked or (call.get("function") or {}).get("name") not in p.recall_aliases:
                     continue
+                batch_calls.append(call)
                 args = (call.get("function") or {}).get("arguments")
                 try:
                     args = json.loads(args) if isinstance(args, str) else args
                 except (ValueError, TypeError):
                     continue
                 if isinstance(args, dict) and isinstance(args.get("id"), str) and args["id"]:
-                    id_calls.append(call)
                     ids.add(args["id"])
-            batch_left = len(id_calls) if guard_on and len(ids) > 1 else 0
+            batch_left = len(batch_calls) if guard_on and len(ids) > 1 else 0
             for c in mine:
                 ts = time.time()
                 a = (c.get("function") or {}).get("arguments")
@@ -392,7 +393,7 @@ class Proxy:
                     out = (LIMIT_MSG if p.lang == "it" else LIMIT_MSG_EN).replace("{rn}", p.recall_name)
                 elif guard_on:
                     limit = None
-                    if batch_left and c in id_calls:
+                    if batch_left and c in batch_calls:
                         limit = self._batch_result_cap(p, phys0, loop, new, body, rnd, floor, lu_full,
                                                        st, batch_left)
                         batch_left -= 1
