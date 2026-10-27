@@ -1270,6 +1270,7 @@ def make_handler(proxy: Proxy):
 SUBCOMMANDS = """subcommands:
   mnemonic-proxy demo     offline demo (no model, no GPU): archive, masking, recall -> PASS/FAIL
   mnemonic-proxy check    is this setup ready? same options as the server, plus --json and --live
+  mnemonic-proxy forget   offline deletion of one conversation; --list or --conv ID [--dry-run]
 """
 
 
@@ -1326,9 +1327,22 @@ def main(argv=None):
     if argv and argv[0] == "check":
         from .check import main as check_main
         return check_main(argv[1:])
+    if argv and argv[0] == "forget":
+        from .forget import main as forget_main
+        raise SystemExit(forget_main(argv[1:]))
     a = build_parser().parse_args(argv)
     raw_cfg, cfg = load_config(a)
     os.makedirs(a.data, exist_ok=True)
+    from .datalock import DataLock
+    try:
+        with DataLock(a.data):
+            return serve(a, raw_cfg, cfg)
+    except ValueError as e:
+        raise SystemExit("mnemonic-proxy: %s" % e) from None
+
+
+def serve(a, raw_cfg, cfg):
+    """Run only while main owns the data directory's maintenance lock."""
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     up = Upstream(a.upstream, a.api_key)
@@ -1363,13 +1377,26 @@ def main(argv=None):
                              % sys.version_info[:2])
         enable_kv_archive(proxy)
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
+    # Request threads stay daemonic: with HTTP/1.1 keep-alive an idle client connection would otherwise block
+    # shutdown forever. The data lock is released by the OS when the process exits.
     srv.daemon_threads = True
     print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
         "yes" if engine.slot_save else "no", a.mode,
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
             cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor), flush=True)
-    srv.serve_forever()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for worker in (proxy.autosaver, getattr(proxy, "archiver", None)):
+            if worker is not None:
+                worker.stop()
+                if worker.th is not None:
+                    worker.th.join()
+        srv.server_close()
+        proxy.store.db.close()
 
 
 if __name__ == "__main__":

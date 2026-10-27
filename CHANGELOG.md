@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Add `mnemonic-proxy forget --data DIR --conv ID` with configuration-aware saved-state/cold-archive paths,
+  `--list` (ids, logical sizes, UTC timestamps) and a byte-preserving `--dry-run`. Discover conversation tables
+  from SQLite's schema, remove per-conversation KV metadata and tracker state, rebuild FTS, drop the lazy recall
+  index, vacuum/checkpoint SQLite, delete state and full-prompt sidecars, garbage-collect cold archives, atomically
+  filter the journal, and clear matching live/router metadata. Report incomplete removal with a nonzero exit.
+  Share a non-blocking data-directory lifetime lock with the server so offline deletion cannot race it. Respect
+  `MNEMONIC_CONFIG` as the fallback to `--config` in the common configuration loader. Document privacy limits and
+  test two real HTTP proxy conversations against the CPU-only fake engine, including masking, segment switches,
+  saves, exact surviving recall, FTS erasure, immutable previews, active-server refusal and partial failures.
+  Fixes #19.
+
 ## 0.3.10 — 2026-10-27
 
 - **`check --live` works on a fresh Strata 0.2.x session.** Skip the initial backup and final restore when the engine
