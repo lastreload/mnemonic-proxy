@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.12 — 2026-10-27
 
 - Fix typed receipts for Claude Code (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`) and Codex
   (`shell`, `exec_command`, `apply_patch`), including their argument names and argv commands (#21).
