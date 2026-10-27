@@ -11,7 +11,7 @@ from ctxproxy.server import Proxy
 from ctxproxy.upstream import Upstream
 
 DATA = pathlib.Path(__file__).parent / 'data'
-ROWS = json.loads((DATA / 'recall_batch_0726.json').read_text())
+ROWS = json.loads((DATA / 'recall_batch_0726.json').read_text(encoding='utf-8'))
 WRONG, RIGHT, CORRECT_FIRST = 'rd8f4f1664d84', 'r25c664b8d449', 'raeba4acd2c5c'
 
 
@@ -54,7 +54,7 @@ def run_batch(args, *, filler=26000, rounds=None, proxy_cls=Proxy, ceiling=6000,
             assert not eng.violations, eng.violations
             for b in eng.requests:
                 assert px.wguard.count_body(b) + b.get('max_tokens', 0) + px.wguard.margin <= 32768
-            events = [json.loads(l) for l in pathlib.Path(d, 'j').read_text().splitlines()]
+            events = [json.loads(l) for l in pathlib.Path(d, 'j').read_text(encoding='utf-8').splitlines()]
             outputs = [m['content'] for m in eng.requests[-1]['messages'] if m.get('role') == 'tool']
             return outputs, events, received
         finally:
@@ -93,7 +93,7 @@ class TestBatchBudget(unittest.TestCase):
             self.assertIn('0726', text[m['offset']:m['offset'] + m['chars']])
 
     def test_single_id_bytes_match_0313(self):
-        gold = json.loads((DATA / 'recall_single_0313.json').read_text())
+        gold = json.loads((DATA / 'recall_single_0313.json').read_text(encoding='utf-8'))
         for case in gold:
             with self.subTest(args=case['args'], filler=case['filler']):
                 outputs, events, _ = run_batch([case['args']], filler=case['filler'])
