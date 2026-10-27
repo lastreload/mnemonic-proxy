@@ -336,24 +336,47 @@ def receipt_contaminated(name: str | None, args) -> bool:
     return bool(_GUARD_RE.search(s)) or any(_CUT_LINE.search(v) for v in vals)
 
 
+def _receipt_command(info: dict) -> str:
+    """Use the clients' command arguments, including Codex's argv form."""
+    if info.get("name") not in ("Bash", "shell", "exec_command"):
+        return info.get("cmd") or ""
+    args = info.get("args") or {}
+    command = args.get("command") or args.get("cmd") or info.get("cmd") or ""
+    if isinstance(command, list):
+        return " ".join(str(part) for part in command)
+    return str(command)
+
+
+def _edit_blocks(info: dict) -> int:
+    args = info.get("args") or {}
+    if info.get("name") == "apply_patch":
+        # Codex custom tools carry their patch as input (or patch in shell clients).
+        patch = args.get("input") or args.get("patch") or args.get("command") or ""
+        return len(re.findall(r"^\*\*\* (?:Add|Update|Delete) File:", patch, re.M)) if isinstance(patch, str) else 0
+    edits = args.get("edits")
+    return len(edits) if isinstance(edits, list) else (1 if args.get("oldText") or args.get("old_string") else 0)
+
+
 def receipt_kind(info: dict | None, text: str, failed: bool) -> str:
     if not info:
         return "altro"
     name = info.get("name")
-    if name == "write":
+    if name in ("write", "Write"):
         return "scrittura"
-    if name == "edit":
+    if name in ("edit", "Edit", "MultiEdit", "apply_patch"):
         return "modifica"
-    if name == "read":
+    if name in ("read", "Read"):
         return "lettura"
-    if name == "bash" or info.get("cmd"):
-        if test_summary(info.get("cmd") or "", text) is not None:
+    if name in ("bash", "Bash", "shell", "exec_command") or info.get("cmd"):
+        if test_summary(_receipt_command(info), text) is not None:
             return "test"
         # pi (e i client simili) aggiungono "Command exited with code N" solo se N != 0: il codice è l'esito.
         # Senza codice si guarda solo la fine dell'uscita (un "Error" nel mezzo di un grep non è un fallimento).
         code = exit_code(text)
         if code is not None:
             return "shell_errore" if code != 0 else "shell_ok"
+        if failed and name in ("Bash", "shell", "exec_command"):
+            return "shell_errore"
         tail = "\n".join((text or "").strip().splitlines()[-3:])
         return "shell_errore" if re.search(r"command not found|No such file|Traceback|^\w*Error\b", tail, re.M) \
             else "shell_ok"
@@ -375,8 +398,7 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
             c = c if isinstance(c, str) else ""
             s = "scrittura: %s, %d byte, sha256 %s del contenuto scritto" % (esito, len(c.encode("utf-8")), sha12(c))
         else:
-            ed = args.get("edits")
-            nb = len(ed) if isinstance(ed, list) else (1 if args.get("oldText") or args.get("old_string") else 0)
+            nb = _edit_blocks(info or {})
             s = "modifica: %s, %d blocchi" % (esito, nb)
         if rid_args:
             s += ", argomenti originali: %s id=%s" % (rn, rid_args)
@@ -392,7 +414,7 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
             return kind, "lettura FALLITA (%s): \u00ab%s\u00bb" % (rng, last_lines(text, 2, 200))
         return kind, "lettura: %s, %d righe restituite, sha256 %s del testo letto" % (rng, n, sha12(text))
     if kind == "test":
-        t = test_summary((info or {}).get("cmd") or "", text) or {}
+        t = test_summary(_receipt_command(info or {}), text) or {}
         code = exit_code(text)
         parts = ["codice d'uscita %s" % (code if code is not None else 0)]
         if t.get("pass") is not None:
@@ -429,8 +451,7 @@ def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
             c = c if isinstance(c, str) else ""
             s = "write: %s, %d bytes, sha256 %s of the written content" % (res, len(c.encode("utf-8")), sha12(c))
         else:
-            ed = args.get("edits")
-            nb = len(ed) if isinstance(ed, list) else (1 if args.get("oldText") or args.get("old_string") else 0)
+            nb = _edit_blocks(info or {})
             s = "edit: %s, %d blocks" % (res, nb)
         if rid_args:
             s += ", original arguments: %s id=%s" % (rn, rid_args)
@@ -446,7 +467,7 @@ def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
             return kind, "read FAILED (%s): \u00ab%s\u00bb" % (rng, last_lines(text, 2, 200))
         return kind, "read: %s, %d lines returned, sha256 %s of the text read" % (rng, n, sha12(text))
     if kind == "test":
-        t = test_summary((info or {}).get("cmd") or "", text) or {}
+        t = test_summary(_receipt_command(info or {}), text) or {}
         code = exit_code(text)
         parts = ["exit code %s" % (code if code is not None else 0)]
         if t.get("pass") is not None:
