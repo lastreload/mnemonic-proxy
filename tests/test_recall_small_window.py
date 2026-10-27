@@ -138,6 +138,8 @@ class TestRecallSmallWindow(unittest.TestCase):
         P = ~5.0K and one more round needs P + max(S, 256 + R + F) + H + 64 <= 8192 (P <= ~4.75K): the search closes,
         the model is told so, both pages stay and the answer gets F. Documented in
         docs/dev-notes/SEARCH-KEEPS-EVIDENCE-RESULT.md (cost of the rule at 8K)."""
+        # Keep the historical small-page scenario explicit: result ceilings no longer scale with W.
+        self.proxy.cfg.recall_max_tokens = 1024
         self.send(self.history())
         ev = self.events()
         rec = [e for e in ev if e["event"] == "recall"]

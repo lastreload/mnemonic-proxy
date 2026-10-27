@@ -46,11 +46,13 @@ NEEDS_SLOTS = ("slot_save", "mask_anchor", "autosave", "autorestore", "seal_expe
 # scritte in configurazione)
 SCALED = ("mask_trigger", "mask_target", "keep_recent_tokens", "min_batch_tokens", "tail_max", "reserve",
           "default_response", "notes_max_tokens", "anchor_min_tokens", "autosave_min_tokens", "autorestore_min_gain",
-          "pins_max_tokens", "recall_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens",
+          "pins_max_tokens", "recall_struct_max_tokens", "auto_recall_max_tokens",
           "response_floor")
+# Id-recall is capped by remaining window space at delivery, not a fixed fraction of the engine window.
+# Keep its configured per-result ceiling (including for router/generic-engine context changes).
 BASE_WINDOW = 131072
 # floors when scaling down (small windows): below these a recall result or a handoff note is too short to be useful
-SCALED_MIN = {"recall_max_tokens": 1024, "recall_struct_max_tokens": 1024, "notes_max_tokens": 1024,
+SCALED_MIN = {"recall_struct_max_tokens": 1024, "notes_max_tokens": 1024,
               "default_response": 1024, "auto_recall_max_tokens": 512, "pins_max_tokens": 512}
 # 0.3.0: finestra minima del motore. Sotto 16K il proxy non parte (8K provato dal vivo una sola volta, dopo la
 # correzione della recall: escluso finché non è provato su più corse). Consigliata >= 32K.

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Avoid artificial id-recall pages when the complete output/remainder fits: `recall_max_tokens` stays a
+  per-result ceiling instead of scaling down with the engine window. Explicit ceilings still apply; the
+  window guard still reserves the answer floor and enforces the remaining context on every request.
+- Fit id pages with their headers and continuation cursors inside the result/window budget. When a query
+  is supplied and the full text does not fit, center a verbatim span on a query hit, with exact character
+  offsets, total length and cursors for omitted text (including single-line JSON).
+- Honor `mode=output` with query/offset on an output id; reject that combination on call-argument ids with
+  an explanation rather than silently ignoring it. Receipts and the stable physical prefix are unchanged.
+
 ## 0.3.12 — 2026-10-27
 
 - Fix typed receipts for Claude Code (`Read`, `Write`, `Edit`, `MultiEdit`, `Bash`) and Codex
