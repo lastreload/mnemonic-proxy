@@ -50,6 +50,19 @@ class AutoBase(Base):
 
 
 class TestAutosave(AutoBase):
+    def test_empty_strata_session_save_is_logged_and_recoverable(self):
+        self.eng.reject_empty_save = True
+        h = self.conv()
+        self.send(h)
+        self.eng.live = ""  # session lost without a status/restart change
+        self.assertIsNone(self.tick())
+        self.assertIn("no complete session to save", self.events("autosave_error")[-1]["error"])
+        self.assertFalse(self.proxy.store.autosaves())
+        self.assertFalse(self.proxy.lock.locked())
+        self.send(h)
+        self.assertIsNotNone(self.tick())
+        self.assertEqual(len(self.proxy.store.autosaves()), 1)
+
     def test_save_after_idle_once(self):
         h = self.conv()
         self.send(h)

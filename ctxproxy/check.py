@@ -342,17 +342,35 @@ def _live(rep, up, eng, cfg):
     tag = "mnemonic-check-%d" % os.getpid()
     backup = None
     if eng.slot_save:
-        try:
-            up.slot("save", tag + "-backup.bin")
-            backup = tag + "-backup.bin"
-        except Exception as e:  # noqa: BLE001
-            rep.add(FAIL, "live: backup", "could not save the current slot first: %s" % str(e)[:200],
-                    "not touching the engine; fix saved state first")
-            return
+        activity = st.get("activity") or {}
+        if eng.kind == "strata":
+            # New Strata exposes /slots; older versions may not, so keep the save-error fallback below.
+            slots = engines._get_json(up, "/slots")
+            mine = next((s for s in slots if isinstance(s, dict) and s.get("id") == eng.slot_id), {}) \
+                if isinstance(slots, list) else {}
+            if mine.get("is_processing"):
+                rep.add(FAIL, "live", "the engine slot is busy right now", "run check --live when no agent is working")
+                return
+            activity = mine
+        empty = activity.get("n_prompt_tokens") == 0
+        if not empty:
+            try:
+                up.slot("save", tag + "-backup.bin")
+                backup = tag + "-backup.bin"
+            except Exception as e:  # noqa: BLE001
+                if "no complete session" in str(e).lower():
+                    empty = True
+                else:
+                    rep.add(FAIL, "live: backup", "could not save the current slot first: %s" % str(e)[:200],
+                            "not touching the engine; fix saved state first")
+                    return
+        if empty:
+            rep.add(INFO, "live: backup", "the slot is empty (no complete session): skipping backup and final restore")
     try:
         lm = (eng.model or "local-model") if eng.kind == "openai" else "local-model"   # Ollama: real name
         t0 = time.time()
         r = up.chat({"model": lm, "max_tokens": 16, "temperature": 0,
+                     **({"chat_template_kwargs": {"enable_thinking": False}} if eng.kind == "strata" else {}),
                      "messages": [{"role": "user", "content": "Reply with the single word: ready"}]})
         txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         rep.add(OK, "live: generation", "%.1f s, reply %r" % (time.time() - t0, txt.strip()[:60]))

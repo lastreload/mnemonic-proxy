@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **`check --live` works on a fresh Strata 0.2.x session.** Skip the initial backup and final restore when the slot
+  reports zero prompt tokens, or saving reports `no complete session`; still verify save/restore after generation.
+  Non-empty sessions are preserved as before, and other backup errors still stop the check before generation.
+  Disable thinking for the short Strata generation probe so its token budget can produce a visible reply.
+  Add a CPU-only fake-engine mode (`--reject-empty-save`) and regressions for empty/non-empty sessions and harmless,
+  logged runtime save failures (autosave, segment and anchor). Fixes #17.
+
 ## 0.3.9 — 2026-10-25
 
 - **Dashboard no longer crashes on load.** Five copy/export buttons used by the script (`copyAll`, `expMd`, `expJson`,
