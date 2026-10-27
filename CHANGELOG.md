@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.3.13 — 2026-10-27
+
+Measured on 20 AgentLongBench questions picked for heavy paging (Strata 0.1.40, 32K window, 0.3.12 vs this
+release, alternating order): recall rounds 69 → 33, recall calls 77 → 40, end-to-end time −5%, correct answers
+16 vs 16, no window overflows or HTTP errors. Correctness is unchanged on this sample, not improved.
 
 - Avoid artificial id-recall pages when the complete output/remainder fits: `recall_max_tokens` stays a
   per-result ceiling instead of scaling down with the engine window. Explicit ceilings still apply; the
