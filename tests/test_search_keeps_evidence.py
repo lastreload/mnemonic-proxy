@@ -383,7 +383,11 @@ class TestLoop(unittest.TestCase):
             return [{"args": {"id": r}} for r in ids] or [{"args": {"query": "db-s3"}}]
         s = Session(script=[calls, calls, calls], reasoning_chars=1500, extra={"recall_max_tokens": 4000})
         try:
-            s.run()
+            # Isolate the guard's no-room protocol from the batch allocator (#25), which now prevents this
+            # particular starvation. Even an oversized allocation must still close/skip coherently.
+            from unittest.mock import patch
+            with patch.object(s.proxy, "_batch_result_cap", return_value=4000):
+                s.run()
             self.check_window(s)
             self.assertEqual(seen_then_lost(s.turn_requests()), [])
             self.assertTrue(s.events("recall_no_room"), "the scenario must run out of room inside one round")
