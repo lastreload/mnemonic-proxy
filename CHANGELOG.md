@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-- **`check --live` works on a fresh Strata 0.2.x session.** Skip the initial backup and final restore when the slot
-  reports zero prompt tokens, or saving reports `no complete session`; still verify save/restore after generation.
+- **`check --live` works on a fresh Strata 0.2.x session.** Skip the initial backup and final restore when the engine
+  refuses the backup with `no complete session`; still verify save/restore after generation. The slot's
+  `n_prompt_tokens` is not used for this: Strata 0.2.x reports 0 right after a restore although the slot holds the
+  restored session (checked on a real engine), so trusting it would overwrite that session.
   Non-empty sessions are preserved as before, and other backup errors still stop the check before generation.
   Disable thinking for the short Strata generation probe so its token budget can produce a visible reply.
   Add a CPU-only fake-engine mode (`--reject-empty-save`) and regressions for empty/non-empty sessions and harmless,

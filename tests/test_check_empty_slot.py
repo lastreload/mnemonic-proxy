@@ -75,11 +75,29 @@ class TestEmptySlotLive(unittest.TestCase):
     def test_empty_slot_skips_backup_and_final_restore(self):
         rep = self.live()
         self.assert_passed(rep)
-        self.assertEqual([a for a, _, _ in self.fake.slots], ["save", "restore"])
-        self.assertFalse(any("backup" in fn for _, fn, _ in self.fake.slots))
+        # the refused backup save is recorded by the fake; no restore of a backup follows
+        self.assertEqual([a for a, _, _ in self.fake.slots], ["save", "save", "restore"])
+        self.assertFalse(any(a == "restore" and fn.endswith("-backup.bin") for a, fn, _ in self.fake.slots))
         self.assertTrue(any(i["check"] == "live: backup" and i["status"] == "info" and
                             "empty" in i["evidence"] and "restore" in i["evidence"] for i in rep.items))
         self.assertFalse(self.fake.requests[0]["chat_template_kwargs"]["enable_thinking"])
+
+    def test_restored_slot_reported_empty_is_still_backed_up(self):
+        # Strata 0.2.x on PC4070TI: right after /slots/0?action=restore, GET /slots says n_prompt_tokens 0,
+        # yet the slot holds the restored session and a save succeeds.  The check must not trust that 0.
+        self.fake.live = "Restored conversation"
+        before = self.fake.live
+        get = engines._get_json
+        zero = [{"id": 0, "n_ctx": 131072, "is_processing": False, "n_prompt_tokens": 0}]
+        with mock.patch.object(engines, "_get_json", side_effect=lambda up, path:
+                               zero if path == "/slots" else get(up, path)):
+            rep = self.live()
+        self.assert_passed(rep)
+        self.assertEqual(self.fake.live, before)
+        self.assertEqual([a for a, _, _ in self.fake.slots], ["save", "save", "restore", "restore"])
+        self.assertTrue(self.fake.slots[0][1].endswith("-backup.bin"))
+        self.assertEqual(self.fake.slots[0][1], self.fake.slots[-1][1])
+        self.assertFalse(any(i["check"] == "live: backup" and i["status"] == "info" for i in rep.items))
 
     def test_empty_session_error_fallback_without_slots_metadata(self):
         get = engines._get_json

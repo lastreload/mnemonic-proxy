@@ -342,28 +342,27 @@ def _live(rep, up, eng, cfg):
     tag = "mnemonic-check-%d" % os.getpid()
     backup = None
     if eng.slot_save:
-        activity = st.get("activity") or {}
         if eng.kind == "strata":
-            # New Strata exposes /slots; older versions may not, so keep the save-error fallback below.
+            # New Strata exposes /slots; older versions may not.  Only "is_processing" is trusted here:
+            # Strata 0.2.x reports n_prompt_tokens 0 right after a restore although the slot holds the
+            # session (a save then succeeds), so an empty slot is recognised only by the engine refusing the save.
             slots = engines._get_json(up, "/slots")
             mine = next((s for s in slots if isinstance(s, dict) and s.get("id") == eng.slot_id), {}) \
                 if isinstance(slots, list) else {}
             if mine.get("is_processing"):
                 rep.add(FAIL, "live", "the engine slot is busy right now", "run check --live when no agent is working")
                 return
-            activity = mine
-        empty = activity.get("n_prompt_tokens") == 0
-        if not empty:
-            try:
-                up.slot("save", tag + "-backup.bin")
-                backup = tag + "-backup.bin"
-            except Exception as e:  # noqa: BLE001
-                if "no complete session" in str(e).lower():
-                    empty = True
-                else:
-                    rep.add(FAIL, "live: backup", "could not save the current slot first: %s" % str(e)[:200],
-                            "not touching the engine; fix saved state first")
-                    return
+        empty = False
+        try:
+            up.slot("save", tag + "-backup.bin")
+            backup = tag + "-backup.bin"
+        except Exception as e:  # noqa: BLE001
+            if "no complete session" in str(e).lower():
+                empty = True
+            else:
+                rep.add(FAIL, "live: backup", "could not save the current slot first: %s" % str(e)[:200],
+                        "not touching the engine; fix saved state first")
+                return
         if empty:
             rep.add(INFO, "live: backup", "the slot is empty (no complete session): skipping backup and final restore")
     try:
