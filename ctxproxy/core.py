@@ -237,6 +237,7 @@ class Config:
     tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
     tools_load_max: int = 5
     # ricevute tipizzate al posto dell'«Inizio» nei segnaposti delle uscite nascoste
+    receipt_turns: bool = False  # opt-in absolute user-turn labels; persisted receipts never change
     typed_receipts: bool = True
     receipt_guard: bool = True           # blocca write/edit/bash che contengono ricevute/segnaposti copiati
     # richiamo automatico bm25 (ricerca §6-8): a ogni nuova richiesta dell'utente, pezzi NASCOSTI pertinenti in coda
@@ -569,11 +570,35 @@ def head_text(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
-def receipt(info: dict | None, result: str, is_error=None, lang: str = "it") -> str:
-    """Ricevuta di una riga degli effetti di una chiamata: «write src/a.js: riuscito»."""
+def output_turns(msgs: list) -> list[int | None]:
+    """Absolute human-user ordinal of each call, not its eventual result.
+
+    Scan the full client history before segment slicing. Tool-response user
+    wrappers do not count. A call before the first user has no ordinal.
+    """
+    ordinal, calls, turns = 0, {}, []
+    for m in msgs:
+        if is_human_user(m):
+            ordinal += 1
+        turn = ordinal or None
+        if m.get("role") == "assistant":
+            calls.update({c.get("id"): turn for c in m.get("tool_calls") or []})
+        elif m.get("role") == "tool":
+            turn = calls.get(m.get("tool_call_id"))
+        turns.append(turn)
+    return turns
+
+
+def turn_label(turn: int | None, lang: str) -> str:
+    return (("turno %d" if lang == "it" else "turn %d") % turn) if turn is not None else ""
+
+
+def receipt(info: dict | None, result: str, is_error=None, lang: str = "it", turn: int | None = None) -> str:
+    """One-line effects receipt, optionally labeled with the originating user turn."""
+    prefix = (turn_label(turn, lang) + ": ") if turn is not None else ""
     if not info:
-        return "?"
-    return "%s: %s" % (origin_text(info, lang), outcome_text(outcome(info["name"], result, is_error), lang))
+        return prefix + "?"
+    return prefix + "%s: %s" % (origin_text(info, lang), outcome_text(outcome(info["name"], result, is_error), lang))
 
 
 class TokenCounter:
@@ -1074,18 +1099,36 @@ class Manager:
         return self.tools_tokens(tools) + sum(per) + 3, per
 
     # ---------- costruzione del prompt fisico ----------
-    def out_placeholder(self, info: dict | None, orig: str, n: int, rid: str, rid_args: str | None = None) -> str:
-        """Segnaposto di un'uscita nascosta: ricevuta tipizzata (paging.typed_receipt) o, se il tipo non è
-        riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
+    def out_placeholder(self, info: dict | None, orig: str, n: int, rid: str, rid_args: str | None = None,
+                        turn: int | None = None) -> str:
+        """Pure size preview; build persists the first published receipt verbatim."""
+        source = origin_text(info, self.lang)
+        if self.cfg.receipt_turns and turn is not None:
+            source += " · " + turn_label(turn, self.lang)
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
             kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang)
             if rec:
-                return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
-                                                                  receipt=rec, rn=self.rn)
+                return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=source, n=n, rid=rid,
+                                                               receipt=rec, rn=self.rn)
         return self.L(OUT_PLACEHOLDER, OUT_PLACEHOLDER_EN).format(
-            origin=origin_text(info, self.lang), n=n, rid=rid, rn=self.rn,
+            origin=source, n=n, rid=rid, rn=self.rn,
             head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
+
+    def stored_receipt(self, key: str, render) -> str:
+        """Freeze the first published receipt across requests and restarts.
+
+        Candidate size previews are not published. After build emits a masked
+        piece, read these exact bytes even if configuration changes. Archive
+        contents and recall IDs are untouched.
+        """
+        key = "output-receipt:" + key
+        with self.store.lock:
+            cached = self.store.kv_get(key)
+            if cached is None:
+                cached = render()
+                self.store.kv_set(key, cached)
+            return cached
     def _segment_for(self, conv: str, hs: list[str]):
         segs = self.store.segments(conv) if conv else []
         for seg, cut_idx, cut_h, notes_msg, kind in segs:
@@ -1099,6 +1142,7 @@ class Manager:
                                      + [h + ARGS_SUFFIX for h in hs[start:]] + [h + DROP_SUFFIX for h in hs[start:]])
         inserts = self.store.inserts_for(hs[start:] + [h + AUTO_SUFFIX for h in hs[start:]])
         phys, origin = [], []
+        turns = output_turns(msgs)
         if notes_msg is not None:
             if msgs and msgs[0].get("role") in ("system", "developer"):
                 phys.append(msgs[0]); origin.append(0)
@@ -1122,7 +1166,9 @@ class Manager:
             dk = masks.get(hs[i] + DROP_SUFFIX)
             if dk and is_human_user(m):
                 end = self.exchange_end(msgs, i)
-                fx = self.exchange_receipts(msgs, i, end, self.lang)
+                fx = self.stored_receipt(hs[i] + DROP_SUFFIX,
+                    lambda: self.exchange_receipts(msgs, i, end, self.lang,
+                                                  turns if self.cfg.receipt_turns else None))
                 n_hidden = sum(self.msg_tokens(x, False) for x in msgs[i + 1:end])
                 m = {**m, "content": self._image_note(content_text(m.get("content"))) +
                      self.L(DROP_NOTE, DROP_NOTE_EN).format(n=n_hidden, fx=fx or self.L("nessuna chiamata", "no calls"),
@@ -1137,8 +1183,9 @@ class Manager:
             if mk and m.get("role") == "tool":
                 info = calls.get(m.get("tool_call_id"))
                 orig = content_text(msgs[i].get("content"))
-                m = {**m, "content": self.out_placeholder(info, orig, mk[1], mk[0],
-                                                          call_aid.get(m.get("tool_call_id")))}
+                text = self.stored_receipt(hs[i], lambda: self.out_placeholder(
+                    info, orig, mk[1], mk[0], call_aid.get(m.get("tool_call_id")), turns[i]))
+                m = {**m, "content": text}
             if m.get("role") == "tool" and m.get("tool_call_id") in pend_notes:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
@@ -1222,14 +1269,17 @@ class Manager:
         return len(msgs)
 
     @staticmethod
-    def exchange_receipts(msgs: list, i: int, end: int, lang: str = "it") -> str:
-        """Ricevute di una riga per le chiamate di uno scambio: «bash `node serve.mjs`: riuscito; write a.js: …»."""
+    def exchange_receipts(msgs: list, i: int, end: int, lang: str = "it",
+                          turns: list | None = None) -> str:
+        """One-line receipts for each call in a disposable exchange."""
         calls, out = {}, []
-        for m in msgs[i:end]:
+        for idx in range(i, end):
+            m = msgs[idx]
             if m.get("role") == "assistant":
                 calls.update(call_info(m))
             elif m.get("role") == "tool":
-                out.append(receipt(calls.get(m.get("tool_call_id")), content_text(m.get("content")), lang=lang))
+                out.append(receipt(calls.get(m.get("tool_call_id")), content_text(m.get("content")),
+                                   lang=lang, turn=turns[idx] if turns else None))
         if len(out) > 8:
             out = out[:7] + [("altre %d chiamate" if lang == "it" else "%d more calls") % (len(out) - 7)]
         return "; ".join(out)
@@ -1726,6 +1776,7 @@ class Manager:
             acc += per[j]
             if acc > cfg.keep_recent_tokens:
                 break
+        turns = output_turns(msgs)
         # età in turni: numero di assistant successivi nella storia client
         after = [0] * (len(msgs) + 1)
         for i in range(len(msgs) - 1, -1, -1):
@@ -1764,7 +1815,8 @@ class Manager:
                         and not any(k in pinned for k in range(i, end)):
                     before = sum(per[x] for x in js)
                     note = self.L(DROP_NOTE, DROP_NOTE_EN).format(
-                        n=before, fx=self.exchange_receipts(msgs, i, end, self.lang) or
+                        n=before, fx=self.exchange_receipts(msgs, i, end, self.lang,
+                            turns if cfg.receipt_turns else None) or
                         self.L("nessuna chiamata", "no calls"), rid=rid_for(i, msgs[i]), rn=self.rn)
                     sv = before - self.tc.count(note)
                     if sv > 0:
@@ -1784,7 +1836,7 @@ class Manager:
                     note = txt[:len(txt) - len(orig)] if txt.endswith(orig) and txt != orig else ""
                     n_orig = self.msg_tokens(msgs[i], False)
                     ph = {**m, "content": note + self.out_placeholder(info, orig, n_orig, rid_for(i, msgs[i]),
-                                                                      call_aid.get(m.get("tool_call_id")))}
+                                                                      call_aid.get(m.get("tool_call_id")), turns[i])}
                     sv = n - self.msg_tokens(ph, False)
                     cand.append((i, j, hs[i], rid_for(i, msgs[i]), n_orig, sv,
                                  {"tipo": "uscita", "strumento": (info or {}).get("name"),
