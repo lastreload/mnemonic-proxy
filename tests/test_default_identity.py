@@ -4,6 +4,9 @@ reaches the engine are byte-identical to 0.3.2 (7ff7e7f), except for the paging 
 longer carries the truncation notice and its offsets are exact; see tests/test_recall_paging.py). The golden file
 tests/data/recall_default_golden.json was produced by running this module with --compute on the 7ff7e7f tree
 (compute() uses only 0.3.2 APIs) and regenerated with that fix (53 cut-page outputs changed, nothing else).
+The server.tool page alone is updated for explicit planner no-fit refusal: unsafe bootstrap requests are no longer
+sent even with window_guard=False, leaving 31 extra characters in the later recall page; all direct recall snapshots
+remain unchanged.
 
     python3 -m unittest -v tests.test_default_identity
 """
