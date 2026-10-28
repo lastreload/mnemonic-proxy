@@ -65,8 +65,10 @@ python tools/replay_issue28.py --polystrata /path/to/PolyStrata \
 
 The script calls the independent service's encoder and `prepare`, never `run`.
 The ordinary unit suite uses the stdlib HTTP fake engine and labeled count
-fixtures. A separate exact-template CI job tests a tiny local HF tokenizer and
-an independently authored custom template; it downloads no models.
+fixtures. Exact-template unit tests use a tiny local HF tokenizer and
+an independently authored custom template; they download no models. Run them
+with the `[exact]` extra installed. A dedicated GitHub job was not added because
+the available OAuth app cannot update workflow files; existing CI remains unchanged.
 
 ## What changed
 
