@@ -265,6 +265,18 @@ def normalize_status(engine: Engine | None, up) -> dict | None:
     return None
 
 
+def budget_adjustments(cfg) -> list[tuple[str, int, int]]:
+    """Startup/check policy for oversized budgets; unset defaults have already scaled."""
+    w = int(cfg.window or 0)
+    if w <= 0:
+        return []
+    caps = {"response_floor": w // 4, "notes_max_tokens": w // 4}
+    if cfg.mask_anchor and w < BASE_WINDOW:
+        caps["anchor_min_tokens"] = max(64, int(24000 * w / BASE_WINDOW))
+    return [(field, int(getattr(cfg, field)), cap) for field, cap in caps.items()
+            if int(getattr(cfg, field) or 0) > cap]
+
+
 def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=print) -> list[str]:
     """Adatta la configurazione al motore: spegne le funzioni senza supporto, finestra da n_ctx. -> avvisi."""
     explicit = set(explicit or ())
@@ -282,6 +294,9 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         cfg.mask_tool_args = False
         warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
                     "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
+    if engine.kind == "strata" and engine.n_ctx and cfg.window > engine.n_ctx and "window" in explicit:
+        warn.append("config window %d exceeds engine n_ctx %d: using the engine window" % (cfg.window, engine.n_ctx))
+        explicit.discard("window")
     if engine.n_ctx and "window" not in explicit and (engine.kind in ("llama.cpp", "ds4", "strata")
                                                      or getattr(engine, "flavor", None)) \
             and engine.n_ctx != cfg.window:
@@ -303,11 +318,9 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
     # una risposta minima che da sola riempie (quasi) la finestra fa scattare un cambio di segmento a ogni richiesta
-    floor = int(getattr(cfg, "response_floor", 0) or 0)
-    if floor and cfg.window and floor > cfg.window // 4:
-        cfg.response_floor = cfg.window // 4
-        warn.append("response_floor %d too large for window %d: lowered to %d" % (floor, cfg.window,
-                                                                                    cfg.response_floor))
+    for field, was, value in budget_adjustments(cfg):
+        setattr(cfg, field, value)
+        warn.append("%s %d too large for window %d: lowered to %d" % (field, was, cfg.window, value))
     for w in warn:
         if log:
             log("[mnemonic-proxy] warning: " + w)

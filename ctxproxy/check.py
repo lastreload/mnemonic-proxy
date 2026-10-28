@@ -186,7 +186,7 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 rep.add(OK if cfg.window == eng.n_ctx else WARN, "context window",
                         "config window=%d, engine n_ctx=%d" % (cfg.window, eng.n_ctx),
                         "" if cfg.window == eng.n_ctx else "window smaller than n_ctx wastes context")
-        elif eng.kind in ("llama.cpp", "ds4") or flavor:   # come engines.apply: finestra da n_ctx / context_length
+        elif eng.kind in ("llama.cpp", "ds4", "strata") or flavor:   # same discovery as engines.apply
             probe = Config.from_dict(raw_cfg)
             engines.apply(probe, eng, None, explicit, log=None)
             rep.add(OK, "context window", "window from engine n_ctx=%d%s; thresholds scaled: mask at %d -> %d tokens, "
@@ -223,6 +223,12 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(WARN if "window" not in explicit else OK, "context window",
                 "generic engine: n_ctx unknown, proxy window=%d" % cfg.window,
                 "" if "window" in explicit else "set \"window\" in the config to the engine's real context size")
+    # Report the actual startup adaptations, including explicit small-window budgets.
+    probe = Config.from_dict(raw_cfg)
+    for warning in engines.apply(probe, eng, None, explicit, log=None):
+        if "too large for window" in warning:
+            rep.add(WARN, "context budgets", warning,
+                    "remove oversized overrides to use scaled defaults, or use the lowered values shown")
     # --- minimum window (0.3.0): the server refuses to start below it, so this is a failure, not a warning
     for evidence, fix in engines.window_problems(cfg, eng, explicit):
         rep.add(FAIL, "context window", evidence + " (the proxy refuses to start)", fix)
