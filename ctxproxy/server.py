@@ -48,6 +48,17 @@ FINAL_ATTEMPTS = 2          # 0.3.6: new final attempts after a final round of i
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_./\-]{4,}|\d[\d.,:]{2,}")
 
 
+def internal_call_text(text, names):
+    """Recognize only a whole native call for an internal tool; never execute text.
+
+    Quotes, fences, explanations and client tools remain ordinary public text.
+    This is a failure classifier, not a second tool parser.
+    """
+    m = re.fullmatch(r"\s*<tool_call>\s*<function=([^<>\s]+)>"
+                     r"(?:(?!</function>|<tool_call>)[\s\S])*</function>\s*</tool_call>\s*", text or "")
+    return bool(m and m.group(1) in names)
+
+
 class ClientGone(Exception):
     """Il client ha chiuso la connessione durante lo stream."""
 
@@ -241,6 +252,7 @@ class Proxy:
             self._live(p, phys, rnd, body)
             if stream_state is not None:
                 stream_state["internal"] = self._internal_names(p, phys)
+                stream_state["final"] = final
             self.wguard.where = "final" if final else ("answer" if rnd == 0 else "recall_round")
             try:
                 if emit:
@@ -471,7 +483,9 @@ class Proxy:
         answerfix.finish(self, p, resp)
         # Never promote private reasoning or guess an answer when a closed search ends without public text.
         msg = resp["choices"][0]["message"]
-        missing_answer = final and not msg.get("tool_calls") and not content_text(msg.get("content")).strip()
+        raw_internal = final and internal_call_text(content_text(msg.get("content")), self._internal_names(p, phys))
+        missing_answer = final and not msg.get("tool_calls") and (
+            not content_text(msg.get("content")).strip() or raw_internal)
         if missing_answer:
             notice = ("[gestore del contesto: ricerca chiusa; il modello non ha prodotto una risposta finale "
                       "testuale. Nessuna risposta è stata dedotta dal ragionamento privato.]" if p.lang == "it" else
@@ -479,7 +493,7 @@ class Proxy:
                       "No answer was inferred from private reasoning.]")
             msg["content"] = notice
             self.journal.log("final_answer_missing", conv=p.conv, round=rnd, attempts=made,
-                             thinking_off=no_think, reason="no_public_text")
+                             thinking_off=no_think, reason="internal_call_as_text" if raw_internal else "no_public_text")
             if emit:
                 self._emit_delta(emit, stream_state, resp, {"content": notice})
         if internal and p.hs:
@@ -888,9 +902,13 @@ class Proxy:
         """Un giro in streaming da Strata. Inoltra subito ragionamento/testo/tool call del client; trattiene le
         chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning)."""
         if state is None:
-            state = {"sent_role": False, "client_calls": 0, "final": True}
+            state = {"sent_role": False, "client_calls": 0, "final": False}
         call = self.up.chat_stream(body)
         content, reasoning = [], []
+        # Hold only a possible native wrapper at the start of a closed-search answer.
+        # Once ordinary prose is known it streams normally; quoted examples are not calls.
+        held_content = ""
+        holding_content = bool(state.get("final"))
         sent_c, sent_r = [], []
         calls: dict[int, dict] = {}      # indice upstream -> {id, name, args, mine, cidx}
         finish, usage, timings, meta = None, None, None, {}
@@ -914,8 +932,17 @@ class Proxy:
                     sent_r.append(d["reasoning_content"])
                 if d.get("content"):
                     content.append(d["content"])
-                    out["content"] = d["content"]
-                    sent_c.append(d["content"])
+                    public = d["content"]
+                    if holding_content:
+                        held_content += public
+                        prefix = held_content.lstrip()
+                        if "<tool_call>".startswith(prefix) or prefix.startswith("<tool_call>"):
+                            public = ""
+                        else:
+                            public, held_content, holding_content = held_content, "", False
+                    if public:
+                        out["content"] = public
+                        sent_c.append(public)
                 fwd_calls = []
                 for tc in d.get("tool_calls") or []:
                     i = tc.get("index", 0)
@@ -953,6 +980,14 @@ class Proxy:
             raise ClientGone()
         finally:
             call.close()
+        # A standalone internal call is not a public answer. Do not leak it before
+        # the managed loop can emit its explicit failure notice. Mixed client calls
+        # keep their content and protocol unchanged.
+        client_calls = any(not c["mine"] for c in calls.values())
+        if held_content and (client_calls or not internal_call_text(
+                held_content, state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)))):
+            self._emit_delta(emit, state, meta, {"content": held_content})
+            sent_c.append(held_content)
         # chiamate con effetti trattenute dalla guardia: inoltrate intere solo se pulite
         for _, c in sorted(calls.items()):
             if c.get("held") and not receipt_contaminated(c["name"], c["args"]):
