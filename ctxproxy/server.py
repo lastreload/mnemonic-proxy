@@ -1407,9 +1407,14 @@ def serve(a, raw_cfg, cfg):
     """Run only while main owns the data directory's maintenance lock."""
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
+    counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
+    if a.tokenizer and not counter.exact:
+        raise ValueError("cannot load the explicitly requested --tokenizer: %s. "
+                         "Install 'mnemonic-proxy[exact]' in this interpreter and check the tokenizer path/format; "
+                         "omit --tokenizer only if estimated counting is intended. Refusing to start with an "
+                         "estimated window guard." % counter.kind)
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"))
-    counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
     from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, flush=True))

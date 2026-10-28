@@ -358,8 +358,12 @@ other hardware.
 The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
 (`--engine auto|strata|llama.cpp|ds4|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
 Optional: `--tokenizer` (a Hugging Face `tokenizer.json`, or a Strata pack `tokenizer/` folder; needs
-`pip install 'mnemonic-proxy[exact]'`) for exact token counts
-instead of a chars/3.5 estimate; with llama-server, `"engine_tokenize": true` counts through its `/tokenize`. A
+`pip install 'mnemonic-proxy[exact]'`) for exact token counts.
+If `--tokenizer` is explicitly supplied but cannot be loaded (missing `tokenizers`, bad path or invalid format),
+startup fails before contacting the engine; it never silently switches that run to estimated counting. Install
+`mnemonic-proxy[exact]` in the same environment as the proxy and check the path. Omit the option only when an
+estimated guard is intended. Without a tokenizer, the proxy uses a chars/3.5 estimate;
+with llama-server, `"engine_tokenize": true` counts through its `/tokenize`. A
 systemd user unit is in [examples/mnemonic-proxy.service](https://github.com/lastreload/mnemonic-proxy/blob/main/examples/mnemonic-proxy.service).
 
 **Window guard.** Before every call (answer, recall rounds, handoff notes, seal, anchor and retries), the proxy
