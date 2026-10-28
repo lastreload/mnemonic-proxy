@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.18 — 2026-10-28
+
+- A closed search whose final reply is only an internal `recall` call written as text (`<tool_call><function=recall>…`)
+  is no longer returned as a successful answer. When the search is closed the proxy removes its own tools, and engines
+  that parse only declared tools (Strata) then return such a call as plain text with `finish_reason: stop`; it now goes
+  through the same final-answer retry and explicit notice as an empty reply (#36, #38). In streaming, a possible call
+  at the very start of the answer is held back until it is known to be ordinary text. Quoted examples, prose and
+  client tool calls are unchanged.
+- Docs: tested Hermes Agent setup (`docs/hermes-agent.md`): custom provider, `compression.enabled: false`, tools and
+  `recall` through the proxy, 18-turn session over a 32K window with masking and recall, 99.4% prefix reuse (#37).
+
 ## 0.3.17 — 2026-10-28
 
 - Refuse startup if an explicitly supplied `--tokenizer` cannot load (missing optional dependency, bad path or
