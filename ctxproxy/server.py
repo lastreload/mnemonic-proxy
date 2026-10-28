@@ -1408,7 +1408,7 @@ def serve(a, raw_cfg, cfg):
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
-    if a.tokenizer and not counter.exact:
+    if a.tokenizer is not None and not counter.exact:
         raise ValueError("cannot load the explicitly requested --tokenizer: %s. "
                          "Install 'mnemonic-proxy[exact]' in this interpreter and check the tokenizer path/format; "
                          "omit --tokenizer only if estimated counting is intended. Refusing to start with an "

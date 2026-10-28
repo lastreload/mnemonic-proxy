@@ -25,6 +25,13 @@ class TestTokenizerStartup(unittest.TestCase):
                     upstream.assert_not_called()
                     listener.assert_not_called()
 
+    def test_explicit_empty_path_also_refuses_startup(self):
+        with tempfile.TemporaryDirectory() as d, \
+             patch.object(server, 'Upstream') as upstream:
+            with self.assertRaisesRegex(SystemExit, '--tokenizer'):
+                server.main(['--data', d, '--tokenizer', ''])
+            upstream.assert_not_called()
+
     def test_no_tokenizer_keeps_estimated_mode(self):
         with tempfile.TemporaryDirectory() as d:
             args = server.build_parser().parse_args(['--data', d])
