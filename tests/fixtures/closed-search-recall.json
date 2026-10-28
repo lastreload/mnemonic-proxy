@@ -1,0 +1,62 @@
+{
+  "message": {
+    "role": "assistant",
+    "content": "<tool_call>\n<function=recall>\n<parameter=query>\nattr_2: 420 too high a2l1:65\n</parameter>\n<parameter=role>\nuser\n</parameter>\n</function>\n</tool_call>",
+    "reasoning_content": "\n[recall 'attr_2 too high too low a2l1': 8 risultati]\n\n[recall 'attr_2: 590 attr_2: 570 attr_2: 530 attr_2: 525': 8 risultati]\n\n[recall 'attr_2': 8 risultati]\n\n[recall 'attr_2: 495 attr_2: 468 attr_2: 420 attr_2: 400 attr_2: 315 ': 8 risultati]\n"
+  },
+  "finish_reason": "stop",
+  "usage": {
+    "prompt_tokens": 75560,
+    "completion_tokens": 53,
+    "total_tokens": 75613,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  },
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 75560,
+    "prompt_ms": 30243.4,
+    "prompt_per_token_ms": 0.4,
+    "prompt_per_second": 2498.4,
+    "predicted_n": 53,
+    "predicted_ms": 422.5,
+    "predicted_per_token_ms": 7.972,
+    "predicted_per_second": 125.4,
+    "draft_n": 45,
+    "draft_n_accepted": 39
+  },
+  "m": {
+    "kind": "answer",
+    "t_start": 1793205719.888774,
+    "wall_s": 66.8235731124878,
+    "ttft_client_s": 28.041128873825073,
+    "finish_reason": "stop",
+    "usage": {
+      "prompt_tokens": 75560,
+      "completion_tokens": 53,
+      "total_tokens": 75613,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "timings": {
+      "cache_n": 0,
+      "prompt_n": 75560,
+      "prompt_ms": 30243.4,
+      "prompt_per_token_ms": 0.4,
+      "prompt_per_second": 2498.4,
+      "predicted_n": 53,
+      "predicted_ms": 422.5,
+      "predicted_per_token_ms": 7.972,
+      "predicted_per_second": 125.4,
+      "draft_n": 45,
+      "draft_n_accepted": 39
+    },
+    "n_messages": 80,
+    "content_chars": 149,
+    "reasoning_chars": 245,
+    "n_tool_calls": 0,
+    "max_tokens": 1200
+  }
+}
