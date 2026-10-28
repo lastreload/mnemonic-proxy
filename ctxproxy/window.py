@@ -172,7 +172,11 @@ class WindowGuard:
         self.literal_tokens = 0
         if self.exact:
             try:
-                base = sum(self.mgr.piece_tokens(t) for _, t in render_pieces(msgs, tools, kw or {}))
+                template = getattr(self.mgr.tc, "prompt_template", None)
+                if template is not None:
+                    base = self.mgr.tc.raw(template.render(msgs, tools, kw or {}))
+                else:
+                    base = sum(self.mgr.piece_tokens(t) for _, t in render_pieces(msgs, tools, kw or {}))
                 self.literal_tokens = self.literal_slack(msgs, tools)
                 return base + self.literal_tokens
             except ValueError as e:
@@ -270,6 +274,8 @@ class WindowGuard:
             out = set_mt(body, room)
             if not dry:
                 self._log(action="clamp", where=where, prompt=p, max_tokens=room, was=mt)
+        if not dry:
+            self._log(action="checked", where=where, prompt=p, max_tokens=mt_of(out))
         return self.cap_budget(out, dry)
 
     def cap_budget(self, body: dict, dry: bool = False) -> dict:
@@ -543,6 +549,19 @@ def find_guard(up):
             return g
         up = getattr(up, "up", None)
     return None
+
+
+def labeled_chat(up, body, where):
+    """Label internal calls through wrappers, restoring the enclosing phase even on error."""
+    guard = find_guard(up)
+    old = guard.where if guard is not None else None
+    if guard is not None:
+        guard.where = where
+    try:
+        return up.chat(body)
+    finally:
+        if guard is not None:
+            guard.where = old
 
 
 def notes_source(guard, phys: list, tools, instruction: dict, kw: dict, min_tokens: int) -> list:

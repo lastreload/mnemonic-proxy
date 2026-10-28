@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -81,14 +82,66 @@ class Upstream:
             raise UpstreamError(st, body)
         return json.loads(body)
 
+    def _context_retry(self, error: UpstreamError, body: dict) -> dict:
+        """One pre-generation rejection can supply the count the server actually used.
+
+        Do not guess from arbitrary 400s, retry transport failures, or change messages.
+        Hidden server-side history/template settings cannot be counted by a tokenizer alone.
+        """
+        g = self.window_guard
+        if (error.status != 400 or g is None or not getattr(g.cfg, "window_guard", True)
+                or not g.cfg.window):
+            raise error
+        try:
+            obj = json.loads(error.body)
+            message = obj["error"]["message"]
+        except (ValueError, TypeError, KeyError):
+            raise error
+        if not isinstance(message, str):
+            raise error
+        match = re.fullmatch(
+            r"request exceeds the context window: prompt \((\d+) tokens\) "
+            r"(?:\+ max tokens \((\d+)\) exceeds the context \((\d+)\)|"
+            r"leaves no room to answer in the context \((\d+)\)); requests are never truncated(?:\..*)?",
+            message, re.DOTALL)
+        if match is None:
+            raise error
+        from .window import WindowExceeded, mt_of, set_mt
+        prompt, requested, win, empty_win = match.groups()
+        prompt, window = int(prompt), int(win or empty_win)
+        if window < 1 or (requested is not None and int(requested) != mt_of(body)):
+            raise error
+        # Never expand the configured window, nor shrink a generation to fit a
+        # second time: the caller retries exactly once outside this function.
+        window = min(window, int(g.cfg.window))
+        room = window - max(8, g.margin) - prompt
+        g._log(action="engine_rejected", where=g.where or "call", prompt=prompt,
+               counted_prompt=g.last_count, engine_window=int(win or empty_win),
+               max_tokens=mt_of(body), retry=bool(room > 0 and room < mt_of(body)))
+        if room < 1:
+            g.refused += 1
+            g._log(action="refused", where=g.where or "call", prompt=prompt,
+                   max_tokens=mt_of(body), reason="engine_prompt_exceeds_window")
+            raise WindowExceeded(prompt, window, max(8, g.margin), g.where or "call") from error
+        if room >= mt_of(body):
+            raise error
+        g.last_count = prompt
+        g._log(action="engine_retry", where=g.where or "call", prompt=prompt,
+               max_tokens=room, was=mt_of(body))
+        return g.cap_budget(set_mt(body, room))
+
+    def _chat_once_with_context_retry(self, body: dict, send):
+        try:
+            return send(body)
+        except UpstreamError as error:
+            corrected = self._context_retry(error, body)
+        return send(corrected)  # bounded: a second error is returned, never retried
+
     def chat(self, body: dict) -> dict:
         body = self._guard(self._model({**self.extra_body,
                                         **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}))
-        if self.truncwatch is None:
-            return self.post_json("/v1/chat/completions", body)
-        est = self._count()
-        r = self.post_json("/v1/chat/completions", body)
-        self._watch(est, r.get("usage") if isinstance(r, dict) else None)
+        r = self._chat_once_with_context_retry(body, lambda b: self.post_json("/v1/chat/completions", b))
+        self._watch(self._count(), r.get("usage") if isinstance(r, dict) else None)
         return r
 
     def chat_stream(self, body: dict) -> "StreamCall":
@@ -96,7 +149,7 @@ class Upstream:
         (Strata vede la disconnessione e annulla la generazione)."""
         body = self._guard(self._model({**self.extra_body, **body, "stream": True,
                                         "stream_options": {"include_usage": True}}))
-        sc = StreamCall(self, body)
+        sc = self._chat_once_with_context_retry(body, lambda b: StreamCall(self, b))
         if self.truncwatch is not None:
             sc.est = self._count()
         return sc

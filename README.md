@@ -373,8 +373,17 @@ what the recall loop added (by value per token: results become one-line receipts
 conclusion line, recallable by id) or returns HTTP 400 instead of sending. Both output-limit aliases are kept in
 sync. A prompt that cannot be counted with a loaded tokenizer is refused rather than silently estimated.
 
-With `--tokenizer`, use the current model's tokenizer **and a matching Qwen chat template**: loading a tokenizer
-alone does not validate the server's template or settings. Recent Strata/PolyStrata encode special-token spellings
+With `--tokenizer`, the final guard and planning total now load an adjacent `chat_template.jinja`
+(from the pack directory, or beside a supplied HF tokenizer file). This matters for fine-tunes such as Tiel:
+its Sharp template adds instructions and tool-error warnings that the built-in Qwen renderer does not write.
+Install/update `mnemonic-proxy[exact]` for both the tokenizer and sandboxed Jinja renderer. A discovered template
+that cannot load or render is never silently replaced by the built-in one. Current pack-template counting is
+text-only: image requests are refused locally rather than claiming to know dynamic image patch counts.
+Without that file, the historical built-in Qwen rendering remains (`template=builtin-qwen` at startup);
+use it only with a matching server template. Per-message planning costs remain Qwen approximations; the full
+pack-rendered total and final guard are what enforce the window.
+
+A matching tokenizer/template still does not validate hidden server settings. Recent Strata/PolyStrata encode special-token spellings
 quoted inside content (for example `</think>`) as ordinary text, not single special tokens. The guard reserves an
 additional conservative byte-BPE bound for these literals, including tool schemas and decoded call arguments;
 `window_guard` events carry `guarantee=tokenizer_bound` and `literal_slack` when this reserve is nonzero
@@ -386,6 +395,25 @@ or symbols the real count can be well above it, so use the correct `--tokenizer`
 e.g. `0.3`) when the window is small. On generic engines (Ollama, LM Studio, any OpenAI-compatible) without
 `--tokenizer` the slack is 0.15 by default (0.3.8); Strata, llama.cpp and ds4 keep 0. This 15% is not an extra reserve
 on top of a loaded tokenizer. `"window_guard": false` explicitly disables the protection.
+
+**Context diagnostics.** The CLI prints startup/version/window/template and concise runtime events to **stderr**:
+`window_guard` (including every checked call, clamp, count failure, local refusal and engine-count mismatch),
+`response_clamped`, `mask`, `switch`, `switch_skipped`, and `client_disconnected`. No prompt/notes/error-body text
+is printed by this summary. Capture it with `2> proxy-events.log` (or use your service manager's journal).
+The full structured log stays at `<--data>/journal.jsonl`; recent events are also available at
+`GET /v1/strata/journal`. The optional [dashboard](#dashboard-optional-needs-the-git-clone-ui-in-italian) reads the data directory; do not confuse its
+port with the proxy's. `where=answer|recall_round|final|notes|seal|anchor|answerfix` identifies the upstream phase;
+a client continuation is a new answer request, not a distinct server-side phase. `seal` and `anchor` deliberately
+request one token to establish saved state; this differs from a client answer clamped to one token.
+
+If PolyStrata rejects a request *before generation* with its explicit context/count error, the proxy records
+both counts and retries **once**, unchanged except for lower output/reasoning limits derived from that engine
+count. An engine-counted prompt with no answer room becomes a local `window_guard` error without a retry.
+Unrelated 400s, transport errors and errors after streaming starts are not retried. This is a safety net, not
+proof that the first request always fits arbitrary server-side modifications (for example restored hidden
+reasoning or an effort instruction moved by the server). `fit_max_tokens=true` is an additional engine-side
+output safety net, but cannot make an already oversized prompt fit. `window_margin` applies in tokenizer mode;
+`window_estimate_slack` does not. Increasing the margin is not a substitute for the correct template.
 
 Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
 history.

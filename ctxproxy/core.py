@@ -29,7 +29,7 @@ from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, 
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
                      query_terms, typed_receipt)
 from .render import message_piece, render_pieces, template_kwargs
-from .window import find_guard, notes_source
+from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
 
 # Nomi degli strumenti del proxy (0.2.0: neutri rispetto al motore). Le conversazioni nate prima della 0.2.0 tengono i
@@ -592,6 +592,10 @@ class TokenCounter:
             except Exception as e:  # noqa: BLE001
                 self.kind += " (tokenizer non caricato: %s)" % e
         self._cache: dict[str, int] = {}
+        self.prompt_template = None
+        if self.tk is not None and tokenizer_path:
+            from .chattemplate import discover
+            self.prompt_template = discover(tokenizer_path)
 
     @property
     def exact(self) -> bool:
@@ -640,8 +644,9 @@ def load_tokenizer(path: str):
 
 
 class Journal:
-    def __init__(self, path: str | None):
+    def __init__(self, path: str | None, stderr: bool = False):
         self.path = path
+        self.stderr = stderr
         self.lock = threading.Lock()
         self.mem: list[dict] = []
         if path:
@@ -658,6 +663,19 @@ class Journal:
                     f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                     f.flush()
                     os.fsync(f.fileno())
+            if self.stderr and event in {"startup", "window_guard", "response_clamped", "mask", "switch",
+                                         "switch_skipped", "client_disconnected"}:
+                # Only known numeric/enum fields: never print prompts, notes, paths from tools or error bodies.
+                fields = ("version", "window", "margin", "guard", "action", "where", "prompt", "counted_prompt",
+                          "max_tokens", "requested", "was", "room", "engine_window", "retry", "seg", "count",
+                          "tokens_masked", "status", "guarantee", "literal_slack", "template")
+                safe = {k: v for k, v in kw.items() if k in fields and isinstance(v, (str, int, float, bool))}
+                try:
+                    import sys
+                    print("[mnemonic-proxy] " + event + " " + json.dumps(safe, ensure_ascii=True),
+                          file=sys.stderr, flush=True)
+                except OSError:
+                    pass  # a closed log sink must not break the request
         return rec
 
 
@@ -1066,7 +1084,10 @@ class Manager:
                         fixed += n
                     else:
                         per[i] += n
-                return fixed + sum(per), per
+                total = fixed + sum(per)
+                if self.tc.prompt_template is not None:
+                    total = self.tc.raw(self.tc.prompt_template.render(msgs, tools, self.kw))
+                return total, per
             except ValueError:
                 pass
         last_user = max((i for i, m in enumerate(msgs) if is_human_user(m)), default=-1)
@@ -2042,7 +2063,7 @@ class Manager:
             events.append(self.journal.log("window_guard", action="notes_source", conv=conv, kept=len(src),
                                            of=len(phys)))
         try:
-            r = upstream.chat({**nbody, "messages": src + [instr]})
+            r = labeled_chat(upstream, {**nbody, "messages": src + [instr]}, "notes")
             notes = (r["choices"][0]["message"].get("content") or "").strip()
             usage = r.get("usage") or {}
             finish, timings = r["choices"][0].get("finish_reason"), r.get("timings")
@@ -2059,7 +2080,8 @@ class Manager:
             if cfg.seal_experimental:
                 t0 = time.time()
                 try:
-                    r = upstream.chat({**params, "messages": phys, "tools": tools, "max_tokens": 1, "stream": False})
+                    r = labeled_chat(upstream, {**params, "messages": phys, "tools": tools,
+                                                "max_tokens": 1, "stream": False}, "seal")
                     u = r.get("usage") or {}
                     events.append(self.journal.log("seal", conv=conv, ms=round((time.time() - t0) * 1000), usage=u,
                                                    cached=(u.get("prompt_tokens_details") or {}).get("cached_tokens"),
@@ -2566,7 +2588,8 @@ class Manager:
         idx = origin[F]
         t1 = time.time()
         try:
-            r = upstream.chat({**params, "messages": phys[:F], "tools": tools, "max_tokens": 1, "stream": False})
+            r = labeled_chat(upstream, {**params, "messages": phys[:F], "tools": tools,
+                                        "max_tokens": 1, "stream": False}, "anchor")
             u = r.get("usage") or {}
             t2 = time.time()
             fn = "%s-seg%d-anchor%d.bin" % (conv, seg, idx)

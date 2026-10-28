@@ -21,6 +21,7 @@ import re
 import time
 
 from .upstream import UpstreamError
+from .window import labeled_chat
 
 # token di un testo recall: identificatori con - . / : @ + interni (WX-5130-TEAL, 71.3, ip-10-4-77-212, tests/x.py)
 TOK_RE = re.compile(r"[^\W_][\w\-./:@+]*\w|\w")
@@ -197,7 +198,7 @@ def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None, tools="_p") -
         return resp
     t0 = time.time()
     try:
-        r2 = proxy.up.chat({**send, "messages": phys, "tools": tools})
+        r2 = labeled_chat(proxy.up, {**send, "messages": phys, "tools": tools}, "answerfix")
     except Exception as e:  # noqa: BLE001  (UpstreamError o rete: si tiene la risposta originale)
         proxy.journal.log("truncation_guard", conv=p.conv, word=hit[0], token=hit[1], before=text[:200],
                           used=False, error=repr(e)[:200], ms=round((time.time() - t0) * 1000))

@@ -63,6 +63,9 @@ def template_kwargs(req: dict) -> dict:
             kw = {"enable_thinking": False}
         elif k == "reasoning_effort" and "enable_thinking" not in kw:
             kw.update(_effort_kwargs(v))
+    ctk = req.get("chat_template_kwargs") or {}
+    if isinstance(ctk.get("preserve_thinking"), bool):
+        kw["preserve_thinking"] = ctk["preserve_thinking"]
     return kw
 
 
