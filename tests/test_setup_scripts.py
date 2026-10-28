@@ -11,7 +11,7 @@ Covers the review points:
      package manager and stop (no sudo); --install-deps runs it — directly as root,
      via sudo otherwise;
   5. the tests do not depend on the host Python version: the stubs intercept the
-     `import compression.zstd` probe, and real venvs hide it via sitecustomize.
+     `import compression.zstd` probe, and real venvs control it via a private startup hook.
 
 The tests use real venvs created by `python -m venv` (fast) and a stub
 `mnemonic-proxy` that does not start a server: what is tested is the shell, not the proxy.
@@ -121,12 +121,23 @@ def stub_packet(venv):
     return venv
 
 
+def _venv_python(venv):
+    return os.path.join(venv, "Scripts" if os.name == "nt" else "bin", "python")
+
+
+def _venv_site_packages(venv):
+    code = "import sysconfig; print(sysconfig.get_path('purelib'))"
+    return subprocess.check_output([_venv_python(venv), "-c", code],
+                                   text=True, timeout=60).strip()
+
+
 def show_zstd(venv):
-    """Make `import compression.zstd` succeed inside a REAL venv via sitecustomize,
-    on any host Python. The venv's python stays untouched, so pip, venv creation
-    and the package probes keep working: only the kv_archive probe is faked."""
-    sp = glob.glob(os.path.join(venv, "lib", "python*", "site-packages"))[0]
-    with open(os.path.join(sp, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+    """Make `import compression.zstd` succeed inside a REAL venv via a private
+    module loaded by a .pth file, on any host Python. The venv's python stays
+    untouched, so pip, venv creation and the package probes keep working: only
+    the kv_archive probe is faked."""
+    sp = _venv_site_packages(venv)
+    with open(os.path.join(sp, "_zstd_fixture.py"), "w", encoding="utf-8") as fh:
         fh.write("import sys, types\n"
                  "if 'compression.zstd' not in sys.modules:\n"
                  "    pkg = types.ModuleType('compression')\n"
@@ -135,16 +146,19 @@ def show_zstd(venv):
                  "    pkg.zstd = mod\n"
                  "    sys.modules['compression'] = pkg\n"
                  "    sys.modules['compression.zstd'] = mod\n")
+    with open(os.path.join(sp, "zz_zstd_fixture.pth"), "w", encoding="utf-8") as fh:
+        fh.write("import _zstd_fixture\n")
 
 
 def hide_zstd(venv):
-    """Block `import compression.zstd` inside a REAL venv via sitecustomize.
+    """Block `import compression.zstd` inside a REAL venv via a private module
+    loaded by a .pth file.
 
     The venv's bin/python stays untouched (pip and venv keep working correctly);
     only the kv_archive probe sees a pre-3.14 Python, on any machine.
     """
-    sp = glob.glob(os.path.join(venv, "lib", "python*", "site-packages"))
-    with open(os.path.join(sp[0], "sitecustomize.py"), "w", encoding="utf-8") as fh:
+    sp = _venv_site_packages(venv)
+    with open(os.path.join(sp, "_zstd_fixture.py"), "w", encoding="utf-8") as fh:
         fh.write("import sys\n"
                  "class _BlockZstd:\n"
                  "    def find_spec(self, name, path=None, target=None):\n"
@@ -152,6 +166,62 @@ def hide_zstd(venv):
                  "            raise ImportError('blocked by test')\n"
                  "        return None\n"
                  "sys.meta_path.insert(0, _BlockZstd())\n")
+    with open(os.path.join(sp, "zz_zstd_fixture.pth"), "w", encoding="utf-8") as fh:
+        fh.write("import _zstd_fixture\n")
+
+
+class ZstdFixtureTests(unittest.TestCase):
+    """The real-venv zstd hooks must load even when sitecustomize is shadowed."""
+
+    def setUp(self):
+        self.tree = tempfile.mkdtemp(prefix="mp-zstd-fixture-")
+        self.venv = os.path.join(self.tree, "venv")
+        subprocess.run([sys.executable, "-m", "venv", self.venv],
+                       capture_output=True, text=True, timeout=300, check=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tree, ignore_errors=True)
+
+    def probe(self, fixture, collision):
+        fixture(self.venv)
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        shadow = os.path.join(self.tree, "shadow")
+        if collision:
+            os.makedirs(shadow, exist_ok=True)
+            with open(os.path.join(shadow, "sitecustomize.py"), "w", encoding="utf-8") as fh:
+                fh.write("# Simulates a system sitecustomize ahead of the venv.\n")
+            env["PYTHONPATH"] = shadow
+        code = (
+            "import json, sys\n"
+            "try:\n"
+            "    import compression.zstd\n"
+            "except ImportError:\n"
+            "    available = False\n"
+            "else:\n"
+            "    available = True\n"
+            "hook = sys.modules.get('_zstd_fixture')\n"
+            "print(json.dumps({'available': available, 'hook_loaded': hook is not None, "
+            "'sitecustomize': getattr(sys.modules.get('sitecustomize'), '__file__', None)}))\n"
+        )
+        rc, out = run([_venv_python(self.venv), "-c", code], cwd=self.tree, env=env)
+        self.assertEqual(rc, 0, out)
+        result = json.loads(out.strip().splitlines()[-1])
+        self.assertTrue(result["hook_loaded"], result)
+        if collision:
+            self.assertEqual(os.path.realpath(result["sitecustomize"]),
+                             os.path.realpath(os.path.join(shadow, "sitecustomize.py")))
+        return result
+
+    def test_show_zstd_loads_despite_sitecustomize_collision(self):
+        for collision in (False, True):
+            with self.subTest(collision=collision):
+                self.assertTrue(self.probe(show_zstd, collision)["available"])
+
+    def test_hide_zstd_loads_despite_sitecustomize_collision(self):
+        for collision in (False, True):
+            with self.subTest(collision=collision):
+                self.assertFalse(self.probe(hide_zstd, collision)["available"])
 
 
 def fake_py314(path, valid=True):
@@ -677,7 +747,7 @@ class SetupScriptTests(unittest.TestCase):
         stub_packet(main)                 # bin/mnemonic-proxy + importable ctxproxy package
         hide_zstd(main)                   # force KV to come from .venv314, even on a 3.14 host
         # KV venv: a REAL venv (so the package probe works) marked as installed, with
-        # zstd support faked via sitecustomize -> setup.sh reuses it (it requires both
+        # zstd support faked via a .pth startup hook -> setup.sh reuses it (it requires both
         # the package and compression.zstd). No real Python >= 3.14 involved.
         kv = self.real_venv(".venv314")
         stub_packet(kv)
