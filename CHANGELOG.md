@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Refuse startup if an explicitly supplied `--tokenizer` cannot load (missing optional dependency, bad path or
+  invalid format), rather than silently replacing exact counting with an estimated guard. Tokenizer-free usage
+  remains supported. Add CPU startup regressions and an observed-counter budget-gate diagnostic fixture.
+
 ## 0.3.16 — 2026-10-28
 
 - Enforce `tool_choice=none` on the last bounded closed-search answer attempt (#30), keeping tool schemas
