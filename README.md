@@ -107,7 +107,8 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
 | agent | point it at | turn off | setup |
 |---|---|---|---|
 | pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
-| Hermes, Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
+| Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](docs/hermes-agent.md) |
+| Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
 | Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
 | any MCP client (Claude Code, Codex, Hermes) | `mnemonic-mcp --db ./data/archive.sqlite` (read-only search of the archive) | — | [MCP](#mcp-recall-server-claude-code-codex-hermes) |
