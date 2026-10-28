@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.15 — 2026-10-28
 
 - Fix a tokenizer-backed window-guard undercount for recent Strata/PolyStrata (#28): special-token spellings
   quoted in message text, tool schemas or decoded call arguments now receive a conservative ordinary byte-BPE
