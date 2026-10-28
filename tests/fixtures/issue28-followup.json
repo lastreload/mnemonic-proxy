@@ -1,0 +1,9 @@
+{
+  "source": "https://github.com/lastreload/mnemonic-proxy/issues/28",
+  "provenance": "Reported engine counts only; original prompts/journal/version/settings unavailable. Synthetic prompts calibrated with pinned public Tiel metadata and PolyStrata MockEngine. guard_prompt values are measured on those synthetic prompts, not on the user's requests. For 64K, max_tokens=289 is a synthetic choice from the preceding log, not the rejected request's known limit; five/forty synthetic tool failures exercise Sharp's injected warnings.",
+  "cases": [
+    {"name": "32k-output-overflow", "prompt": 31223, "max_tokens": 1767, "window": 32768, "guard_prompt": 30937},
+    {"name": "64k-prompt-overflow", "prompt": 65848, "max_tokens": 289, "window": 65536, "guard_prompt": 65408},
+    {"name": "64k-repeated-prompt-overflow", "prompt": 66719, "max_tokens": 289, "window": 65536, "guard_prompt": 65128}
+  ]
+}

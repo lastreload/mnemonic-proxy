@@ -39,7 +39,7 @@ Changelog = "https://github.com/lastreload/mnemonic-proxy/blob/main/CHANGELOG.md
 Issues = "https://github.com/lastreload/mnemonic-proxy/issues"
 
 [project.optional-dependencies]
-exact = ["tokenizers>=0.15"]   # exact token counting with a HF tokenizer.json
+exact = ["tokenizers>=0.15", "jinja2>=3.1.6"]   # tokenizer + pack chat template
 
 [project.scripts]
 mnemonic-proxy = "ctxproxy.server:main"

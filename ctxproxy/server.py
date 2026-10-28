@@ -1224,13 +1224,17 @@ def make_handler(proxy: Proxy):
 
         def _send(self, status, obj, headers=None, raw=None, ctype="application/json"):
             data = raw if raw is not None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            for k, v in (headers or {}).items():
-                self.send_header(k, v)
-            self.end_headers()
-            self.wfile.write(data)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(data)))
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError):
+                self.close_connection = True
+                proxy.journal.log("client_disconnected", status=status)
 
         def _passthrough(self, method, body=None):
             st, hdr, data = proxy.up.raw(method, self.path, body)
@@ -1449,10 +1453,10 @@ def serve(a, raw_cfg, cfg):
                          "omit --tokenizer only if estimated counting is intended. Refusing to start with an "
                          "estimated window guard." % counter.kind)
     up = Upstream(a.upstream, a.api_key)
-    journal = Journal(os.path.join(a.data, "journal.jsonl"))
+    journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
     from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
-                          log=lambda m: print(m, flush=True))
+                          log=lambda m: print(m, file=sys.stderr, flush=True))
     small = window_problems(cfg, engine, set(raw_cfg))
     if engine.router_state is not None:
         # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
@@ -1486,7 +1490,13 @@ def serve(a, raw_cfg, cfg):
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
         "yes" if engine.slot_save else "no", a.mode,
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
-            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor), flush=True)
+            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor),
+          file=sys.stderr, flush=True)
+    from . import __version__
+    journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
+                guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen")
+    print("[mnemonic-proxy] events: stderr + %s; recent events: /v1/strata/journal" % journal.path,
+          file=sys.stderr, flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

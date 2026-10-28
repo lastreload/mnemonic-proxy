@@ -14,7 +14,7 @@ import socket
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, redirect_stderr
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -55,11 +55,11 @@ class Base(unittest.TestCase):
         return p
 
     def serve(self, *extra):
-        """Runs server.main without opening a socket. -> (exit code or None if it started, stdout)."""
+        """Runs server.main without opening a socket. -> (exit code or None if it started, stderr)."""
         argv = ["--upstream", self.url, "--port", str(free_port()), "--data", os.path.join(self.tmp.name, "d"),
                 *extra]
         out = io.StringIO()
-        with mock.patch("ctxproxy.server.ThreadingHTTPServer"), redirect_stdout(out):
+        with mock.patch("ctxproxy.server.ThreadingHTTPServer"), redirect_stderr(out):
             try:
                 main(argv)
             except SystemExit as e:
