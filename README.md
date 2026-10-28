@@ -362,17 +362,25 @@ Optional: `--tokenizer` (a Hugging Face `tokenizer.json`, or a Strata pack `toke
 instead of a chars/3.5 estimate; with llama-server, `"engine_tokenize": true` counts through its `/tokenize`. A
 systemd user unit is in [examples/mnemonic-proxy.service](https://github.com/lastreload/mnemonic-proxy/blob/main/examples/mnemonic-proxy.service).
 
-**Window guard.** No request the proxy sends to the engine is larger than the window: before every call (answer,
-recall rounds, handoff notes, retries) the proxy checks `prompt + max_tokens + window_margin ≤ window` and, if it
-does not fit, lowers `max_tokens`, removes what the recall loop added (by value per token: results become one-line
-receipts, old reasoning becomes its conclusion line, recallable by id) or, as a last resort, returns HTTP 400 to
-the client instead of sending. With `--tokenizer` the count is the engine's own, so the guarantee is exact
-(`window_guard` events in the journal carry `guarantee=exact`). Without it the count is the calibrated chars/3.5
-estimate and the guarantee is only as good as that estimate (`guarantee=estimated`): on text with many digits or
-symbols the real count can be well above it, so use `--tokenizer` (or raise `window_estimate_slack`, e.g. `0.3`)
-when the window is small. On generic engines (Ollama, LM Studio, any OpenAI-compatible) without `--tokenizer` the
-slack is 0.15 by default (0.3.8); Strata, llama.cpp and ds4 keep 0. `"window_guard": false` restores the 0.3.2
-behaviour.
+**Window guard.** Before every call (answer, recall rounds, handoff notes, seal, anchor and retries), the proxy
+checks `counted_prompt + max_tokens + window_margin ≤ window`. If it does not fit, it lowers `max_tokens`, removes
+what the recall loop added (by value per token: results become one-line receipts, old reasoning becomes its
+conclusion line, recallable by id) or returns HTTP 400 instead of sending. Both output-limit aliases are kept in
+sync. A prompt that cannot be counted with a loaded tokenizer is refused rather than silently estimated.
+
+With `--tokenizer`, use the current model's tokenizer **and a matching Qwen chat template**: loading a tokenizer
+alone does not validate the server's template or settings. Recent Strata/PolyStrata encode special-token spellings
+quoted inside content (for example `</think>`) as ordinary text, not single special tokens. The guard reserves an
+additional conservative byte-BPE bound for these literals, including tool schemas and decoded call arguments;
+`window_guard` events carry `guarantee=tokenizer_bound` and `literal_slack` when this reserve is nonzero
+(`guarantee=exact` otherwise). This may lower the output ceiling slightly more than necessary. Arbitrary templates,
+a tokenizer for another model, and server-side prompt additions are not covered by a local exact-count claim.
+
+Without a tokenizer the count is the calibrated chars/3.5 estimate (`guarantee=estimated`): on text with many digits
+or symbols the real count can be well above it, so use the correct `--tokenizer` (or raise `window_estimate_slack`,
+e.g. `0.3`) when the window is small. On generic engines (Ollama, LM Studio, any OpenAI-compatible) without
+`--tokenizer` the slack is 0.15 by default (0.3.8); Strata, llama.cpp and ds4 keep 0. This 15% is not an extra reserve
+on top of a loaded tokenizer. `"window_guard": false` explicitly disables the protection.
 
 Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
 history.
@@ -1035,8 +1043,8 @@ without either field, `default_response` is used (16384 by default). These value
 switch segments. After masking and any necessary switch, the proxy caps the response to
 `window - estimated_prompt - reserve - 8` and sends the reduced limit to the engine (both fields are synchronized
 when present). The final window guard may reduce it further for its margin and estimate slack; it refuses a
-prompt with no space for even one generated token. Exact guarantees require `--tokenizer`; otherwise counts are
-estimates, not proof of the engine's actual token usage.
+prompt with no space for even one generated token. Tokenizer-based bounds require the current model's tokenizer
+and matching template/settings (see Window guard above); estimates are not proof of actual engine token usage.
 
 A genuinely large prompt still triggers a segment switch when there is not enough room for a useful response:
 `max(response_floor, min(requested_output, default_response))`, bounded to at least one token and at most a quarter
@@ -1044,6 +1052,18 @@ of the window. A floor never raises the actual output ceiling requested by the c
 `response_clamped` in `journal.jsonl` (requested and sent limits, prompt estimate, window and reserve), plus one
 warning per conversation in the process log, remembered across restarts. No new option is required; for example,
 a client ceiling of 120000 in a 131072 window no longer causes a switch on every short turn.
+
+**Small windows (including Strata/PolyStrata at 32K).** Unset thresholds scale when `window` is read from the
+engine's `/v1/status` (`context.native` / `max_positions`). Oversized explicit `response_floor` and
+`notes_max_tokens` are capped at one quarter of the window at startup, with warnings also shown by `check`.
+With masking anchors enabled below 128K, `anchor_min_tokens` is capped at `24000 * window / 131072` (6000 at 32K)
+so a 128K anchor threshold does not prevent useful anchors on a small window. A Strata `window` override larger
+than its reported context is lowered to that context with a warning (`check` reports the mismatch).
+These are budget/threshold adaptations, not token-count repairs; the final guard still handles every call.
+For 32K, prefer removing these three overrides to get scaled defaults, or start conservatively with
+`"response_floor": 4096, "notes_max_tokens": 2048, "anchor_min_tokens": 6000`. Keep `window` unset when discovery
+works, and check the startup log for `window from engine n_ctx: 32768`. The 128K recommendations below are not
+32K settings. Existing values within these bounds are unchanged.
 
 `--config` takes a JSON object with any field of `ctxproxy.core.Config`. Defaults below are the real ones in the
 code. Most features are off by default so that 0.1 behaviour is unchanged; the last column is what we recommend

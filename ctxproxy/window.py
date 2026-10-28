@@ -39,8 +39,9 @@ Termination / why the final call is admissible:
   without protected pieces first) down to prompt = P0. If even P0 + 1 + margin > W the request is refused
   (WindowExceeded, HTTP 400): never sent over. Removal is a pure deterministic function of the pieces.
 
-Counting: exact with --tokenizer (pack tokenizer: render_pieces + tokenizer, the engine's own count); otherwise the
-calibrated chars/3.5 estimate (+ `window_estimate_slack`) and every guard event carries guarantee=estimated.
+Counting: tokenizer-backed for the supported Qwen template, plus a conservative byte-BPE reserve for special-token
+spellings inside payloads (recent Strata encodes these as ordinary text). A tokenizer does not validate arbitrary
+server templates or settings. Without one: calibrated chars/3.5 + window_estimate_slack, guarantee=estimated.
 """
 from __future__ import annotations
 
@@ -154,6 +155,7 @@ class WindowGuard:
         self.count_errors = 0        # exact mode: prompts the tokenizer/template could not count (must stay 0)
         self.where = ""              # label of the call in progress (journal)
         self.last_count: int | None = None   # 0.3.8: prompt count of the last request sent (without slack)
+        self.literal_tokens = 0             # conservative reserve for content special-token spellings
 
     @property
     def exact(self) -> bool:
@@ -164,18 +166,63 @@ class WindowGuard:
         return int(getattr(self.cfg, "window_margin", 64) or 0)
 
     def count(self, messages: list, tools, kw: dict | None = None) -> int:
-        """Prompt tokens of a request. Exact: render_pieces (the engine's template) + tokenizer, the same count as
-        the engine. Estimate: the calibrated counter + slack."""
+        """Prompt budget: supported Qwen rendering + tokenizer + literal reserve,
+        or calibrated estimate + configured slack when no tokenizer is loaded."""
         msgs = [{k: v for k, v in m.items() if k != "extra"} for m in messages or []]
+        self.literal_tokens = 0
         if self.exact:
             try:
-                return sum(self.mgr.piece_tokens(t) for _, t in render_pieces(msgs, tools, kw or {}))
+                base = sum(self.mgr.piece_tokens(t) for _, t in render_pieces(msgs, tools, kw or {}))
+                self.literal_tokens = self.literal_slack(msgs, tools)
+                return base + self.literal_tokens
             except ValueError as e:
                 # 0.3.5: never a silent fallback in exact mode - counted and journaled (the sweep fails on it)
                 self.count_errors += 1
                 self._log(action="count_error", where=self.where or "count", error=str(e)[:200])
         est, _ = self.mgr.estimate(msgs, tools)
         return int(math.ceil(est * (1.0 + float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0))))
+
+    def literal_slack(self, messages, tools) -> int:
+        """Conservative bound for Strata's literal-special-token shielding (#28).
+
+        A pack tokenizer alone is not the server's prompt encoder: recent Strata
+        encodes special-token spellings inside content as ordinary UTF-8 text.
+        Reserve at most one ordinary byte-BPE token per UTF-8 byte for each
+        occurrence, in addition to the old rendered count. This also covers old
+        servers which do not shield literals. Template-written tags are unchanged.
+        Inspect decoded arguments too: the renderer parses JSON escape sequences.
+        """
+        tk = getattr(self.mgr.tc, "tk", None)
+        if tk is None or not hasattr(tk, "get_added_tokens_decoder"):
+            return 0
+        if getattr(self, "_literal_tokenizer", None) is not tk:
+            tags = [t.content for t in tk.get_added_tokens_decoder().values() if t.special and t.content]
+            self._literal_pattern = (re.compile("|".join(map(re.escape, sorted(tags, key=len, reverse=True))))
+                                     if tags else None)
+            self._literal_tokenizer = tk
+        pattern = self._literal_pattern
+        if pattern is None:
+            return 0
+
+        def cost(value):
+            if isinstance(value, str):
+                return sum(len(m.group().encode("utf-8")) for m in pattern.finditer(value))
+            if isinstance(value, dict):
+                return sum(cost(k) + cost(v) for k, v in value.items())
+            if isinstance(value, list):
+                return sum(map(cost, value))
+            return 0
+
+        total = cost(messages) + cost(tools)
+        for msg in messages:
+            for call in msg.get("tool_calls") or []:
+                args = (call.get("function") or call).get("arguments")
+                if isinstance(args, str):
+                    try:
+                        total += cost(json.loads(args))
+                    except ValueError:
+                        pass                 # count() reports malformed arguments
+        return total
 
     def count_body(self, body: dict) -> int:
         return self.count(body.get("messages") or [], body.get("tools"), template_kwargs(body))
@@ -185,7 +232,8 @@ class WindowGuard:
 
     def _log(self, **kw):
         if self.journal is not None:
-            return self.journal.log("window_guard", guarantee="exact" if self.exact else "estimated",
+            return self.journal.log("window_guard", guarantee=("tokenizer_bound" if self.literal_tokens else "exact")
+                                    if self.exact else "estimated", literal_slack=self.literal_tokens,
                                     window=self.cfg.window, margin=self.margin, **kw)
         return None
 
@@ -195,7 +243,14 @@ class WindowGuard:
         (answerfix asks how much room there is)."""
         if not getattr(self.cfg, "window_guard", True) or not self.cfg.window:
             return body
+        errors = self.count_errors
         p = self.count_body(body)
+        if self.count_errors != errors:
+            # Planning may use a fallback, but never send an uncountable prompt.
+            if not dry:
+                self.refused += 1
+                self._log(action="refused", where=self.where or "call", reason="count_error")
+            raise WindowExceeded(self.cfg.window, self.cfg.window, self.margin, "prompt count failed")
         if not dry:
             # 0.3.8: the count without the slack, for the engine-truncation watch (Upstream.truncwatch)
             sl = 0.0 if self.exact else float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0)

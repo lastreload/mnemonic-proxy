@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Fix a tokenizer-backed window-guard undercount for recent Strata/PolyStrata (#28): special-token spellings
+  quoted in message text, tool schemas or decoded call arguments now receive a conservative ordinary byte-BPE
+  reserve. Both streaming and non-streaming requests use the same guard, including notes, seal, anchor and retries.
+  Uncountable prompts with a loaded tokenizer are refused before HTTP; output-limit aliases remain synchronized.
+- Warn and adapt oversized small-window notes/response budgets and masking-anchor thresholds at startup;
+  `check` now reports the same adaptations and Strata's discovered window. Never honor a Strata window override
+  larger than the reported engine context. Document 32K settings and the limits of local token-count guarantees.
+- Run synthetic exact-tokenizer regressions in Linux and Windows CI; no model or GPU is used.
+
 ## 0.3.14 — 2026-10-27
 
 - Share the available result budget across distinct id recalls in the same batch (#25), returning exact
