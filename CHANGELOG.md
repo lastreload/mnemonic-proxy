@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.16 — 2026-10-28
 
 - Enforce `tool_choice=none` on the last bounded closed-search answer attempt (#30), keeping tool schemas
   and earlier attempts unchanged. A model that still supplies no public answer now returns an explicit
