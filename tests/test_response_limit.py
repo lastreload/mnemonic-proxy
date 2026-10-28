@@ -80,6 +80,17 @@ class TestResponseLimit(Base):
         self.assertLess(again.response_limit, 120000)
         self.assertFalse(self.events('switch'))
 
+    def test_planner_no_fit_refuses_even_with_guard_disabled_and_physical_room(self):
+        self.proxy.cfg.window_guard = False
+        self.proxy.cfg.segments_enabled = False
+        self.proxy.cfg.reserve = self.proxy.cfg.window - 100
+        status, body, _ = self.proxy.chat({'messages': self.history(), 'max_tokens': 8192})
+        self.assertEqual(status, 400)
+        self.assertEqual(body['error']['type'], 'context_window_exceeded')
+        self.assertFalse(self.eng.requests)
+        self.assertEqual(len(self.events('response_no_fit')), 1)
+        self.assertFalse(self.events('response_clamped'))
+
     def test_overfull_prompt_is_never_sent_without_segments(self):
         self.proxy.cfg.mask_enabled = False
         self.proxy.cfg.segments_enabled = False
@@ -87,3 +98,5 @@ class TestResponseLimit(Base):
                                        'max_tokens': 120000})
         self.assertEqual(status, 400)
         self.assertFalse(self.eng.requests)
+        self.assertEqual(len(self.events('response_no_fit')), 1)
+        self.assertFalse(self.events('response_clamped'))

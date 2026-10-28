@@ -30,9 +30,9 @@ from .paging import guard_msg, is_guarded, receipt_contaminated
 from .render import template_kwargs
 from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
-                     NO_ROOM_EN, NO_ROOM_IT, NOTICE_MIN, RESULT_MIN, RESULT_R, SEARCH_BANDS, SearchState, WindowGuard,
-                     _text as _txt, clean, conclusion, idents, pieces, remove_piece, removal_entry, removal_order,
-                     set_mt, sources_from_meta)
+                     NO_ROOM_EN, NO_ROOM_IT, NOTICE_MIN, RESULT_MIN, RESULT_R, SEARCH_BANDS, SearchState,
+                     WindowExceeded, WindowGuard, _text as _txt, clean, conclusion, idents, pieces, remove_piece,
+                     removal_entry, removal_order, set_mt, sources_from_meta)
 
 LIMIT_MSG = ("{rn}: limite di ricerche raggiunto per questa risposta. Non chiamare più "
              "{rn}: rispondi ora con le informazioni già recuperate (o di' che non le hai).")
@@ -215,7 +215,10 @@ class Proxy:
     def _chat_managed(self, req, hint, emit=None):
         t0 = time.time()
         rid_req = "q" + uuid.uuid4().hex[:10]
-        p = self._prepare(req, hint, emit)
+        try:
+            p = self._prepare(req, hint, emit)
+        except WindowExceeded as e:
+            return e.status, _err_body(e), {}
         if hasattr(self.up, "ctx"):
             self.up.ctx = (p.conv, p.seg)
         phys = list(p.messages)

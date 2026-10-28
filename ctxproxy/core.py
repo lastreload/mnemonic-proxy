@@ -1315,6 +1315,23 @@ class Manager:
         # Keep a useful generation budget, not the entire requested maximum, for switching.
         floor = max(1, min(max(cfg.response_floor, min(requested, cfg.default_response)), cfg.window // 4))
         resp = max(floor, min(requested, cfg.window - est - cfg.reserve - 8))
+
+        # A current tool result is normally protected by both age and recency. If it alone prevents a useful answer,
+        # archive it behind the ordinary recall placeholder before considering a segment switch. The helper first
+        # simulates the complete trailing tool group: a residual no-fit must not hide current evidence for nothing.
+        if cfg.mask_enabled and est + resp + cfg.reserve + 8 > cfg.window:
+            ev = self._mask_current_tools(conv, msgs, hs, phys, origin, per, est, tools, resp, seg or 0)
+            if ev:
+                phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                est2, per = self.estimate(phys, tools)
+                ev["tokens_saved_measured"] = est - est2
+                ev["est_after_measured"] = est2
+                self.journal.log("mask_measured", conv=conv, seg=seg or 0, est_before=est, est_after=est2,
+                                 saved=est - est2, saved_planned=ev.get("tokens_saved"))
+                est = est2
+                events.append(ev)
+                resp = max(floor, min(requested, cfg.window - est - cfg.reserve - 8))
+
         if cfg.segments_enabled and est + resp + cfg.reserve + 8 > cfg.window and upstream is not None:
             ev = self._switch(conv, req, msgs, hs, phys, origin, per, tools, seg or 0, upstream, est, resp)
             events.extend(ev)
@@ -1333,8 +1350,16 @@ class Manager:
                     est, per = self.estimate(phys, tools)
 
         # Recompute after masking, segmentation and auto-recall. Never raise a client's ceiling.
+        # Fail explicitly even with the downstream guard disabled: max_tokens=0 means "use the rest" there,
+        # and its smaller margin must not override this planner's reserve or silently restore a bad request.
         room = cfg.window - est - cfg.reserve - 8
-        response_limit = max(1, min(requested, room))
+        if room < 1:
+            self.journal.log("response_no_fit", conv=conv, requested=requested, prompt=est,
+                             window=cfg.window, reserve=cfg.reserve, floor=floor,
+                             message="No output token fits after context planning; request refused")
+            from .window import WindowExceeded
+            raise WindowExceeded(est, cfg.window, cfg.reserve + 8, "prepare")
+        response_limit = min(requested, room)
         if response_limit < requested:
             events.append(self.journal.log("response_clamped", conv=conv, requested=requested,
                                            max_tokens=response_limit, prompt=est, window=cfg.window,
@@ -1853,6 +1878,83 @@ class Manager:
                                 tokens_saved=saved, est_before=est, est_after=est - saved,
                                 first_index=first, frontier_index=frontier, floor_index=floor, reread_est=reread,
                                 ids=[r[3] for r in rows][:50], pieces=pieces, **extra)
+
+    def _mask_current_tools(self, conv, msgs, hs, phys, origin, per, est, tools, response_budget, seg=0):
+        """Mask only trailing tool results, and only if doing so restores `response_budget`.
+
+        The original messages are already in the verbatim archive. Simulate placeholders without writing masks so a
+        residual no-fit leaves the current evidence untouched. Largest results are considered first; for parallel
+        calls this hides the fewest results necessary while preserving every tool message and its protocol role.
+        """
+        cfg = self.cfg
+        # Without an exposed proxy recall tool, the model cannot recover the hidden current evidence.
+        if not any((t.get("function") or {}).get("name") == self.rn for t in tools or []):
+            return None
+        first_current = len(msgs)
+        while first_current and msgs[first_current - 1].get("role") == "tool":
+            first_current -= 1
+        if first_current == len(msgs):
+            return None
+
+        phys_of = {i: j for j, i in enumerate(origin) if i is not None}
+        current_hs = [hs[i] for i in range(first_current, len(msgs))]
+        existing = self.store.masks_for(current_hs)
+        calls, call_aid = {}, {}
+        for i, m in enumerate(msgs):
+            if m.get("role") == "assistant":
+                calls.update(call_info(m))
+                if m.get("tool_calls"):
+                    a_id = aid_for(i, m)
+                    call_aid.update({c.get("id"): a_id for c in m["tool_calls"]})
+
+        candidates = []
+        for i in range(first_current, len(msgs)):
+            j = phys_of.get(i)
+            if j is None or hs[i] in existing:
+                continue
+            m = phys[j]
+            orig = content_text(msgs[i].get("content"))
+            n = self.msg_tokens(msgs[i], False)
+            if n < cfg.min_mask_tokens or is_placeholder(orig):
+                continue
+            txt = content_text(m.get("content"))
+            note = txt[:len(txt) - len(orig)] if txt.endswith(orig) and txt != orig else ""
+            rid = rid_for(i, msgs[i])
+            placeholder = note + self.out_placeholder(calls.get(m.get("tool_call_id")), orig, n, rid,
+                                                       call_aid.get(m.get("tool_call_id")))
+            candidates.append((i, j, rid, n, placeholder))
+        candidates.sort(key=lambda c: (-c[3], c[0]))
+
+        simulated = list(phys)
+        simulated_est = est
+        selected = []
+        for i, j, rid, n, placeholder in candidates:
+            changed = {**simulated[j], "content": placeholder}
+            next_est, _ = self.estimate(simulated[:j] + [changed] + simulated[j + 1:], tools)
+            saved = simulated_est - next_est
+            if saved <= 0:
+                continue
+            simulated[j] = changed
+            simulated_est = next_est
+            selected.append((i, j, rid, n, saved))
+            if simulated_est + response_budget + cfg.reserve + 8 <= cfg.window:
+                break
+        if not selected or simulated_est + response_budget + cfg.reserve + 8 > cfg.window:
+            return None
+
+        now = time.time()
+        rows = [(hs[i], conv, i, rid, n, now, saved) for i, _, rid, n, saved in selected]
+        self.store.add_masks(rows)
+        first = min(i for i, _, _, _, _ in selected)
+        reread = sum(per[j] for j, i in enumerate(origin) if i is not None and i >= first)
+        pieces = [{"id": rid, "indice": i, "token": n, "risparmio": saved, "tipo": "uscita",
+                   "strumento": (calls.get(msgs[i].get("tool_call_id")) or {}).get("name"), "eta": 0}
+                  for i, _, rid, n, saved in selected]
+        return self.journal.log("mask", conv=conv, seg=seg, emergency="current_tool", count=len(rows),
+                                tokens_masked=sum(r[4] for r in rows), tokens_saved=est - simulated_est,
+                                est_before=est, est_after=simulated_est, first_index=first, frontier_index=len(msgs),
+                                floor_index=0, reread_est=reread, response_budget=response_budget,
+                                ids=[r[3] for r in rows][:50], pieces=pieces)
 
     # ---------- segmenti ----------
     def choose_cut(self, msgs, origin, per, start):
