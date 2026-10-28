@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Enforce `tool_choice=none` on the last bounded closed-search answer attempt (#30), keeping tool schemas
+  and earlier attempts unchanged. A model that still supplies no public answer now returns an explicit
+  context-manager failure notice (also in streaming), with `strata_context.final_answer_missing=true`
+  and a `final_answer_missing` journal event. Private reasoning is never promoted into an answer.
+  Client tool calls, the window guard, answer floor and two-retry limit are unchanged.
+
 ## 0.3.15 — 2026-10-28
 
 - Fix a tokenizer-backed window-guard undercount for recent Strata/PolyStrata (#28): special-token spellings

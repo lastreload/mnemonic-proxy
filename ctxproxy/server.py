@@ -469,6 +469,19 @@ class Proxy:
         # controllo post-risposta (K) e pulizia del ragionamento di T/K (answerfix.py)
         resp = answerfix.guard(self, p, body, phys, resp, emit, tools=tools_r if guard_on else "_p")
         answerfix.finish(self, p, resp)
+        # Never promote private reasoning or guess an answer when a closed search ends without public text.
+        msg = resp["choices"][0]["message"]
+        missing_answer = final and not msg.get("tool_calls") and not content_text(msg.get("content")).strip()
+        if missing_answer:
+            notice = ("[gestore del contesto: ricerca chiusa; il modello non ha prodotto una risposta finale "
+                      "testuale. Nessuna risposta è stata dedotta dal ragionamento privato.]" if p.lang == "it" else
+                      "[context manager: search closed; the model did not produce a final text answer. "
+                      "No answer was inferred from private reasoning.]")
+            msg["content"] = notice
+            self.journal.log("final_answer_missing", conv=p.conv, round=rnd, attempts=made,
+                             thinking_off=no_think, reason="no_public_text")
+            if emit:
+                self._emit_delta(emit, stream_state, resp, {"content": notice})
         if internal and p.hs:
             self.mgr.remember_internal(p.conv, p.hs[-1], internal, "".join(strip_c), "".join(strip_r))
         if recall_logs:
@@ -480,6 +493,7 @@ class Proxy:
                "virtual_tokens": p.virtual_tokens, "masked": p.masked, "masked_tokens": p.masked_tokens,
                "masked_saved": p.masked_saved,
                "archived": st["archived"], "recalls": recalls,
+               "final_answer_missing": bool(missing_answer),
                "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens"),
                "prompt_read": (resp.get("timings") or {}).get("prompt_n"),
                "invalidated_suffix_tokens": (p.invalidated or {}).get("tokens", 0),
@@ -632,9 +646,10 @@ class Proxy:
     def _no_think_body(self, body: dict) -> dict:
         """0.3.6: the body of the last final attempt: reasoning off the way Strata (and llama.cpp) honour it -
         chat_template_kwargs.enable_thinking=false, which wins over reasoning_effort in the template (render.py
-        template_kwargs, as Strata's frontend); no thinking budget (it would have nothing to bound)."""
+        template_kwargs, as Strata's frontend); no thinking budget (it would have nothing to bound).
+        tool_choice=none forbids even tools remembered from earlier messages; schemas stay stable."""
         ctk = body.get("chat_template_kwargs") if isinstance(body.get("chat_template_kwargs"), dict) else {}
-        out = {**body, "chat_template_kwargs": {**ctk, "enable_thinking": False}}
+        out = {**body, "tool_choice": "none", "chat_template_kwargs": {**ctk, "enable_thinking": False}}
         out.pop("reasoning_budget_tokens", None)
         return out
 
@@ -647,7 +662,7 @@ class Proxy:
         the same check P + F + margin <= W - when the final call itself could not give F (floor_short), it must give
         at least the room the first attempt had. To pay for the added cost only verified copies and finished
         reasoning are removed (bands 0-1, never evidence); if it still does not fit the loop is restored and False is
-        returned (empty answer as before). Journal: final_recall_retry.
+        returned (an explicit failure notice is returned if no public text remains). Journal: final_recall_retry.
         0.3.6: attempt 2 (the last) is made only after attempt 1 returned internal calls only: its calls are answered
         with ANSWER_NOW (answer now, in the requested format, no tools) and `body` is the reasoning-off body, so the
         same check P + F + margin <= W is made with the template the engine will render; the answer room `need` is the
