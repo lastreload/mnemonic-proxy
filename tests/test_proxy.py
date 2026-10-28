@@ -329,9 +329,10 @@ class TestSegments(Base):
         st, r, _ = self.proxy.chat({"model": "m", "messages": h3, "tools": TOOLS, "max_tokens": 1024})
         self.assertTrue(self.events("segment_miss"))
         self.assertEqual((st, r["error"]["code"]), (400, "window_guard"))
-        self.proxy.mgr.cfg.window_guard = False      # guard off: the 0.3.2 behaviour (segment 0, request sent)
-        r, _ = self.send(h3)
-        self.assertEqual(r["strata_context"]["segment"], 0)
+        # Planner no-fit is an explicit safety error even when the downstream guard is disabled.
+        self.proxy.mgr.cfg.window_guard = False
+        st, r, _ = self.proxy.chat({"model": "m", "messages": h3, "tools": TOOLS})
+        self.assertEqual((st, r["error"]["code"]), (400, "window_guard"))
 
     def test_response_floor_and_saved_A_prompt(self):
         """G3: max_tokens piccolo (rigioco) non deve ritardare lo switch se response_floor è impostato; con data_dir
