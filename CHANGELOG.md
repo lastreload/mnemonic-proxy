@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.17 — 2026-10-28
 
 - Refuse startup if an explicitly supplied `--tokenizer` cannot load (missing optional dependency, bad path or
   invalid format), rather than silently replacing exact counting with an estimated guard. Tokenizer-free usage
