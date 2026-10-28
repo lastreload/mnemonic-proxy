@@ -351,7 +351,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --conf
 with `config.json` = `examples/config.llama-server.json` and `slot_dir` = the same `/path/to/slots` (see
 [Configuration](#configuration) for the recommended fields). With an engine that has no saved state (vLLM, online
 APIs) the proxy runs in base mode (window: see [Install](#install)). The measurements in
-[One session, measured](#one-session-measured) (35B-A3B MoE, 128K window) come from
+[One session, measured](#one-session-measured) (Qwen3.8 Flash Next IQ3_XXS, 128K window) come from
 Strata (our session-files build, 0.1.38 + PR #668) on a 12 GB RTX 4070 Ti — see [Engines](#engines); they say nothing about
 other hardware.
 
@@ -680,7 +680,7 @@ provider).
 
 ## One session, measured
 
-A real coding session — a canvas tower-defense game built from scratch by a 35B-A3B MoE model on a single 12 GB
+A real coding session — a canvas tower-defense game built from scratch by Qwen3.8 Flash Next (IQ3_XXS) on a single 12 GB
 RTX 4070 Ti — with the proxy in between.
 
 <p align="center">
