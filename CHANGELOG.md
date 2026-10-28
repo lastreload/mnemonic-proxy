@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.19 — 2026-10-28
+
+- Context fitting with fine-tunes that ship their own chat template: when the tokenizer directory contains
+  `chat_template.jinja`, the proxy now counts the prompt with that template (sandboxed Jinja, `[exact]` extra) instead
+  of the built-in Qwen rendering. A Tiel/Sharp setup was under-counting by a few hundred tokens and sent requests the
+  engine rejected (#28, #43, #44). Startup reports `template=pack` or `builtin-qwen`; on the stock Qwen3.8 pack the two
+  counts are identical. Prompts that leave no room to answer are refused locally; a recognised engine context
+  rejection is retried once with smaller output limits. Short stderr summaries of key events (window guard, clamps,
+  masking, segment switches) with request phase labels; client disconnects no longer print a BrokenPipe traceback.
+  Pack-template mode is text-only: requests with images are refused explicitly.
+- A single fresh tool result that leaves no room for an answer is now archived behind the usual `recall` placeholder
+  (only when `recall` is exposed and only if this restores a useful answer budget), instead of the request being
+  forwarded with `max_tokens` clamped to 1. If nothing fits, the proxy returns an explicit context error (#40, #42).
+- Tests: zstd fixtures no longer depend on the interpreter's `sitecustomize` (fixes 7 failures on Ubuntu with
+  Python 3.14) (#39, #41).
+
 ## 0.3.18 — 2026-10-28
 
 - A closed search whose final reply is only an internal `recall` call written as text (`<tool_call><function=recall>…`)
