@@ -10,7 +10,7 @@ calls answered by the closing notice (nothing searched), if it fits with F.
 and 18_r7_a_0639: reasoning up to the budget, then recall). If the new attempt returns only internal calls, a LAST
 one with the reasoning off (chat_template_kwargs.enable_thinking=false, no thinking budget) and the explicit
 instruction to answer now in the requested format; never more than two new attempts. If that too calls only
-internal tools, the answer stays empty (nothing invented).
+internal tools, the client receives an explicit failure notice (no answer invented).
 
     CTX_TOKDIR=<pack tokenizer> python3 -m unittest -v tests.test_final_recall_retry
 """
@@ -152,9 +152,9 @@ class TestFinalRecallRetry(unittest.TestCase):
         finally:
             s.close()
 
-    def test_c_recall_always_gives_empty_after_two_attempts(self):
-        """0.3.6: the model calls recall in every final call: two new attempts (the second with the reasoning off),
-        then the answer stays empty - nothing invented, never a third attempt."""
+    def test_c_recall_always_reports_failure_after_two_attempts(self):
+        """The model calls recall in every final call: two new attempts (the second with the reasoning off),
+        then an explicit failure notice - no invented answer, never a third attempt."""
         for mk in (space_session, limit_session):
             for stream in (False, True):
                 with self.subTest(case=mk.__name__, stream=stream):
@@ -165,7 +165,7 @@ class TestFinalRecallRetry(unittest.TestCase):
                         self.assertEqual(st, 200)
                         self.check_window(s)
                         msg = r["choices"][0]["message"]
-                        self.assertFalse((msg.get("content") or "").strip())
+                        self.assertIn("did not produce a final text answer", msg["content"])
                         self.assertNotIn("tool_calls", msg)
                         self.assertEqual(r["choices"][0]["finish_reason"], "stop")
                         ev = s.events("final_recall_retry")
@@ -283,7 +283,8 @@ class TestFinalRecallRetry(unittest.TestCase):
             self.check_window(s)
             deltas = [c["choices"][0]["delta"] for c in s.chunks if c and c.get("choices")]
             self.assertFalse(any(d.get("tool_calls") for d in deltas))
-            self.assertEqual("".join(d.get("content") or "" for d in deltas), "")
+            self.assertIn("did not produce a final text answer",
+                          "".join(d.get("content") or "" for d in deltas))
             self.assertEqual(len(s.final_bodies), 3)
             self.assertEqual(res[-1][1]["choices"][0]["finish_reason"], "stop")
         finally:
