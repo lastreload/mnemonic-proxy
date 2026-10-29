@@ -33,13 +33,23 @@ def render(body: dict) -> str:
 
 class FakeEngine:
     def __init__(self, policy=None, cpt: float = 3.5, flavor: str = "strata", slot_save: bool = True,
-                 n_slots: int = 1, n_ctx: int = 131072, reject_empty_save: bool = False):
+                 n_slots: int = 1, n_ctx: int = 131072, reject_empty_save: bool = False,
+                 models: dict[str, int] | None = None):
         """flavor: strata (/v1/status) | llama (llama-server: /props, /slots, /tokenize, 400 per file mancante,
         id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | ds4
         (ds4-server: /v1/models con owned_by "ds4.c", niente slot, id `call_<hex>` generati dal motore, 400 su un
         risultato di strumento con id sconosciuto, conteggio delle chiamate rimandate con id noto/sconosciuto) | openai
         (solo /v1/chat/completions) | ollama / lmstudio (0.3.8: contesto esposto, taglio silenzioso, vedi sotto)."""
         self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
+        # Optional one-active-model mode for profile tests: model id -> n_ctx. A switch invalidates the live slot,
+        # while saved files deliberately remain restorable by the fake engine (the proxy must enforce ownership).
+        self.models = dict(models or {})
+        self.active_model = next(iter(self.models), None)
+        if self.active_model is not None:
+            self.n_ctx = self.models[self.active_model]
+        self.saved_by: dict[str, str] = {}
+        self.restores: list[tuple] = []
+        self.model_switches = 0
         # Strata 0.2.x: /slots reports the empty slot, whose state cannot be saved.
         self.reject_empty_save = reject_empty_save
         self.id_task = 0
@@ -76,6 +86,21 @@ class FakeEngine:
         self.loads = 0
         self.truncated: list = []
         self.read_override = None
+
+    def activate_model(self, name) -> bool:
+        """Select the one active model. False = this multi-model fake does not serve the requested id."""
+        if not self.models:
+            return True
+        name = str(name or "")
+        if name not in self.models:
+            return False
+        if name != self.active_model:
+            self.active_model = name
+            self.n_ctx = self.models[name]
+            self.live = ""                 # one active model: its predecessor no longer occupies the slot
+            self.started += 1
+            self.model_switches += 1
+        return True
 
     # ---- Ollama / LM Studio (flavor "ollama" | "lmstudio") ----
     def generic_get(self, path: str):
@@ -156,6 +181,7 @@ class FakeEngine:
 
     def status(self) -> dict:
         return {"service": "strata", "loaded": True, "started": self.started,
+                **({"model": self.active_model} if self.active_model is not None else {}),
                 "context": {"native": self.n_ctx, "max_positions": self.n_ctx},
                 "activity": {"requests": self.n_requests, "in_flight": int(self.busy)}}
 
@@ -242,6 +268,10 @@ class FakeEngine:
                 self.wfile.write(d)
 
             def do_GET(self):
+                if eng.models and self.path.startswith("/v1/models"):
+                    return self._send(200, {"object": "list", "data": [
+                        {"id": mid, "object": "model", "owned_by": "fake", "context_length": n}
+                        for mid, n in eng.models.items()]})
                 if eng.flavor == "openai_cut":
                     return self._send(404, {"error": {"message": "not found"}})
                 if eng.flavor in ("ollama", "lmstudio"):
@@ -250,7 +280,8 @@ class FakeEngine:
                 if eng.flavor == "llama":
                     if self.path.startswith("/props"):
                         return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
-                                                "total_slots": eng.n_slots, "model_path": "/m/fake-0.6B.gguf"})
+                                                "total_slots": eng.n_slots,
+                                                "model_path": "/m/%s.gguf" % (eng.active_model or "fake-0.6B")})
                     if self.path.startswith("/slots"):
                         return self._send(200, eng.slots_list())
                     if self.path.startswith("/health"):
@@ -281,6 +312,10 @@ class FakeEngine:
             def do_POST(self):
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
+                if eng.models and (self.path.startswith("/v1/chat") or self.path.startswith("/slots/")):
+                    if not eng.activate_model(body.get("model")):
+                        return self._send(400, {"error": {"message": "unknown model %r; models: %s" % (
+                            body.get("model"), ", ".join(eng.models)), "type": "invalid_request_error"}})
                 if eng.flavor == "openai" and not self.path.startswith("/v1/chat"):
                     return self._send(404, {"error": {"message": "not found"}})
                 if eng.flavor in ("ollama", "lmstudio", "openai_cut"):
@@ -315,12 +350,15 @@ class FakeEngine:
                     eng.slots.append((action, fn, len(eng.live)))
                     if action == "save":
                         eng.files[fn] = eng.live
+                        if eng.active_model is not None:
+                            eng.saved_by[fn] = eng.active_model
                         return self._send(200, {"id_slot": sid, "filename": fn, "n_saved": int(len(eng.live) / eng.cpt),
                                                 "n_written": len(eng.live) * 10, "timings": {"save_ms": 1.0}})
                     if action == "restore":
                         if fn not in eng.files:
                             return self._send(400, {"error": {"code": 400, "message": "Unable to restore slot: No "
                                                               "available space in KV cache or invalid slot save file"}})
+                        eng.restores.append((eng.active_model, fn, eng.saved_by.get(fn)))
                         eng.live = eng.files[fn]
                         return self._send(200, {"id_slot": sid, "filename": fn,
                                                 "n_restored": int(len(eng.live) / eng.cpt),
@@ -335,9 +373,13 @@ class FakeEngine:
                             return self._send(400, {"error": {"code": 400, "message": "no complete session to save",
                                                               "type": "invalid_request_error", "kind": "invalid"}})
                         eng.files[body.get("filename")] = eng.live
+                        if eng.active_model is not None:
+                            eng.saved_by[body.get("filename")] = eng.active_model
                     elif action == "restore":
                         if body.get("filename") not in eng.files:
                             return self._send(404, {"error": {"message": "file non trovato"}})
+                        eng.restores.append((eng.active_model, body.get("filename"),
+                                             eng.saved_by.get(body.get("filename"))))
                         eng.live = eng.files[body.get("filename")]
                     return self._send(200, {"id_slot": 0, "filename": body.get("filename"),
                                             "n_saved": int(len(eng.live) / eng.cpt),
@@ -630,13 +672,17 @@ if __name__ == "__main__":
     ap.add_argument("--models", default="big=65536,small=16384",
                     help="router flavor: model=n_ctx,... (each model a llama-server, loaded on demand)")
     ap.add_argument("--no-slot-save", action="store_true", help="llama flavor: as if started without --slot-save-path")
+    ap.add_argument("--active-models", default="",
+                    help="Strata one-active-model mode: model=n_ctx,... (switched by each request's model field)")
     a = ap.parse_args()
     if a.flavor == "router":
         ms = {k: int(v) for k, v in (p.split("=", 1) for p in a.models.split(",") if p)}
         url = FakeRouter(ms, slot_save=not a.no_slot_save).start(a.port)
     else:
+        models = ({k: int(v) for k, v in (p.split("=", 1) for p in a.active_models.split(",") if p)}
+                  if a.flavor == "strata" and a.active_models else None)
         url = FakeEngine(flavor=a.flavor, n_ctx=a.n_ctx, slot_save=not a.no_slot_save,
-                         reject_empty_save=a.reject_empty_save).start(a.port)
+                         reject_empty_save=a.reject_empty_save, models=models).start(a.port)
     print("[fake-engine] listening on %s" % url, flush=True)
     try:
         while True:

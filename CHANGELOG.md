@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Add request-selected model profiles (#27): exact names or patterns bind tokenizer and pack chat template,
+  `slot_dir`, engine-discovered/configured window and optional thresholds. Unknown models fail with HTTP 400
+  unless an exact `default_profile` is configured. Each concrete model has isolated conversation accounting,
+  archive/store and saved-state ownership; switching back resumes its own history. Internal recall, notes,
+  retry, seal/anchor and autosave calls retain the originating model. `check`, `check --live` and startup report
+  loaded profiles. The no-profile request path remains byte-identical to 0.3.19.
+
 ## 0.3.19 — 2026-10-28
 
 - Context fitting with fine-tunes that ship their own chat template: when the tokenizer directory contains

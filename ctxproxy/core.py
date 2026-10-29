@@ -290,6 +290,9 @@ class Config:
     router_load_timeout_s: float = 600.0
     # streaming only: while the model loads the client gets an SSE comment (": loading model <id>") this often
     router_keepalive_s: float = 10.0
+    # 0.3.20: optional per-model profiles (issue #27). Empty = the legacy single-configuration path, unchanged.
+    profiles: dict = dataclasses.field(default_factory=dict)
+    default_profile: str = ""
     # ds4-server: ds4 rimette nel prompt le tool call campionate prese per id (exact DSML replay), quindi
     # mask_tool_args non serve e viene spento; false solo se ds4-server gira con --disable-exact-dsml-tool-replay
     ds4_exact_tool_replay: bool = True
@@ -1031,6 +1034,8 @@ class Manager:
         self.lang = norm_lang(cfg.prompt_language)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
+        # ProfileProxy sets the concrete model here. Empty preserves the legacy hashes and conversation ids.
+        self.conversation_namespace = ""
 
     def L(self, it: str, en: str) -> str:
         """Testo nella lingua della conversazione corrente."""
@@ -1264,10 +1269,12 @@ class Manager:
         events: list[dict] = []
         conv, known = self.store.find_conv(hs)
         if hint:
-            conv = "c-" + H(hint)[:16]
+            conv = "c-" + H((self.conversation_namespace + "\0" + hint) if self.conversation_namespace else hint)[:16]
         existed = conv is not None and self.store.has_conv(conv)   # già nell'archivio prima di questa richiesta
         if conv is None:
-            conv = "c" + uuid.uuid4().hex[:12]
+            # A model namespace makes saved-state filenames unique even if a caller replaces uuid4 in tests.
+            conv = "c" + H(self.conversation_namespace + "\0" + uuid.uuid4().hex)[:12] \
+                if self.conversation_namespace else "c" + uuid.uuid4().hex[:12]
             events.append(self.journal.log("new_conversation", conv=conv, messages=len(msgs)))
         elif known < len(hs) - 1 and known >= 0 and self.store.has_successor(conv, known):
             # un messaggio in posizione known+1 era già stato visto, ma diverso: modifica/rigenerazione = ramo

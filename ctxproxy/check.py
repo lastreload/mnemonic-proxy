@@ -93,6 +93,34 @@ def _writable(d):
 
 def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     rep = Report()
+    if raw_cfg.get("profiles"):
+        import copy
+        from .profiles import load_profiles
+        try:
+            specs, default = load_profiles(raw_cfg, cfg, getattr(a, "tokenizer", None))
+        except ValueError as e:
+            rep.add(FAIL, "model profiles", str(e), "fix profiles/default_profile in the config")
+            return rep
+        for spec in specs:
+            s = spec.summary()
+            rep.add(INFO, "model profiles", "%s: tokenizer=%s template=%s slot_dir=%s window=%s (%s)" % (
+                spec.name, s["tokenizer"], s["template"], s["slot_dir"] or "-", s["window"], s["window_source"]))
+            if spec.pattern:
+                rep.add(INFO, "model profiles", "%s: pattern loaded; concrete models are checked on their requests"
+                        % spec.name)
+                continue
+            raw, _ = spec.raw_config()
+            pa = copy.copy(a)
+            pa.tokenizer = spec.tokenizer
+            pa._profile_model = spec.name
+            child = run_checks(pa, raw, Config.from_dict(raw), live=live)
+            for item in child.items:
+                item["evidence"] = "model %s: %s" % (spec.name, item["evidence"])
+                rep.items.append(item)
+        if default:
+            rep.add(INFO, "model profiles", "default_profile=%s (unknown/missing model ids use this concrete model)"
+                    % default)
+        return rep
     explicit = set(raw_cfg)
     # --- config file
     if a.config:
@@ -278,10 +306,11 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                                                                      ", NOT writable: " + err),
                     "" if live else "check --live verifies it is the engine's --slot-save-path")
     if live:
-        _live(rep, up, eng, cfg)
+        selected_model = getattr(a, "_profile_model", None)
+        _live(rep, up, eng, cfg, model=selected_model)
         if eng.kind == "openai" and not any(
                 i["check"].startswith("live") and i["status"] == FAIL for i in rep.items):
-            _live_full_window(rep, up, eng, cfg, explicit)
+            _live_full_window(rep, up, eng, cfg, explicit, model=selected_model)
     _reminder(rep)
     return rep
 
@@ -289,12 +318,12 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
 FILL_LINE = "Record %05d: the value %05d was checked by the auditor and it is correct.\n"
 
 
-def _live_full_window(rep, up, eng, cfg, explicit):
+def _live_full_window(rep, up, eng, cfg, explicit, model=None):
     """0.3.8, generic engines: a prompt of ~0.9 x window must reach the engine whole (Ollama and LM Studio answer 200
     after cutting it in silence). The size is calibrated on the engine itself: two short prompts give the tokens per
     line of the filler text and the chat-template overhead, so no tokenizer is needed."""
     w = int(cfg.window if "window" in explicit or not eng.n_ctx else eng.n_ctx)
-    model = (eng.model or "local-model") if eng.kind == "openai" else "local-model"
+    model = model or ((eng.model or "local-model") if eng.kind == "openai" else "local-model")
 
     def ask(n):
         text = "".join(FILL_LINE % (i, (i * 7919) % 100000) for i in range(n))
@@ -334,7 +363,10 @@ def _fill_fix(eng, w):
         getattr(eng, "flavor", None), w)
 
 
-def _live(rep, up, eng, cfg):
+def _live(rep, up, eng, cfg, model=None):
+    if model:
+        # Multi-model fake/PolyStrata slot operations select the same active model as the generation probes.
+        up.profile_model = model
     if getattr(eng, "router", False):
         rep.add(WARN, "live", "llama-server router mode: --live (real save/restore) is not implemented for the router "
                 "yet", "check the saved state with a real request: the journal shows save/restore per model")
@@ -372,7 +404,7 @@ def _live(rep, up, eng, cfg):
         if empty:
             rep.add(INFO, "live: backup", "the slot is empty (no complete session): skipping backup and final restore")
     try:
-        lm = (eng.model or "local-model") if eng.kind == "openai" else "local-model"   # Ollama: real name
+        lm = model or ((eng.model or "local-model") if eng.kind == "openai" else "local-model")  # Ollama: real name
         t0 = time.time()
         r = up.chat({"model": lm, "max_tokens": 16, "temperature": 0,
                      **({"chat_template_kwargs": {"enable_thinking": False}} if eng.kind == "strata" else {}),

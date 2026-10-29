@@ -1246,15 +1246,17 @@ def make_handler(proxy: Proxy):
         def do_GET(self):
             parts = self.path.split("?")[0].strip("/").split("/")
             if parts[:3] == ["v1", "strata", "archive"] and len(parts) == 4:
-                r = proxy.store.get(parts[3])
+                store = proxy.store_for(rid=parts[3]) if hasattr(proxy, "store_for") else proxy.store
+                r = store.get(parts[3])
                 if not r:
                     return self._send(404, {"error": {"message": "id not found"}})
                 return self._send(200, dict(zip(("rid", "conv", "idx", "role", "name", "content", "tokens"), r)))
             if parts[:3] == ["v1", "strata", "conversations"] and len(parts) == 4:
                 c = parts[3]
+                store = proxy.store_for(conv=c) if hasattr(proxy, "store_for") else proxy.store
                 segs = [{"seg": s, "cut_index": ci, "kind": k, "notes": n}
-                        for s, ci, _, n, k in proxy.store.segments(c)]
-                return self._send(200, {"conversation_id": c, **proxy.store.stats(c), "segment_list": segs})
+                        for s, ci, _, n, k in store.segments(c)]
+                return self._send(200, {"conversation_id": c, **store.stats(c), "segment_list": segs})
             if parts[:3] == ["v1", "strata", "journal"]:
                 return self._send(200, {"events": proxy.journal.mem[-200:]})
             if parts[:3] == ["v1", "strata", "engine"] or parts[:2] == ["v1", "engine"] and len(parts) == 2:
@@ -1455,6 +1457,11 @@ def serve(a, raw_cfg, cfg):
                          "Install 'mnemonic-proxy[exact]' in this interpreter and check the tokenizer path/format; "
                          "omit --tokenizer only if estimated counting is intended. Refusing to start with an "
                          "estimated window guard." % counter.kind)
+    profile_specs, default_profile = [], ""
+    if raw_cfg.get("profiles"):
+        from .profiles import load_profiles
+        # Validate every profile tokenizer/template before touching the engine or opening a listener.
+        profile_specs, default_profile = load_profiles(raw_cfg, cfg, a.tokenizer)
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
     from .engines import setup as setup_engine, window_mismatch, window_problems
@@ -1476,9 +1483,12 @@ def serve(a, raw_cfg, cfg):
                          + "\n".join("  %s\n  -> %s" % p for p in big))
     proxy = Proxy(cfg, up, Store(os.path.join(a.data, "archive.sqlite")), journal, counter, mode=a.mode)
     proxy.engine = engine
-    if cfg.autosave:
+    if profile_specs:
+        from .profiles import ProfileProxy
+        proxy = ProfileProxy(proxy, a, raw_cfg, profile_specs, default_profile)
+    elif cfg.autosave:
         proxy.enable_autosave()
-    if cfg.kv_archive:
+    if cfg.kv_archive and not profile_specs:
         from .kvarchive import enable as enable_kv_archive, zstd
         if zstd is None:
             raise SystemExit("mnemonic-proxy: kv_archive requires Python >= 3.14 (compression.zstd); "
@@ -1495,9 +1505,17 @@ def serve(a, raw_cfg, cfg):
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
             cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor),
           file=sys.stderr, flush=True)
+    for summary in profile_specs:
+        s = summary.summary()
+        print("[mnemonic-proxy] profile %s: tokenizer=%s template=%s slot_dir=%s window=%s (%s)" % (
+            s["profile"], s["tokenizer"], s["template"], s["slot_dir"] or "-", s["window"], s["window_source"]),
+              file=sys.stderr, flush=True)
     from . import __version__
-    journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
-                guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen")
+    startup = {"version": __version__, "window": cfg.window, "margin": cfg.window_margin,
+               "guard": cfg.window_guard, "template": "pack" if counter.prompt_template else "builtin-qwen"}
+    if profile_specs:
+        startup["profiles"] = [s.summary() for s in profile_specs]
+    journal.log("startup", **startup)
     print("[mnemonic-proxy] events: stderr + %s; recent events: /v1/strata/journal" % journal.path,
           file=sys.stderr, flush=True)
     try:
@@ -1505,13 +1523,17 @@ def serve(a, raw_cfg, cfg):
     except KeyboardInterrupt:
         pass
     finally:
-        for worker in (proxy.autosaver, getattr(proxy, "archiver", None)):
-            if worker is not None:
-                worker.stop()
-                if worker.th is not None:
-                    worker.th.join()
+        if hasattr(proxy, "close"):
+            proxy.close()
+        else:
+            for worker in (proxy.autosaver, getattr(proxy, "archiver", None)):
+                if worker is not None:
+                    worker.stop()
+                    if worker.th is not None:
+                        worker.th.join()
         srv.server_close()
-        proxy.store.db.close()
+        if not hasattr(proxy, "close"):
+            proxy.store.db.close()
 
 
 if __name__ == "__main__":

@@ -1069,6 +1069,51 @@ Reports (Italian): [DS4-LONG-RESULT.md](https://github.com/lastreload/mnemonic-p
 
 `GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/ENGINES-RESULT.md) (Italian).
 
+## Model profiles
+
+For PolyStrata or another engine that switches models, `profiles` binds each request's `model` to its own tokenizer
+(including an adjacent `chat_template.jinja`), slot directory, window and optional thresholds. Example with three
+models (the Cyber pack supplies its Sharp template as `chat_template.jinja` beside the tokenizer):
+
+```json
+{
+  "default_profile": "Tiel-Coder-35B-A3B",
+  "profiles": {
+    "Tiel-Coder-35B-A3B": {
+      "tokenizer": "/packs/tiel/tokenizer",
+      "slot_dir": "/slots/tiel"
+    },
+    "Cyber-Tiel-Coder-35B-A3B": {
+      "tokenizer": "/packs/cyber-tiel-sharp/tokenizer",
+      "slot_dir": "/slots/cyber-tiel",
+      "window": 262144,
+      "window_override": true
+    },
+    "Qwen3.8 Flash Next IQ3_S": {
+      "tokenizer": "/packs/qwen-flash-next/tokenizer",
+      "slot_dir": "/slots/qwen-flash"
+    }
+  }
+}
+```
+
+Exact model names win over shell-style patterns such as `"Qwen3.8*"`; patterns are tried in declaration order.
+Every profile inherits the top-level config and may override normal config thresholds. `window` is a fallback when
+the engine cannot report the active model's context; the engine-reported window wins by default. Add
+`"window_override": true` to use the configured window explicitly (still bounded by engine safety checks).
+Without `default_profile`, an unknown or missing model returns HTTP 400 and lists the configured profiles. With a
+default (which must name an exact, non-pattern profile), an unknown/missing id is routed to that concrete default
+model; the proxy never reuses whichever profile happened to handle the previous request. Startup, `check` and
+`check --live` list the loaded profiles.
+
+**Conversation state is isolated per concrete model.** Switching from model A to B gives B separate accounting,
+archive/store and saved-state tracking; switching back to A resumes A's history. This prevents cross-model recall
+and prompt/state contamination, and it also applies to two concrete ids matched by one pattern. Model-specific
+SQLite stores live under `data/models/`. Saved files have model ownership recorded under `data/`, and a restore
+into another concrete model is refused. Tokenizer/template selection, window, notes, recall rounds, final retries,
+seal/anchor calls and autosave all stay with the originating model. With no `profiles`, the legacy 0.3.19 path and
+forwarded prompt are unchanged.
+
 ## Configuration
 
 Output limits in managed mode: `max_completion_tokens` takes precedence over `max_tokens` when both are supplied;

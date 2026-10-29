@@ -170,6 +170,7 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         if s is None:
             e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
         else:
+            e.model = s.get("model") or s.get("active_model") or None
             # Strata espone la finestra in context (native = max_positions = --max-context): la finestra
             # del motore viene letta qui, come llama.cpp la legge da /slots
             ctx = s.get("context")
@@ -404,8 +405,8 @@ class RemoteTokenizer:
 
     def encode(self, text, add_special_tokens=False):
         body = {"content": text, "add_special": bool(add_special_tokens)}
-        m = getattr(self.up, "router_model", None)
-        if m:                      # router mode: the tokenizer of the current model
+        m = getattr(self.up, "router_model", None) or getattr(self.up, "profile_model", None)
+        if m:                      # router/profile mode: the tokenizer of the current concrete model
             body["model"] = m
         st, _, data = self.up.raw("POST", "/tokenize", json.dumps(body, ensure_ascii=False).encode("utf-8"))
         if st != 200:
