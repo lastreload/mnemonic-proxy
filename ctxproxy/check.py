@@ -93,7 +93,36 @@ def _writable(d):
 
 def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     rep = Report()
-    explicit = set(raw_cfg)
+    if "profiles" in raw_cfg:
+        import copy
+        from .profiles import load_profiles
+        try:
+            specs, default = load_profiles(raw_cfg, cfg, getattr(a, "tokenizer", None))
+        except ValueError as e:
+            rep.add(FAIL, "model profiles", str(e), "fix profiles/default_profile in the config")
+            return rep
+        for spec in specs:
+            s = spec.summary()
+            rep.add(INFO, "model profiles", "%s: tokenizer=%s template=%s slot_dir=%s window=%s (%s)" % (
+                spec.name, s["tokenizer"], s["template"], s["slot_dir"] or "-", s["window"], s["window_source"]))
+            if spec.pattern:
+                rep.add(INFO, "model profiles", "%s: pattern loaded; concrete models are checked on their requests"
+                        % spec.name)
+                continue
+            raw, profile_explicit = spec.raw_config()
+            pa = copy.copy(a)
+            pa.tokenizer = spec.tokenizer
+            pa._profile_model = spec.name
+            pa._profile_explicit = profile_explicit
+            child = run_checks(pa, raw, Config.from_dict(raw), live=live)
+            for item in child.items:
+                item["evidence"] = "model %s: %s" % (spec.name, item["evidence"])
+                rep.items.append(item)
+        if default:
+            rep.add(INFO, "model profiles", "default_profile=%s (unknown/missing model ids use this concrete model)"
+                    % default)
+        return rep
+    explicit = set(getattr(a, "_profile_explicit", set(raw_cfg)))
     # --- config file
     if a.config:
         names = {f.name for f in dataclasses.fields(Config)}
@@ -142,6 +171,31 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     except ValueError as e:
         rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp", "ds4" or "openai"')
         return rep
+    selected = getattr(a, "_profile_model", None)
+    deferred_profile = False
+    if selected and eng.kind == "strata" and eng.model != selected:
+        if live:
+            status = engines._get_json(up, "/v1/status") or {}
+            slots = engines._get_json(up, "/slots") or []
+            busy = (status.get("activity") or {}).get("in_flight") or any(
+                s.get("is_processing") for s in slots if isinstance(s, dict))
+            if busy:
+                rep.add(FAIL, "live", "engine is busy: cannot select profile model %s" % selected,
+                        "run check --live when no agent is working")
+                return rep
+            try:
+                up.chat({"model": selected, "max_tokens": 1, "stream": False,
+                         "messages": [{"role": "user", "content": "hi"}]})
+                eng = engines.detect(up, cfg.engine, int(cfg.slot_id or 0))
+            except Exception as e:  # noqa: BLE001
+                rep.add(FAIL, "model profiles", "cannot activate %s: %s" % (selected, str(e)[:300]))
+                return rep
+        else:
+            deferred_profile = True
+            eng.n_ctx = None  # An unrelated active model's window says nothing about this profile.
+            rep.add(INFO, "context window", "profile %s is not active; using configured fallback %d for this "
+                    "static check, engine window is validated on selection" % (selected, cfg.window),
+                    "use check --live to select and exercise each exact profile (switches models)")
     how = "detected" if eng.detected else "forced by config/--engine"
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
@@ -157,8 +211,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         if eng.kind == "strata":
             s = engines._get_json(up, "/v1/status") or {}
             loaded = bool(s.get("loaded"))
-            rep.add(OK if loaded else FAIL, "model loaded", "Strata /v1/status loaded=%s" % s.get("loaded"),
-                    "" if loaded else "load a model in Strata")
+            rep.add(INFO if deferred_profile else (OK if loaded else FAIL), "model loaded",
+                    "profile loads on selection" if deferred_profile else "Strata /v1/status loaded=%s" % s.get("loaded"),
+                    "" if deferred_profile or loaded else "load a model in Strata")
         elif getattr(eng, "router", False):
             rep.add(OK if ids else WARN, "model loaded", "llama-server router mode: models loaded on demand (%s)"
                     % (", ".join(map(str, ids[:8])) or "none listed"), "" if ids else "add models to the preset")
@@ -278,10 +333,11 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                                                                      ", NOT writable: " + err),
                     "" if live else "check --live verifies it is the engine's --slot-save-path")
     if live:
-        _live(rep, up, eng, cfg)
+        selected_model = getattr(a, "_profile_model", None)
+        _live(rep, up, eng, cfg, model=selected_model)
         if eng.kind == "openai" and not any(
                 i["check"].startswith("live") and i["status"] == FAIL for i in rep.items):
-            _live_full_window(rep, up, eng, cfg, explicit)
+            _live_full_window(rep, up, eng, cfg, explicit, model=selected_model)
     _reminder(rep)
     return rep
 
@@ -289,12 +345,12 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
 FILL_LINE = "Record %05d: the value %05d was checked by the auditor and it is correct.\n"
 
 
-def _live_full_window(rep, up, eng, cfg, explicit):
+def _live_full_window(rep, up, eng, cfg, explicit, model=None):
     """0.3.8, generic engines: a prompt of ~0.9 x window must reach the engine whole (Ollama and LM Studio answer 200
     after cutting it in silence). The size is calibrated on the engine itself: two short prompts give the tokens per
     line of the filler text and the chat-template overhead, so no tokenizer is needed."""
     w = int(cfg.window if "window" in explicit or not eng.n_ctx else eng.n_ctx)
-    model = (eng.model or "local-model") if eng.kind == "openai" else "local-model"
+    model = model or ((eng.model or "local-model") if eng.kind == "openai" else "local-model")
 
     def ask(n):
         text = "".join(FILL_LINE % (i, (i * 7919) % 100000) for i in range(n))
@@ -334,7 +390,10 @@ def _fill_fix(eng, w):
         getattr(eng, "flavor", None), w)
 
 
-def _live(rep, up, eng, cfg):
+def _live(rep, up, eng, cfg, model=None):
+    if model:
+        # Multi-model fake/PolyStrata slot operations select the same active model as the generation probes.
+        up.profile_model = model
     if getattr(eng, "router", False):
         rep.add(WARN, "live", "llama-server router mode: --live (real save/restore) is not implemented for the router "
                 "yet", "check the saved state with a real request: the journal shows save/restore per model")
@@ -372,7 +431,7 @@ def _live(rep, up, eng, cfg):
         if empty:
             rep.add(INFO, "live: backup", "the slot is empty (no complete session): skipping backup and final restore")
     try:
-        lm = (eng.model or "local-model") if eng.kind == "openai" else "local-model"   # Ollama: real name
+        lm = model or ((eng.model or "local-model") if eng.kind == "openai" else "local-model")  # Ollama: real name
         t0 = time.time()
         r = up.chat({"model": lm, "max_tokens": 16, "temperature": 0,
                      **({"chat_template_kwargs": {"enable_thinking": False}} if eng.kind == "strata" else {}),
