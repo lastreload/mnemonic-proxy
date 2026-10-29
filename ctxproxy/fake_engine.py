@@ -245,7 +245,7 @@ class FakeEngine:
         finish = "tool_calls" if msg.get("tool_calls") else "stop"
         ct = int(len(json.dumps(msg)) / self.cpt)
         return {"id": "chatcmpl-" + uuid.uuid4().hex[:8], "object": "chat.completion", "created": int(time.time()),
-                "model": "fake", "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
+                "model": self.active_model or "fake", "choices": [{"index": 0, "message": msg, "finish_reason": finish}],
                 "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct,
                           "prompt_tokens_details": {"cached_tokens": cached}},
                 "timings": {"cache_n": cached, "prompt_n": pt - cached, "prompt_ms": (pt - cached) * 0.4}}

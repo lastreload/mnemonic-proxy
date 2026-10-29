@@ -1077,7 +1077,7 @@ models (the Cyber pack supplies its Sharp template as `chat_template.jinja` besi
 
 ```json
 {
-  "default_profile": "Tiel-Coder-35B-A3B",
+  "slot_save": true,
   "profiles": {
     "Tiel-Coder-35B-A3B": {
       "tokenizer": "/packs/tiel/tokenizer",
@@ -1103,8 +1103,14 @@ the engine cannot report the active model's context; the engine-reported window 
 `"window_override": true` to use the configured window explicitly (still bounded by engine safety checks).
 Without `default_profile`, an unknown or missing model returns HTTP 400 and lists the configured profiles. With a
 default (which must name an exact, non-pattern profile), an unknown/missing id is routed to that concrete default
-model; the proxy never reuses whichever profile happened to handle the previous request. Startup, `check` and
-`check --live` list the loaded profiles.
+model; the proxy never reuses whichever profile happened to handle the previous request. Set e.g.
+`"default_profile": "Tiel-Coder-35B-A3B"` only if this fallback is intentional. Startup, `check` and
+`check --live` list the loaded profiles. Static `check` does not load inactive models; it reports their configured
+fallback and defers engine-window validation until selection. `check --live` switches through the exact profiles:
+run it only while no client is using the engine. Patterns are checked when a concrete model is requested.
+For a single-active-model Strata engine, selection uses a one-token probe before reading its context; subsequent
+calls for the same active model do not probe. Configure the engine's model aliases and per-model slot-save paths
+to match the profile keys and `slot_dir` values. Tokenizer paths are loaded eagerly and fail closed if invalid.
 
 **Conversation state is isolated per concrete model.** Switching from model A to B gives B separate accounting,
 archive/store and saved-state tracking; switching back to A resumes A's history. This prevents cross-model recall

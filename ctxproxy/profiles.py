@@ -23,6 +23,11 @@ import os
 import threading
 import time
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .server import Proxy
+
 from .core import Config, Journal, Store, TokenCounter
 from .router import SlotOwners
 from .upstream import Upstream
@@ -135,7 +140,7 @@ def load_profiles(raw_cfg: dict, cfg: Config, default_tokenizer: str | None = No
         values = dict(values)
         if tokenizer:
             values["tokenizer"] = tokenizer
-        counter = TokenCounter(cfg.chars_per_token, tokenizer)
+        counter = TokenCounter(values.get("chars_per_token", cfg.chars_per_token), tokenizer)
         if tokenizer is not None and not counter.exact:
             raise ValueError("profile %r: cannot load tokenizer %s. Install 'mnemonic-proxy[exact]' and check the "
                              "path/format; refusing to start with an estimated window guard. %s"
@@ -199,8 +204,9 @@ class ProfileProxy:
         self.journal = legacy.journal
         self.engine = legacy.engine
         self.mode = legacy.mode
-        self.contexts: dict[str, object] = {}
+        self.contexts: dict[str, Proxy] = {}
         self.context_specs: dict[str, ProfileSpec] = {}
+        self.archive_readers: dict[str, Proxy] = {}
         self.active_model: str | None = None
         self.owners = SlotOwners(os.path.join(os.path.abspath(args.data), OWNERS_FILE))
         self.autosaver = None
@@ -220,11 +226,11 @@ class ProfileProxy:
         return [s.summary() for s in self.specs]
 
     def resolve(self, requested) -> tuple[str, ProfileSpec, bool]:
-        name = str(requested) if requested is not None else ""
+        name = requested if isinstance(requested, str) else ""
         exact = next((s for s in self.specs if not s.pattern and s.name == name), None)
         if exact is not None:
             return name, exact, False
-        pattern = next((s for s in self.specs if s.pattern and s.matches(name)), None)
+        pattern = next((s for s in self.specs if name and s.pattern and s.matches(name)), None)
         if pattern is not None:
             return name, pattern, False
         if self.default_profile:
@@ -242,7 +248,11 @@ class ProfileProxy:
         probe. Engines with per-model routing/context selection use their existing selectors instead.
         """
         if self.active_model == model:
-            return
+            from .engines import _get_json
+            status = _get_json(self.up, "/v1/status") or {}
+            actual = status.get("model") or status.get("active_model")
+            if status.get("loaded", True) and (actual is None or actual == model):
+                return
         body = {"model": model, "max_tokens": 1, "temperature": 0, "stream": False,
                 "messages": [{"role": "user", "content": "hi"}]}
         st, _, data = self.up.raw("POST", "/v1/chat/completions", json.dumps(body).encode("utf-8"))
@@ -283,7 +293,8 @@ class ProfileProxy:
             pass
         child = Proxy(cfg, up, Store(os.path.join(directory, "archive.sqlite")), self.journal, counter,
                       mode=self.mode)
-        child.lock = self.lock
+        # Keep Proxy's regular Lock: autosave/archiving use locked(), which RLock
+        # only gained in Python 3.14. Dispatcher serializes outside the child lock.
         child.engine = engine
         child.mgr.conversation_namespace = model
         if engine.router_state is not None:
@@ -383,15 +394,37 @@ class ProfileProxy:
             return status, body
 
     def _child_for(self, conv: str | None = None, rid: str | None = None):
-        if conv:
-            for child in self.contexts.values():
-                if child.store.has_conv(conv):
-                    return child
-        if rid:
-            for child in self.contexts.values():
-                if child.store.get(rid):
-                    return child
-        return None
+        # Dashboard/archive reads must survive a restart without loading a model
+        # or probing the engine. Lightweight facades reuse only Proxy's archive
+        # and mark methods; they never handle chat or saved-state operations.
+        from pathlib import Path
+        with self.lock:
+            root = Path(os.path.abspath(self.args.data)) / "models"
+            for metadata in sorted(root.glob("*/model.json")):
+                try:
+                    model = json.loads(metadata.read_text(encoding="utf-8"))["model"]
+                    if model in self.contexts or model in self.archive_readers:
+                        continue
+                    concrete, spec, defaulted = self.resolve(model)
+                    if defaulted or concrete != model:
+                        continue
+                    digest = hashlib.sha256(model.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+                    if metadata.parent.name != digest or not (metadata.parent / "archive.sqlite").is_file():
+                        continue
+                    reader = copy.copy(self.base_proxy)
+                    reader.store = Store(str(metadata.parent / "archive.sqlite"))
+                    reader.cfg = Config.from_dict(spec.raw_config()[0])
+                    reader.tc = spec.new_counter()
+                    self.archive_readers[model] = reader
+                except (OSError, ValueError, KeyError, TypeError, ProfileError):
+                    continue
+            children = list(self.contexts.values()) + [r for m, r in self.archive_readers.items()
+                                                        if m not in self.contexts]
+            if conv:
+                return next((c for c in children if c.store.has_conv(conv)), None)
+            if rid:
+                return next((c for c in children if c.store.get(rid)), None)
+            return None
 
     def store_for(self, conv: str | None = None, rid: str | None = None):
         child = self._child_for(conv, rid)
@@ -417,6 +450,6 @@ class ProfileProxy:
         for worker in self.workers():
             if worker.th is not None:
                 worker.th.join()
-        for child in self.contexts.values():
+        for child in list(self.contexts.values()) + list(self.archive_readers.values()):
             child.store.db.close()
         self.store.db.close()

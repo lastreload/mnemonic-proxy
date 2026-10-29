@@ -93,7 +93,7 @@ def _writable(d):
 
 def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     rep = Report()
-    if raw_cfg.get("profiles"):
+    if "profiles" in raw_cfg:
         import copy
         from .profiles import load_profiles
         try:
@@ -109,10 +109,11 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 rep.add(INFO, "model profiles", "%s: pattern loaded; concrete models are checked on their requests"
                         % spec.name)
                 continue
-            raw, _ = spec.raw_config()
+            raw, profile_explicit = spec.raw_config()
             pa = copy.copy(a)
             pa.tokenizer = spec.tokenizer
             pa._profile_model = spec.name
+            pa._profile_explicit = profile_explicit
             child = run_checks(pa, raw, Config.from_dict(raw), live=live)
             for item in child.items:
                 item["evidence"] = "model %s: %s" % (spec.name, item["evidence"])
@@ -121,7 +122,7 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
             rep.add(INFO, "model profiles", "default_profile=%s (unknown/missing model ids use this concrete model)"
                     % default)
         return rep
-    explicit = set(raw_cfg)
+    explicit = set(getattr(a, "_profile_explicit", set(raw_cfg)))
     # --- config file
     if a.config:
         names = {f.name for f in dataclasses.fields(Config)}
@@ -170,6 +171,31 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     except ValueError as e:
         rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp", "ds4" or "openai"')
         return rep
+    selected = getattr(a, "_profile_model", None)
+    deferred_profile = False
+    if selected and eng.kind == "strata" and eng.model != selected:
+        if live:
+            status = engines._get_json(up, "/v1/status") or {}
+            slots = engines._get_json(up, "/slots") or []
+            busy = (status.get("activity") or {}).get("in_flight") or any(
+                s.get("is_processing") for s in slots if isinstance(s, dict))
+            if busy:
+                rep.add(FAIL, "live", "engine is busy: cannot select profile model %s" % selected,
+                        "run check --live when no agent is working")
+                return rep
+            try:
+                up.chat({"model": selected, "max_tokens": 1, "stream": False,
+                         "messages": [{"role": "user", "content": "hi"}]})
+                eng = engines.detect(up, cfg.engine, int(cfg.slot_id or 0))
+            except Exception as e:  # noqa: BLE001
+                rep.add(FAIL, "model profiles", "cannot activate %s: %s" % (selected, str(e)[:300]))
+                return rep
+        else:
+            deferred_profile = True
+            eng.n_ctx = None  # An unrelated active model's window says nothing about this profile.
+            rep.add(INFO, "context window", "profile %s is not active; using configured fallback %d for this "
+                    "static check, engine window is validated on selection" % (selected, cfg.window),
+                    "use check --live to select and exercise each exact profile (switches models)")
     how = "detected" if eng.detected else "forced by config/--engine"
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
@@ -185,8 +211,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         if eng.kind == "strata":
             s = engines._get_json(up, "/v1/status") or {}
             loaded = bool(s.get("loaded"))
-            rep.add(OK if loaded else FAIL, "model loaded", "Strata /v1/status loaded=%s" % s.get("loaded"),
-                    "" if loaded else "load a model in Strata")
+            rep.add(INFO if deferred_profile else (OK if loaded else FAIL), "model loaded",
+                    "profile loads on selection" if deferred_profile else "Strata /v1/status loaded=%s" % s.get("loaded"),
+                    "" if deferred_profile or loaded else "load a model in Strata")
         elif getattr(eng, "router", False):
             rep.add(OK if ids else WARN, "model loaded", "llama-server router mode: models loaded on demand (%s)"
                     % (", ".join(map(str, ids[:8])) or "none listed"), "" if ids else "add models to the preset")

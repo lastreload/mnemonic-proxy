@@ -1302,6 +1302,23 @@ def make_handler(proxy: Proxy):
                 except (ValueError, KeyError, TypeError) as e:
                     st, out = 400, {"error": {"message": "richiesta non valida: %s" % e}}
                 return self._send(st, out)
+            if hasattr(proxy, "resolve") and path in (
+                    "/v1/chat/completions", "/chat/completions", "/v1/messages", "/messages",
+                    "/v1/messages/count_tokens", "/messages/count_tokens", "/v1/responses", "/responses"):
+                # Validate before any API adapter commits SSE HTTP 200 headers.
+                from .profiles import ProfileError, _error
+                try:
+                    incoming = json.loads(body or b"{}")
+                    if not isinstance(incoming, dict):
+                        raise ValueError("expected a JSON object")
+                    model, _, _ = proxy.resolve(incoming.get("model"))
+                    incoming["model"] = model
+                    body = json.dumps(incoming, ensure_ascii=False).encode("utf-8")
+                except ProfileError as e:
+                    status, error, _ = _error(e)
+                    return self._send(status, error)
+                except (ValueError, TypeError) as e:
+                    return self._send(400, {"error": {"message": "invalid JSON request: %s" % e}})
             if path in ("/v1/messages", "/v1/messages/count_tokens", "/messages", "/messages/count_tokens"):
                 from . import api_anthropic
                 return api_anthropic.handle(self, proxy, path, body)
@@ -1458,7 +1475,7 @@ def serve(a, raw_cfg, cfg):
                          "omit --tokenizer only if estimated counting is intended. Refusing to start with an "
                          "estimated window guard." % counter.kind)
     profile_specs, default_profile = [], ""
-    if raw_cfg.get("profiles"):
+    if "profiles" in raw_cfg:
         from .profiles import load_profiles
         # Validate every profile tokenizer/template before touching the engine or opening a listener.
         profile_specs, default_profile = load_profiles(raw_cfg, cfg, a.tokenizer)
@@ -1467,12 +1484,14 @@ def serve(a, raw_cfg, cfg):
     from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, file=sys.stderr, flush=True))
-    small = window_problems(cfg, engine, set(raw_cfg))
+    # The active engine model can be unrelated to any requested profile.
+    # Validate each selected model before building its prompt, not at startup.
+    small = [] if profile_specs else window_problems(cfg, engine, set(raw_cfg))
     if engine.router_state is not None:
         # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
         from .router import OWNERS_FILE, SlotOwners
         engine.router_state.owners = SlotOwners(os.path.join(os.path.abspath(a.data), OWNERS_FILE))
-    big = window_mismatch(cfg, engine, set(raw_cfg))     # 0.3.8 Ollama / LM Studio: they would cut in silence
+    big = [] if profile_specs else window_mismatch(cfg, engine, set(raw_cfg))
     if small:
         journal.log("refused_small_window", problems=[e for e, _ in small + big])
         raise SystemExit("mnemonic-proxy: refusing to start, the context window is too small.\n" + "\n".join(
