@@ -35,6 +35,15 @@ class TestProfileEdges(ProfileBase):
         self.assertEqual(self.proxy.contexts["alpha"].tc.raw("x" * 100), 50)
         self.assertEqual(self.proxy.contexts["beta"].tc.raw("x" * 100), 20)
 
+    def test_fallback_window_does_not_inflate_default_thresholds(self):
+        self.build({"profiles": {"alpha": {"window": 16384}, "beta": {"window": 262144}}})
+        self.send("alpha")
+        self.send("beta")
+        self.assertEqual(self.proxy.contexts["alpha"].cfg.mask_trigger, 20000)
+        self.assertEqual(self.proxy.contexts["beta"].cfg.mask_trigger, 40000)
+        self.send("alpha")
+        self.assertEqual(self.proxy.contexts["alpha"].cfg.mask_trigger, 20000)
+
     def test_child_lock_supports_locked_on_all_supported_python_versions(self):
         self.build({"profiles": {"alpha": {}}})
         self.send("alpha")

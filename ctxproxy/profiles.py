@@ -90,6 +90,19 @@ class ProfileSpec:
         explicit = set(raw)
         if "window" in self.values and not self.values.get("window_override", False):
             explicit.discard("window")
+        # Defaults describe the built-in window, not an arbitrary fallback.
+        # Establish proportional defaults first; engines.apply then scales from
+        # this configured window to the selected model's actual context.
+        from .engines import BASE_WINDOW, SCALED, SCALED_MIN
+        defaults = Config()
+        window = int(raw.get("window", defaults.window))
+        ratio = window / float(BASE_WINDOW)
+        if ratio != 1:
+            for field in SCALED:
+                value = getattr(defaults, field, None)
+                if field not in raw and isinstance(value, int) and value > 0:
+                    scaled = max(64, SCALED_MIN.get(field, 0) if ratio < 1 else 0, int(value * ratio))
+                    raw[field] = min(scaled, value) if ratio < 1 else scaled
         return raw, explicit
 
     def new_counter(self) -> TokenCounter:
