@@ -27,11 +27,14 @@ import urllib.request
 from . import engines
 from .core import Config
 from .enginectx import NAME
+from .savedstate import state_available
 from .upstream import Upstream
 
 OK, WARN, FAIL, INFO = "ok", "warn", "fail", "info"
 ICON = {OK: "\u2705", WARN: "\u26a0\ufe0f ", FAIL: "\u274c", INFO: "\u2139\ufe0f "}
 PLAIN = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]", INFO: "[INFO]"}
+# autorestore defaults to true but is inert without one of the save-producing
+# features; keep it out of the configured/verified save decision.
 SAVED_STATE = ("slot_save", "mask_anchor", "autosave", "seal_experimental", "kv_archive")
 
 
@@ -341,13 +344,20 @@ def _live(rep, up, eng, cfg):
         return
     up.timeout = 600
     up.set_engine(eng, cfg.slot_dir)
+    verify_slots = bool(eng.slot_save and any(getattr(cfg, key, False) for key in SAVED_STATE))
+    all_off = not any(getattr(cfg, key, False) for key in engines.NEEDS_SLOTS)
+    if eng.slot_save and not verify_slots:
+        reason = ("all six saved-state options are false" if all_off else
+                  "no save-producing saved-state option is enabled (autorestore alone is inert)")
+        rep.add(INFO, "live: save/restore", "skipped: %s; no SAVE or RESTORE request was sent" % reason,
+                "enable at least one save-producing saved-state option to verify session files")
     st = engines.normalize_status(eng, up) or {}
     if (st.get("activity") or {}).get("in_flight"):
         rep.add(FAIL, "live", "the engine slot is busy right now", "run check --live when no agent is working")
         return
     tag = "mnemonic-check-%d" % os.getpid()
     backup = None
-    if eng.slot_save:
+    if verify_slots:
         if eng.kind == "strata":
             # New Strata exposes /slots; older versions may not.  Only "is_processing" is trusted here:
             # Strata 0.2.x reports n_prompt_tokens 0 right after a restore although the slot holds the
@@ -397,7 +407,7 @@ def _live(rep, up, eng, cfg):
                                       calls[0]["function"]["arguments"])) if calls else
                 "the model answered without calling the tool", "" if good else
                 "llama-server: start with --jinja (chat template with tools); try a model with tool support")
-        if eng.slot_save:
+        if verify_slots:
             fn = tag + ".bin"
             t0 = time.time()
             s = up.slot("save", fn)
@@ -417,7 +427,10 @@ def _live(rep, up, eng, cfg):
     except Exception as e:  # noqa: BLE001
         rep.add(FAIL, "live", "request failed: %s" % str(e)[:300], "see the engine log")
     finally:
-        if backup:
+        if backup and not state_available(up):
+            rep.add(INFO, "live", "the previous slot content was not restored: saved state was suspended after "
+                    "an unsupported session reply; no further RESTORE was attempted")
+        elif backup:
             try:
                 up.slot("restore", backup)
                 if cfg.slot_dir and os.path.exists(os.path.join(cfg.slot_dir, backup)):

@@ -38,6 +38,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from . import compat
+from .savedstate import state_available
 
 try:
     from compression import zstd
@@ -645,7 +646,9 @@ class ArchivingUpstream:
         return ev
 
     def slot(self, action: str, filename: str) -> dict:
-        if action == "restore" and self.cfg.slot_dir:
+        # Do not materialize an archived file for a restore that the central
+        # breaker will refuse locally.
+        if action == "restore" and self.cfg.slot_dir and state_available(self.up):
             self.ensure_local(filename)
         r = self.up.slot(action, filename)
         if action == "save" and self.arc.has(filename):
@@ -752,6 +755,8 @@ class Archiver:
 
     def tick(self, now: float | None = None):
         """Al massimo un file per giro. -> evento kv_archive o None."""
+        if not state_available(self.proxy.up):
+            return None
         now = now or time.time()
         if not self._strata_idle(now):
             return None

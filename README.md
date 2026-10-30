@@ -951,6 +951,10 @@ against a mock engine and with short real client runs, not yet on long real sess
   must be trusted: the hashes detect corruption, not tampering. Our measurements are from the session-files build
   (0.1.38 + PR #668, `8d8f664`); on 0.1.40 the proxy ran the AgentLongBench benchmark and the recall tests, but
   restore times were not re-measured there (see [Saved state, measured](#saved-state-measured)).
+  **PolyStrata `strata-poly`:** this backend does not support session SAVE/RESTORE. After a 501 or the documented
+  fatal session reply, the proxy suspends saved state for that concrete model until restart; the first engine kill
+  cannot be undone. For a known `strata-poly` setup, set `mask_anchor`, `slot_save`, `autosave`, `autorestore`,
+  `seal_experimental` and `kv_archive` to `false`.
   `setup.sh` and `run-strata-proxy.sh` in the repository root (a venv, then the proxy in front of a running
   Strata, `slot_dir` read from the Strata config) were contributed and are covered by unit tests; they are not yet
   tested by the maintainer on a real Strata install.

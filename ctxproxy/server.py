@@ -28,6 +28,7 @@ from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, St
                    is_human_user)
 from .paging import guard_msg, is_guarded, receipt_contaminated
 from .render import template_kwargs
+from .savedstate import select_model
 from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
                      NO_ROOM_EN, NO_ROOM_IT, NOTICE_MIN, RESULT_MIN, RESULT_R, SEARCH_BANDS, SearchState,
@@ -87,6 +88,7 @@ class Proxy:
             base = base.up
         if isinstance(base, Upstream):
             base.window_guard = self.wguard
+            base.saved_state.bind(journal)
 
     def enable_autosave(self, start: bool = True):
         """Avvolge l'upstream nel Tracker (ripristino automatico) e avvia il thread di autosalvataggio."""
@@ -102,6 +104,9 @@ class Proxy:
     def chat(self, req: dict, hint: str | None = None, emit=None) -> tuple[int, dict, dict]:
         """-> (status, corpo risposta non-stream, header extra). Con `emit` (callable(chunk_dict|None)) la risposta
         viene anche trasmessa in streaming chunk per chunk; None = keep-alive."""
+        # Select the concrete id before Tracker autorestore or Manager anchors;
+        # profile runtimes override this with their explicit profile_model.
+        select_model(self.up, req.get("model"))
         router = getattr(self.engine or getattr(self.up, "engine", None), "router_state", None)
         if router is not None:
             # 0.3.7 router mode: model, n_ctx and window are settled before anything is built or sent

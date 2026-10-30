@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add a per-upstream, per-concrete-model saved-state circuit breaker for Strata/PolyStrata. HTTP 501 and the
+  documented fatal session-protocol HTTP 500 now suspend anchors, seal/save, SAVE/RESTORE, autosave/autorestore and
+  `kv_archive` until proxy restart, with one stderr warning and one journal event. Missing files, temporary storage
+  or memory failures, generic HTTP errors and timeouts do not trip it. `check --live` sends no SAVE/RESTORE when all
+  six saved-state options are false and does not retry a restore after a fatal refusal (#28).
+
 ## 0.3.19 — 2026-10-28
 
 - Context fitting with fine-tunes that ship their own chat template: when the tokenizer directory contains

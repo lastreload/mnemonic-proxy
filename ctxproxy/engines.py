@@ -36,12 +36,14 @@ import json
 import os
 from typing import Any
 
+from .savedstate import FEATURES
+
 KINDS = ("strata", "llama.cpp", "ds4", "openai")
 ALIASES = {"llama": "llama.cpp", "llamacpp": "llama.cpp", "llama-server": "llama.cpp", "llama_cpp": "llama.cpp",
            "ds4-server": "ds4", "ds4.c": "ds4", "dwarfstar": "ds4",
            "generic": "openai", "generic-openai": "openai", "openai-compatible": "openai", "online": "openai"}
 # funzioni che vivono di file di sessione del motore
-NEEDS_SLOTS = ("slot_save", "mask_anchor", "autosave", "autorestore", "seal_experimental", "kv_archive")
+NEEDS_SLOTS = FEATURES
 # soglie di serie pensate per la finestra di Strata (131072): con una finestra più piccola si scalano (se non
 # scritte in configurazione)
 SCALED = ("mask_trigger", "mask_target", "keep_recent_tokens", "min_batch_tokens", "tail_max", "reserve",
@@ -166,6 +168,10 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
     s = _get_json(up, "/v1/status") if kind in ("auto", "strata") else None
     if kind == "strata" or (kind == "auto" and isinstance(s, dict) and ("activity" in s or s.get("service") ==
                                                                           "strata")):
+        # No SAVE probe and no invalid-action probe here.  PolyStrata's
+        # slot_action() rejects an unknown action with HTTP 400 before it
+        # reaches the engine; that answer cannot distinguish strata from
+        # strata-poly, whose SAVE/RESTORE commands are unsupported.
         e = Engine("strata", slot_save=True, slot_id=slot_id, status_kind="strata", detected=kind == "auto")
         if s is None:
             e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
@@ -360,6 +366,8 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engi
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
     chiesto e possibile, usa /tokenize del motore per contare i token."""
     eng = detect(up, getattr(cfg, "engine", "auto"), int(getattr(cfg, "slot_id", 0) or 0))
+    if hasattr(up, "saved_state"):
+        up.saved_state.bind(journal)  # breaker warnings have their own stderr sink
     if hasattr(up, "set_engine"):
         up.set_engine(eng, getattr(cfg, "slot_dir", "") or "")
     apply(cfg, eng, journal, explicit, log)

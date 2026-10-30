@@ -29,6 +29,7 @@ from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, 
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
                      query_terms, typed_receipt)
 from .render import message_piece, render_pieces, template_kwargs
+from .savedstate import state_available
 from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
 
@@ -2075,8 +2076,9 @@ class Manager:
         if not notes:
             notes = self.L("(note non disponibili: usa %s per ricostruire i dettagli)",
                            "(notes not available: use %s to reconstruct the details)") % self.rn
-        # 2) sigillo (sperimentale) + SAVE di A
-        if cfg.slot_save:
+        # 2) sigillo (sperimentale) + SAVE di A.  A suspended model must not
+        # even pay for the one-token seal preceding the refused SAVE.
+        if cfg.slot_save and state_available(upstream):
             if cfg.seal_experimental:
                 t0 = time.time()
                 try:
@@ -2563,6 +2565,8 @@ class Manager:
         (2) richiesta di 1 token col prompt fisico fino alla nuova frontiera (Strata mette un checkpoint esattamente
         lì); (3) SAVE in un file nuovo = nuova ancora. La richiesta vera che segue riparte dalla nuova frontiera."""
         cfg, events = self.cfg, []
+        if not state_available(upstream):
+            return events
         params = {k: v for k, v in req.items() if k not in ("messages", "tools", "stream", "stream_options",
                                                              "max_tokens", "max_completion_tokens", "n",
                                                              "tool_choice")}
@@ -2578,6 +2582,8 @@ class Manager:
                                                    ms=round((time.time() - t0) * 1000), result=r))
                 except Exception as e:  # noqa: BLE001
                     events.append(self.journal.log("anchor_error", conv=conv, step="restore", error=str(e)[:300]))
+                    if not state_available(upstream):
+                        return events  # a fatal RESTORE must not fall through to generation and SAVE
             else:
                 events.append(self.journal.log("anchor_stale", conv=conv, seg=seg, index=oidx))
         F = self.anchor_cut(phys, origin, mask_ev["frontier_index"])
@@ -2586,6 +2592,8 @@ class Manager:
             events.append(self.journal.log("anchor_skip", conv=conv, seg=seg, phys_index=F, est_tokens=ftok))
             return events
         idx = origin[F]
+        if not state_available(upstream):
+            return events
         t1 = time.time()
         try:
             r = labeled_chat(upstream, {**params, "messages": phys[:F], "tools": tools,
@@ -2593,6 +2601,8 @@ class Manager:
             u = r.get("usage") or {}
             t2 = time.time()
             fn = "%s-seg%d-anchor%d.bin" % (conv, seg, idx)
+            if not state_available(upstream):
+                return events
             s = upstream.slot("save", fn)
             self.store.set_anchor(conv, seg, idx, self.prefix_hash(phys[:F], tools, params), fn,
                                   int(u.get("prompt_tokens") or 0))
