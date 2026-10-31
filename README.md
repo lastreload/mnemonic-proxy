@@ -12,30 +12,50 @@
   <a href="https://lastreload.github.io/mnemonic-proxy/"><img alt="Project page" src="https://img.shields.io/badge/page-lastreload.github.io-ff2bd6.svg"></a>
 </p>
 
+**Keep a coding agent's history without keeping it all in the model's context.** Mnemonic Proxy sits between
+an agent and an OpenAI-compatible backend: the agent sends its history as usual; the proxy manages what the model reads.
+
+- **Archive verbatim.** Older tool outputs leave the prompt, not the archive: their original text stays available through recall.
+- **Recall on demand.** A tool-calling model can search and retrieve archived text through `recall`. Exact storage does not
+  guarantee that the model finds the right evidence or answers correctly.
+- **Resume without a full re-read.** Save and restore engine state on supported backends; other backends use
+  masking and recall without saved state.
+
+**Try it in one minute — no model or GPU needed** (Python ≥ 3.10, [uv](https://docs.astral.sh/uv/)):
+
+```sh
+uvx mnemonic-proxy demo
+```
+
+Expected result: **`PASS`**.
+
+The demo uses the real proxy with a **scripted fake model** to check archive, masking and byte-for-byte recall.
+It does not test a real model's tool use or saved engine state. [Without uv / demo details](#t0--see-it-work-1-minute-no-model)
+· [Connect your agent and engine](#install).
+
+**Measured, not guaranteed** — single runs on our hardware; setup and limitations at each link:
+
+| Experiment | Result |
+|---|---|
+| [Long coding session, one 12 GB GPU](#one-session-measured) | 3 h 15 min; 448K tokens of history, at most 105K in the prompt. Archived history is not all in context. |
+| [AgentLongBench subset, clarified questions](#benchmark-agentlongbench-with-a-32k-window) | 86/100 right with the proxy at 32K, vs 47 with an LLM summary and 69 with full history in a larger window. |
+| [Saved engine state](#saved-state-measured) | A 110K-token conversation resumed in 1.4 s instead of ≈50 s; requires a backend with save/restore support. |
+
+[What we have not proven](#what-we-have-not-proven) · [Project page](https://lastreload.github.io/mnemonic-proxy/)
+
+OpenAI Chat Completions, Anthropic Messages and OpenAI Responses; Python ≥ 3.10, standard library only.
+Developed and benchmarked primarily with [Strata](https://github.com/Niko1221/Strata), by Niko1221 and contributors.
+This independently maintained project also supports llama-server, ds4-server, Ollama, LM Studio and other
+OpenAI-compatible backends; capabilities and test coverage vary ([Engines](#engines)).
+
+<details>
+<summary>Johnny's payload</summary>
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/hero.jpg" alt="Mnemonic Proxy" width="100%">
 </p>
 
-A transparent HTTP proxy that sits between a coding agent and a local model (llama.cpp's `llama-server`,
-[Strata](https://github.com/Niko1221/Strata), [ds4-server](https://github.com/antirez/ds4), or any
-OpenAI-compatible server). The agent keeps sending its whole,
-unmodified history; the proxy decides what the model actually reads. Old material leaves the prompt but is never
-summarized away: every message, tool call and output stays on disk, verbatim, and the model can pull any of it back.
-
-It speaks OpenAI Chat Completions, Anthropic Messages and OpenAI Responses. Python ≥ 3.10, standard library only.
-
-Developed and benchmarked primarily with [Strata](https://github.com/Niko1221/Strata), by Niko1221 and contributors.
-mnemonic-proxy is an independently maintained project that also supports llama-server, ds4-server and other
-OpenAI-compatible backends; saved engine state depends on what the backend supports (see [Engines](#engines)).
-
-Project page: <https://lastreload.github.io/mnemonic-proxy/>
-
-Measured on our hardware (single runs, see [What we have not proven](#what-we-have-not-proven)): a 3 h 15 min coding
-session on one 12 GB GPU with 448K tokens of history and at most 105K in the prompt
-([One session, measured](#one-session-measured)); AgentLongBench in a 32K window, 86/100 right with the proxy vs 47
-with an LLM summary and 69 with the full history in a larger window
-([benchmark](#benchmark-agentlongbench-with-a-32k-window)); a 110K-token conversation resumed from disk in 1.4 s
-instead of ≈50 s ([Saved state, measured](#saved-state-measured)).
+</details>
 
 ## Install
 
