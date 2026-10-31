@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .savedstate import SavedState
+
 
 class UpstreamError(RuntimeError):
     def __init__(self, status: int, body: bytes):
@@ -31,6 +33,7 @@ class Upstream:
         self.router_model = None    # model selected for the request in progress (router mode)
         self.truncwatch: Any = None  # 0.3.8: enginectx.TruncWatch (generic engines), None otherwise
         self.watch_ctx = None        # (conv, seg) of the request in progress, for truncwatch (set by the proxy)
+        self.saved_state = SavedState(self)  # process-local circuit breaker, keyed by concrete model id
 
     def _count(self):
         g = self.window_guard
@@ -138,6 +141,7 @@ class Upstream:
         return send(corrected)  # bounded: a second error is returned, never retried
 
     def chat(self, body: dict) -> dict:
+        self.saved_state.select(body.get("model"))
         body = self._guard(self._model({**self.extra_body,
                                         **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}))
         r = self._chat_once_with_context_retry(body, lambda b: self.post_json("/v1/chat/completions", b))
@@ -147,6 +151,7 @@ class Upstream:
     def chat_stream(self, body: dict) -> "StreamCall":
         """Apre /v1/chat/completions in streaming. Iterare l'oggetto dà i chunk JSON; close() chiude la connessione
         (Strata vede la disconnessione e annulla la generazione)."""
+        self.saved_state.select(body.get("model"))
         body = self._guard(self._model({**self.extra_body, **body, "stream": True,
                                         "stream_options": {"include_usage": True}}))
         sc = self._chat_once_with_context_retry(body, lambda b: StreamCall(self, b))
@@ -160,15 +165,33 @@ class Upstream:
 
     def slot(self, action: str, filename: str) -> dict:
         """Strata e llama-server hanno la stessa forma: POST /slots/{id}?action=save|restore {"filename"} ->
-        {id_slot, filename, n_saved|n_restored, n_written|n_read, timings.save_ms|restore_ms}."""
-        if self.router is not None:
-            return self._router_slot(action, filename)
-        st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
-                               json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
-        if st >= 400:
-            from .engines import slot_error_status
-            raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename), body)
-        return json.loads(body)
+        {id_slot, filename, n_saved|n_restored, n_written|n_read, timings.save_ms|restore_ms}.
+
+        Every slot call passes through the same per-model circuit breaker.  A
+        suspended model fails locally without another HTTP request.
+        """
+        key = self.saved_state.key()        # fixed once for require, observe and end_probe
+        probe = self.saved_state.require(action, key=key)
+        ok = False
+        try:
+            if self.router is not None:
+                result = self._router_slot(action, filename)
+            else:
+                st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
+                                       json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
+                if st >= 400:
+                    from .engines import slot_error_status
+                    raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename),
+                                        body)
+                result = json.loads(body)
+            ok = True
+            return result
+        except UpstreamError as error:
+            self.saved_state.observe(error, action, filename, key=key)
+            raise
+        finally:
+            if probe is not None:
+                self.saved_state.end_probe(probe, ok)
 
     def _router_slot(self, action: str, filename: str) -> dict:
         """Router mode: the slot of the current model ("model" in the body, autoload=false: a model that has been

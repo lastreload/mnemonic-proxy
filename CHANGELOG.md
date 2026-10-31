@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a per-upstream, per-concrete-model saved-state circuit breaker for Strata/PolyStrata. HTTP 501 and the
+  documented fatal session-protocol HTTP 500 now suspend anchors, seal/save, SAVE/RESTORE, autosave/autorestore and
+  `kv_archive` until proxy restart, with one stderr warning and one journal event. Missing files, temporary storage
+  or memory failures, generic HTTP errors and timeouts do not trip it. `check --live` sends no SAVE/RESTORE when all
+  six saved-state options are false and does not retry a restore after a fatal refusal (#28).
+- Saved-state refusal classification fatal/config/unknown; 15-minute pause with a single probe for unrecognised
+  501s; `GET /v1/strata/saved-state` and loopback-only reset; model selection under the proxy lock.
 - `mnemonic-proxy demo`: the closing hint no longer suggests a `mnemonic-proxy check` command that does not exist
   after `uvx mnemonic-proxy demo` (uvx installs nothing): it suggests `uvx mnemonic-proxy check --upstream ...` or
   `uv tool install mnemonic-proxy`, says that `check` needs a running engine and points to README T1. Dropped the

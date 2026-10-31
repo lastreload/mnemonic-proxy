@@ -38,8 +38,12 @@ class FakeEngine:
         id_task che cresce di più di 1 per richiesta, 501 sulle azioni slot senza --slot-save-path) | ds4
         (ds4-server: /v1/models con owned_by "ds4.c", niente slot, id `call_<hex>` generati dal motore, 400 su un
         risultato di strumento con id sconosciuto, conteggio delle chiamate rimandate con id noto/sconosciuto) | openai
-        (solo /v1/chat/completions) | ollama / lmstudio (0.3.8: contesto esposto, taglio silenzioso, vedi sotto)."""
+        (solo /v1/chat/completions) | ollama / lmstudio (0.3.8: contesto esposto, taglio silenzioso, vedi sotto) |
+        strata-poly (Strata status/API, documented #28 fatal reply to SAVE/RESTORE)."""
         self.flavor, self.slot_save, self.n_slots, self.n_ctx = flavor, slot_save, n_slots, n_ctx
+        self.active_model = ""
+        self.session_unsupported_models = None  # None: every poly model; a set limits refusal to those exact ids
+        self.slot_errors = []                  # optional (HTTP status, message) replies, consumed once per slot call
         # Strata 0.2.x: /slots reports the empty slot, whose state cannot be saved.
         self.reject_empty_save = reject_empty_save
         self.id_task = 0
@@ -196,6 +200,7 @@ class FakeEngine:
         return {**msg, "tool_calls": calls} if calls else msg
 
     def handle_chat(self, body: dict) -> dict:
+        self.active_model = str(body.get("model") or "")
         p = render(body)
         common = 0
         for a, b in zip(self.live, p):
@@ -330,7 +335,23 @@ class FakeEngine:
                 if self.path.startswith("/slots/0"):
                     action = self.path.split("action=")[-1]
                     eng.slots.append((action, body.get("filename"), len(eng.live)))
+                    if not eng.slot_save:
+                        return self._send(501, {"error": {"code": 501, "message":
+                            "slot save/restore is disabled (start the server with --slot-save-path DIR)",
+                            "type": "invalid_request_error"}})
+                    if eng.slot_errors:
+                        status, message = eng.slot_errors.pop(0)
+                        return self._send(status, {"error": {"code": status, "message": message,
+                            "type": "server_error" if status >= 500 else "invalid_request_error"}})
+                    unsupported = eng.flavor == "strata-poly" and (
+                        eng.session_unsupported_models is None or eng.active_model in eng.session_unsupported_models)
                     if action == "save":
+                        if unsupported:
+                            message = ("the engine answered a session save with 'ERR expected: GEN <max_new> "
+                                       "<id,id,...> or GENI <max_new> image_pad=<id> <file> <id,id,...>'; "
+                                       "the server ended the engine; the next request starts the engine again")
+                            return self._send(500, {"error": {"code": 500, "message": message,
+                                                              "type": "server_error"}})
                         if eng.reject_empty_save and not eng.live:
                             return self._send(400, {"error": {"code": 400, "message": "no complete session to save",
                                                               "type": "invalid_request_error", "kind": "invalid"}})
@@ -338,6 +359,12 @@ class FakeEngine:
                     elif action == "restore":
                         if body.get("filename") not in eng.files:
                             return self._send(404, {"error": {"message": "file non trovato"}})
+                        if unsupported:
+                            message = ("the engine answered a session restore with 'ERR expected: GEN <max_new> "
+                                       "<id,id,...> or GENI <max_new> image_pad=<id> <file> <id,id,...>'; "
+                                       "the server ended the engine; the next request starts the engine again")
+                            return self._send(500, {"error": {"code": 500, "message": message,
+                                                              "type": "server_error"}})
                         eng.live = eng.files[body.get("filename")]
                     return self._send(200, {"id_slot": 0, "filename": body.get("filename"),
                                             "n_saved": int(len(eng.live) / eng.cpt),
@@ -620,7 +647,8 @@ if __name__ == "__main__":
     import argparse
     ap = argparse.ArgumentParser(description="fake OpenAI-compatible engine (Strata stand-in) for smoke tests")
     ap.add_argument("--port", type=int, default=18095)
-    ap.add_argument("--flavor", choices=["strata", "llama", "ds4", "openai", "router", "ollama", "lmstudio"],
+    ap.add_argument("--flavor", choices=["strata", "strata-poly", "llama", "ds4", "openai", "router", "ollama",
+                                          "lmstudio"],
                     default="strata",
                     help="engine to imitate (llama = llama-server with --slot-save-path; router = llama-server in "
                          "router mode, see --models)")
