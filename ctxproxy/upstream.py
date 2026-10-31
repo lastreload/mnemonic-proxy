@@ -170,19 +170,28 @@ class Upstream:
         Every slot call passes through the same per-model circuit breaker.  A
         suspended model fails locally without another HTTP request.
         """
-        self.saved_state.require(action)
+        key = self.saved_state.key()        # fixed once for require, observe and end_probe
+        probe = self.saved_state.require(action, key=key)
+        ok = False
         try:
             if self.router is not None:
-                return self._router_slot(action, filename)
-            st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
-                                   json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
-            if st >= 400:
-                from .engines import slot_error_status
-                raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename), body)
-            return json.loads(body)
+                result = self._router_slot(action, filename)
+            else:
+                st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
+                                       json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
+                if st >= 400:
+                    from .engines import slot_error_status
+                    raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename),
+                                        body)
+                result = json.loads(body)
+            ok = True
+            return result
         except UpstreamError as error:
-            self.saved_state.observe(error, action, filename)
+            self.saved_state.observe(error, action, filename, key=key)
             raise
+        finally:
+            if probe is not None:
+                self.saved_state.end_probe(probe, ok)
 
     def _router_slot(self, action: str, filename: str) -> dict:
         """Router mode: the slot of the current model ("model" in the body, autoload=false: a model that has been
