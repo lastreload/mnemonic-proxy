@@ -15,8 +15,8 @@
 **Keep a coding agent's history without keeping it all in the model's context.** Mnemonic Proxy sits between
 an agent and an OpenAI-compatible backend: the agent sends its history as usual; the proxy manages what the model reads.
 
-- **Archive verbatim.** Older tool outputs leave the prompt, not the archive. No LLM-generated summary replaces them.
-- **Recall on demand.** The model can search and retrieve archived text through `recall`. Exact storage does not
+- **Archive verbatim.** Older tool outputs leave the prompt, not the archive: their original text stays available through recall.
+- **Recall on demand.** A tool-calling model can search and retrieve archived text through `recall`. Exact storage does not
   guarantee that the model finds the right evidence or answers correctly.
 - **Resume without a full re-read.** Save and restore engine state on supported backends; other backends use
   masking and recall without saved state.
@@ -27,6 +27,8 @@ an agent and an OpenAI-compatible backend: the agent sends its history as usual;
 uvx mnemonic-proxy demo
 ```
 
+Expected result: **`PASS`**.
+
 The demo uses the real proxy with a **scripted fake model** to check archive, masking and byte-for-byte recall.
 It does not test a real model's tool use or saved engine state. [Without uv / demo details](#t0--see-it-work-1-minute-no-model)
 · [Connect your agent and engine](#install).
@@ -36,7 +38,7 @@ It does not test a real model's tool use or saved engine state. [Without uv / de
 | Experiment | Result |
 |---|---|
 | [Long coding session, one 12 GB GPU](#one-session-measured) | 3 h 15 min; 448K tokens of history, at most 105K in the prompt. Archived history is not all in context. |
-| [AgentLongBench](#benchmark-agentlongbench-with-a-32k-window) | 86/100 right with the proxy at 32K, vs 47 with an LLM summary and 69 with full history in a larger window. |
+| [AgentLongBench subset, clarified questions](#benchmark-agentlongbench-with-a-32k-window) | 86/100 right with the proxy at 32K, vs 47 with an LLM summary and 69 with full history in a larger window. |
 | [Saved engine state](#saved-state-measured) | A 110K-token conversation resumed in 1.4 s instead of ≈50 s; requires a backend with save/restore support. |
 
 [What we have not proven](#what-we-have-not-proven) · [Project page](https://lastreload.github.io/mnemonic-proxy/)
