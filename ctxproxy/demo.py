@@ -197,12 +197,16 @@ def next_step() -> str:
             "verify the setup with:\n" + cmd)
 
 
-def main(argv=None):
+def build_demo_parser():
     import argparse
     ap = argparse.ArgumentParser(prog="mnemonic-proxy demo",
                                  description="Offline demo: archive, masking and recall with a scripted fake model.")
     ap.add_argument("--keep", metavar="DIR", help="keep the demo archive in DIR instead of a temporary folder")
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_demo_parser().parse_args(argv)
     sys.exit(0 if run(keep=a.keep) else 1)
 
 

@@ -23,6 +23,7 @@ an agent and an OpenAI-compatible backend: the agent sends its history as usual;
 
 **Try it in one minute — no model or GPU needed** (Python ≥ 3.10, [uv](https://docs.astral.sh/uv/)):
 
+<!-- readme-test: ci -->
 ```sh
 uvx mnemonic-proxy demo
 ```
@@ -61,6 +62,7 @@ OpenAI-compatible backends; capabilities and test coverage vary ([Engines](#engi
 
 The first time: install, watch it work with no model, check your engine, start.
 
+<!-- readme-test: ci -->
 ```sh
 python3 -m venv mnemonic-venv && . mnemonic-venv/bin/activate
 pip install mnemonic-proxy
@@ -194,6 +196,7 @@ Commands are for Linux; see [Platforms](#platforms) for macOS and Windows (nativ
 
 ### T0 — see it work (1 minute, no model)
 
+<!-- readme-test: ci -->
 ```sh
 python3 -m venv mnemonic-venv && . mnemonic-venv/bin/activate
 pip install mnemonic-proxy
@@ -222,6 +225,7 @@ work. A successful recall is not guaranteed; see the measured [Tested combinatio
 
 **0. Prerequisites** (Ubuntu/Debian; other systems: [Platforms](#platforms)):
 
+<!-- readme-test: real-engine -->
 ```sh
 sudo apt install git cmake build-essential python3-venv curl
 ```
@@ -230,6 +234,7 @@ and Node.js ≥ 22.19 for pi (<https://nodejs.org/en/download>, or your package 
 
 **1. Folder, proxy, example config.**
 
+<!-- readme-test: real-engine -->
 ```sh
 mkdir mnemonic-trial && cd mnemonic-trial
 git clone --depth 1 https://github.com/lastreload/mnemonic-proxy
@@ -241,6 +246,7 @@ mkdir -p slots data
 
 **2. llama.cpp, the tested release (CPU build, ~2 minutes on 12 cores).**
 
+<!-- readme-test: real-engine -->
 ```sh
 git clone --depth 1 --branch b11430 https://github.com/ggml-org/llama.cpp
 cmake -S llama.cpp -B llama.cpp/build -DCMAKE_BUILD_TYPE=Release
@@ -251,6 +257,7 @@ cmake --build llama.cpp/build --config Release -j 8 --target llama-server
 ([model card](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507)); this is the
 [Unsloth conversion](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF), pinned to the tested revision:
 
+<!-- readme-test: real-engine -->
 ```sh
 mkdir -p models
 curl -L -o models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
@@ -261,6 +268,7 @@ sha256sum models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf
 
 **4. The engine** (terminal 1, inside `mnemonic-trial`):
 
+<!-- readme-test: real-engine -->
 ```sh
 llama.cpp/build/bin/llama-server -m models/Qwen3-4B-Instruct-2507-Q4_K_M.gguf \
   -c 32768 --parallel 1 --jinja --slot-save-path ./slots --port 8095
@@ -275,6 +283,7 @@ work after a few long tool outputs.
 
 **5. Check, then start the proxy** (terminal 2, inside `mnemonic-trial`, venv active: `. .venv/bin/activate`):
 
+<!-- readme-test: real-engine -->
 ```sh
 mnemonic-proxy check --live --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-32k.json
 mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.llama-server-32k.json
@@ -288,12 +297,14 @@ it; see also [Troubleshooting](#troubleshooting). The proxy then prints
 
 **6. pi, the coding agent** (terminal 3). Install the tested version:
 
+<!-- readme-test: real-engine -->
 ```sh
 npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.3
 ```
 
 Create `~/.pi/agent/models.json` (if it exists, add the `mnemonic` entry to its `providers`):
 
+<!-- readme-test: illustrative; config: client -->
 ```json
 {
   "providers": {
@@ -313,6 +324,7 @@ Create `~/.pi/agent/models.json` (if it exists, add the `mnemonic` entry to its 
 
 and `~/.pi/agent/settings.json` (if it exists, add these three keys):
 
+<!-- readme-test: illustrative; config: client -->
 ```json
 {
   "defaultProvider": "mnemonic",
@@ -330,6 +342,7 @@ id is any name, llama-server serves its loaded model.
 
 **7. The exercise.** In terminal 3, a folder with a log whose one interesting line is buried in the middle:
 
+<!-- readme-test: real-engine -->
 ```sh
 mkdir -p ~/mnemonic-exercise && cd ~/mnemonic-exercise
 python3 -c "for i in range(650): print('[%04d] compiling module_%03d.c ... ok (%d ms)' % (i, i, 80 + i * 7 % 61) if i != 397 else '[0397] build id: BUILD-7f3a9c-ORCHID-42')" > build.log
@@ -366,6 +379,7 @@ What this proves and what it does not, for this model: see [Tested combinations]
 Use the engine and model you already have; the only requirements are an OpenAI-compatible endpoint and, for saved
 state, an engine that can save its KV state to disk:
 
+<!-- readme-test: real-engine -->
 ```sh
 llama-server -m your-model.gguf -c 131072 --parallel 1 --jinja --slot-save-path /path/to/slots --port 8095
 mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
@@ -488,6 +502,7 @@ Checked against Claude Code 2.1.287; a 1 h 41 min session with 2.1.284 on Strata
 [below](#claude-code-and-codex-live-on-strata). Claude Code may print `unrecognized_model local-model`: it works
 anyway.
 
+<!-- readme-test: real-engine -->
 ```sh
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8096      # no /v1
 export ANTHROPIC_AUTH_TOKEN=local                    # any value; the proxy does not check it
@@ -533,11 +548,13 @@ Codex's `prompt_cache_key` is used as the conversation key. Stateless only (`sto
 The archive can also be searched from any MCP client, read-only (sqlite `mode=ro`; the proxy can keep writing). Three
 tools: `recall` (same search as the proxy's tool), `conversations`, `journal`.
 
+<!-- readme-test: ci -->
 ```sh
 mnemonic-mcp --db ./data/archive.sqlite                 # stdio
 mnemonic-mcp --db ./data/archive.sqlite --http 8133     # streamable HTTP on 127.0.0.1:8133/mcp
 ```
 
+<!-- readme-test: real-engine -->
 ```sh
 claude mcp add mnemonic -- mnemonic-mcp --db /path/to/data/archive.sqlite
 codex mcp add mnemonic -- mnemonic-mcp --db /path/to/data/archive.sqlite
@@ -559,6 +576,7 @@ mcp_servers:
 The dashboard is not part of the pip package: it runs from a clone of this repository, and its interface is in
 Italian.
 
+<!-- readme-test: real-engine -->
 ```sh
 python3 mnemonic-proxy/dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 --proxy http://127.0.0.1:8096 --port 8097
 ```
@@ -678,6 +696,7 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
   from python.org, the official llama.cpp Windows build (`llama-b11430-bin-win-cpu-x64.zip` or a GPU one). In
   PowerShell:
 
+  <!-- readme-test: windows -->
   ```powershell
   py -m venv mnemonic-venv; .\mnemonic-venv\Scripts\Activate.ps1
   pip install mnemonic-proxy
@@ -703,6 +722,7 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 - **Android (Termux)** (0.3.8; tested in Waydroid 1.6.2 on Linux — Android 13, x86_64 — with Termux 0.118.3 and its
   Python 3.14.8; not yet on an ARM phone). The proxy is plain Python, nothing is compiled:
 
+  <!-- readme-test: real-engine -->
   ```sh
   pkg update -y && pkg upgrade -y
   pkg install -y python git
@@ -712,6 +732,7 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 
   Use case: an agent on the phone in front of an online API (no model on the phone), base mode:
 
+  <!-- readme-test: real-engine -->
   ```sh
   curl -LO https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/examples/config.openai-32k.json
   mnemonic-proxy --upstream https://openrouter.ai/api --api-key "$OPENROUTER_API_KEY" \
@@ -731,6 +752,7 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 
 ## Uninstall
 
+<!-- readme-test: illustrative -->
 ```sh
 pip uninstall mnemonic-proxy        # inside the venv you installed it in, or delete the venv
 rm -rf ./data                       # the archive, the journal: your conversations in plaintext
@@ -1016,6 +1038,7 @@ ds4-server keeps its own state: with `--kv-disk-dir DIR` it checkpoints the KV c
 resumes a conversation after a tool call by recognising the tool-call id (exact replay of the sampled call). So the
 proxy does less than with other engines:
 
+<!-- readme-test: real-engine -->
 ```sh
 ./ds4-server -m MODEL.gguf --ctx 65536 --port 8110 --kv-disk-dir ./kv
 mnemonic-proxy --upstream http://127.0.0.1:8110 --port 8096 --data ./data --config examples/config.ds4.json
@@ -1183,6 +1206,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 
 A config for llama-server with saved state, as recommended above:
 
+<!-- readme-test: illustrative; config: proxy -->
 ```json
 {
   "mask_reasoning": true, "mask_tool_args": true,
@@ -1262,6 +1286,7 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
 - Protect the folders: `chmod 700 ./data /path/to/slots`.
 - **Forget one conversation:** stop the proxy, then run:
 
+  <!-- readme-test: ci -->
   ```sh
   mnemonic-proxy forget --data ./data --list
   mnemonic-proxy forget --data ./data --config config.json --conv <id> --dry-run
@@ -1305,6 +1330,7 @@ never restart the engine; run them with the Python that has the archive support
 
 **`tools/check_kv_archive.py`** — is the cold archive healthy, and what is it saving?
 
+<!-- readme-test: real-engine -->
 ```sh
 .venv314/bin/python tools/check_kv_archive.py                 # snapshot now
 .venv314/bin/python tools/check_kv_archive.py --restore-check  # rebuild each archive, compare sha256
@@ -1319,6 +1345,7 @@ a `--watch` that never archived), 2 on a usage error.
 
 **`tools/measure_restore.py`** — how much does the automatic restore save?
 
+<!-- readme-test: real-engine -->
 ```sh
 .venv314/bin/python tools/measure_restore.py --allow-shared-engine
 ```
@@ -1344,6 +1371,7 @@ was measured, 1 when nothing was restored, 2 on a usage error.
 
 ## Tests
 
+<!-- readme-test: illustrative -->
 ```sh
 python3 -m unittest discover -s tests -t .
 ```

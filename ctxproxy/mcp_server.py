@@ -358,7 +358,7 @@ def _err(mid, code, message):
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
 
 
-def main(argv=None):
+def build_mcp_parser():
     ap = argparse.ArgumentParser(prog="mnemonic-mcp",
                                  description="Read-only MCP server over the Mnemonic Proxy archive "
                                              "(tools: recall, conversations, journal).")
@@ -368,7 +368,11 @@ def main(argv=None):
     ap.add_argument("--tokenizer", help="HF tokenizer.json for token counts (optional)")
     ap.add_argument("--http", type=int, metavar="PORT", help="serve streamable HTTP on /mcp instead of stdio")
     ap.add_argument("--host", default="127.0.0.1", help="bind address for --http (default: 127.0.0.1)")
-    a = ap.parse_args(argv)
+    return ap
+
+
+def main(argv=None):
+    a = build_mcp_parser().parse_args(argv)
     compat.console_safe(sys.stderr)
     srv = McpServer(Archive(a.db, a.journal, a.max_tokens, a.tokenizer))
     if a.http:
