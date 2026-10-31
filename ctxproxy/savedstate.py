@@ -177,6 +177,17 @@ class SavedState:
                      "retry_after_s": max(0, int(r["until"] - now)) if r["until"] is not None else None}
                     for r in self._suspended.values()]
 
+    def reset(self, model=None) -> list:
+        """Clear the suspension of one model id (exact match) or of all models. -> the cleared keys."""
+        with self._lock:
+            keys = [k for k in self._suspended if model is None or k == model]
+            for k in keys:
+                del self._suspended[k]
+        for k in keys:
+            self._event("saved_state_reset", "[mnemonic-proxy] saved state reset for model %r by request"
+                        % (k or "<default>"), model=k or None)
+        return keys
+
     def observe(self, error, action: str, filename: str = "", model=None, key=None) -> bool:
         """Trip once for a refusal; return True only for a new trip. A fatal or config reply upgrades a paused
         record to permanent."""

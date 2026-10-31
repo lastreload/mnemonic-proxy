@@ -253,3 +253,30 @@ class CooldownTest(unittest.TestCase):
                     rt.up.slot("save", "b.bin")
                 self.assertIn("until proxy restart", str(cm.exception))
                 self.assertEqual(len(rt.eng.slots), 1)
+
+
+class ResetTest(unittest.TestCase):
+    def test_reset_one_model_and_all(self):
+        rt = runtime(self)
+        st = rt.up.saved_state
+        for model in ("tiel", "cyber"):
+            st.select(model)
+            with self.assertRaises(UpstreamError):
+                rt.up.slot("save", model + ".bin")
+        self.assertEqual(sorted(r["model"] for r in st.view()), ["cyber", "tiel"])
+        self.assertEqual(st.reset("tiel"), ["tiel"])
+        self.assertEqual([r["model"] for r in st.view()], ["cyber"])
+        self.assertEqual(st.reset("nobody"), [])
+        self.assertEqual(st.reset(), ["cyber"])
+        self.assertEqual(st.view(), [])
+        self.assertEqual(len(events(rt, "saved_state_reset")), 2)
+
+    def test_after_reset_the_next_save_is_sent_again(self):
+        rt = runtime(self)
+        with self.assertRaises(UpstreamError):
+            rt.up.slot("save", "a.bin")
+        rt.up.saved_state.reset()
+        with self.assertRaises(UpstreamError):          # strata-poly still refuses: it trips again
+            rt.up.slot("save", "b.bin")
+        self.assertEqual(len(rt.eng.slots), 2)
+        self.assertEqual(len(events(rt, "saved_state_suspended")), 2)
