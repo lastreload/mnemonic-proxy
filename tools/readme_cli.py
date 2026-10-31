@@ -169,13 +169,25 @@ SUBCOMMAND_PARSERS = {"demo": demo_parser, "check": check_parser, "forget": forg
 
 
 def options(ap: argparse.ArgumentParser) -> list[str]:
-    """Every long option of a parser, `--help` excluded (argparse's own)."""
+    """Every long option of a parser, argparse's own `--help` included: the coverage test
+    decides what is internal, through tools/readme_internal.txt, not this helper."""
     out = []
     for action in ap._actions:                     # noqa: SLF001 - argparse has no public API for this
         for flag in action.option_strings:
-            if flag.startswith("--") and flag != "--help":
+            if flag.startswith("--"):
                 out.append(flag)
     return sorted(set(out))
+
+
+def all_parsers() -> dict:
+    """prog name -> the real parser, for every entry point the package installs."""
+    return {
+        "mnemonic-proxy": server_parser(),
+        "mnemonic-proxy check": check_parser(),
+        "mnemonic-proxy demo": demo_parser(),
+        "mnemonic-proxy forget": forget_parser(),
+        "mnemonic-mcp": mcp_parser(),
+    }
 
 
 def known_subcommands() -> list[str]:

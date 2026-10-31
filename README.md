@@ -1231,6 +1231,95 @@ this documentation correction does not enable automatic retrieval or change thei
 On a generic OpenAI engine drop the saved-state fields (`mask_anchor`, `slot_dir`, `slot_save`,
 `seal_experimental`, `autosave`, `kv_archive`); the proxy turns them off anyway, with a warning.
 
+### Every command-line option
+
+Three commands are installed: `mnemonic-proxy` (the proxy, with its `demo`, `check` and `forget`
+subcommands; `ctxproxy` is a 0.1 alias of the same program) and `mnemonic-mcp` (the read-only MCP
+recall server). `tests/test_readme_coverage.py` fails if an option exists in the code and is not
+listed here.
+
+| command | option | what |
+|---|---|---|
+| `mnemonic-proxy` | `--upstream URL` | the engine's address (default `http://127.0.0.1:8095`) |
+| | `--host ADDR` | bind address (default `127.0.0.1`, local only) |
+| | `--port N` | listen port (default `8096`) |
+| | `--data DIR` | archive, journal and lock (default `./data`) |
+| | `--config FILE` | JSON file with the `Config` fields below |
+| | `--mode tools\|off` | `tools` = managed context (default); `off` = plain pass-through, nothing archived or masked, useful to compare a session with and without the proxy |
+| | `--tokenizer PATH` | Hugging Face `tokenizer.json` (or a Strata pack `tokenizer/` folder) for exact token counts; needs `pip install 'mnemonic-proxy[exact]'` |
+| | `--api-key KEY` | key sent to the upstream engine |
+| | `--engine auto\|strata\|llama.cpp\|ds4\|openai` | force the engine type instead of detecting it |
+| | `--version` | print the version and exit |
+| `mnemonic-proxy demo` | `--keep DIR` | keep the demo's archive in `DIR` (`archive.sqlite`, `journal.jsonl`) instead of a temporary folder, to look at it afterwards or to point `mnemonic-mcp --db` at it |
+| `mnemonic-proxy check` | all the server options | `check` reads the configuration the server would run with |
+| | `--live` | also run a real generation, a tool call and a save/restore on the engine |
+| | `--json` | machine-readable report: `{"ready", "exit_code", "checks": [...]}`, for a script or a health probe |
+| `mnemonic-proxy forget` | `--data DIR` | the data folder to delete from (required) |
+| | `--list` | list conversation ids, logical sizes and UTC timestamps |
+| | `--conv ID` | the conversation to remove |
+| | `--dry-run` | report what would be removed, change nothing (requires `--conv`) |
+| | `--slot-dir DIR`, `--kv-archive DIR` | saved-state and cold-archive folders, when they are not in the config |
+| | `--config FILE` | the proxy's config; defaults to `$MNEMONIC_CONFIG` |
+| `mnemonic-mcp` | `--db FILE` | the proxy's `archive.sqlite`, opened read-only (required) |
+| | `--journal FILE` | `journal.jsonl`; by default the one next to the database |
+| | `--max-tokens N` | token cap of one recall result (default `6000`) |
+| | `--tokenizer PATH` | tokenizer for those token counts |
+| | `--http PORT` | streamable HTTP on `/mcp` instead of stdio |
+| | `--host ADDR` | bind address for `--http` (default `127.0.0.1`) |
+
+### Every configuration field
+
+The table above covers what most setups need. These are the remaining fields of
+`ctxproxy.core.Config`, with their real defaults; they exist for tuning and for reproducing our
+measurements, and changing them is rarely necessary.
+
+<details>
+<summary>The remaining configuration fields</summary>
+
+| field | default | meaning |
+|---|---|---|
+| `mask_enabled` | true | level 1 on/off: with false nothing is ever masked (the archive still records everything) |
+| `min_mask_tokens` | 200 | outputs shorter than this always stay in clear text |
+| `data_dir` | "" | where the physical prompt of the outgoing segment is written when `slot_save` is on; empty = the `--data` folder |
+| `index_max_tokens` | 2000 | cap of the segment index block |
+| `keep_first_user` | true | carry the first user message over to a new segment |
+| `recall_max_chars` | 24000 | character cap of one recall result (the token cap applies as well) |
+| `recall_struct_max_tokens` | 3500 | token cap of a structured recall result (`recall_struct`) |
+| `truncation_guard_max_tokens` | 16 | only answers up to this many tokens are replayed by `truncation_guard` |
+| `truncation_guard_budget` | 512 | reasoning cap of that replay (0 = no cap) |
+| `answer_thinking_strip` | true | the reasoning of those replays is not returned to the client |
+| `tooldefs_desc_max` | 0 | shorten each tool's description to this many characters (0 = off) |
+| `tooldefs_param_max` | 0 | the same for every parameter description, nested ones included |
+| `tooldefs_keep` | `recall`, `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | tools whose definitions are never shortened |
+| `tools_load_max` | 5 | how many tool definitions one `tools` call may load (`tools_paging`) |
+| `auto_recall_on_error` | false | automatic retrieval also after a failed tool result |
+| `auto_recall_k` | 4 | pieces at most per injection |
+| `auto_recall_max_tokens` | 4000 | cap of the injected message |
+| `auto_recall_piece_tokens` | 1200 | cap of each piece |
+| `auto_recall_min_score` | 8.0 | threshold on the FTS5 bm25 score |
+| `auto_recall_min_terms` | 2 | distinct query terms a piece must contain (common ones excluded) |
+| `auto_recall_common_frac` | 0.4 | a term appearing in more than this share of the hits counts as common |
+| `auto_recall_max_args` | 1 | tool-call arguments at most per injection |
+| `auto_recall_hint_k` | 5 | candidates named in a hint (`auto_recall_hint`) |
+| `chars_per_token` | 3.5 | characters per token when there is no tokenizer |
+| `msg_overhead` | 6 | tokens the chat template adds per message |
+| `image_tokens` | 1024 | tokens assumed for one image |
+| `reasoning_last_turn_only` | false | Strata template: keep only the last turn's reasoning |
+| `autosave_min_tokens` | 16384 | below this a re-read is cheaper than a state file: no save |
+| `autosave_min_free_gb` | 8.0 | no save when the slot disk has less free space than this |
+| `autosave_poll_s` | 10.0 | how often the autosaver looks at the engine |
+| `kv_archive_min_bytes` | 67108864 | smaller state files are left where they are |
+| `kv_archive_poll_s` | 60.0 | how often the cold archiver looks |
+| `kv_archive_level` | 3 | zstd compression level |
+| `kv_archive_threads` | 4 | zstd threads |
+| `checkpoint_align_slack` | 0.25 | accepted waste after a checkpoint multiple (`checkpoint_align_tokens`) |
+| `answer_min_tokens` | 512 | a thinking budget always leaves at least this much room for the answer |
+| `recall_removal` | "value" | what the recall loop gives up first when space runs out: `value` \| `reasoning` \| `age` |
+| `final_drop_internal_tools` | true | a final call made for lack of space goes without the proxy's own tools |
+| `notes_thinking` | "auto" | thinking while writing handoff notes: `auto` (on when the engine leaves room) \| `off` \| `on` |
+
+</details>
+
 ### Tool names and older conversations
 
 The proxy's own tools are called `recall` and `tools` (0.1 called them `strata_recall` and `strata_tools`). The tool
