@@ -42,6 +42,32 @@ class TestDemo(unittest.TestCase):
         self.assertIn("identical to the original: yes", t)
         self.assertIn("Does not prove", t)
 
+    def test_next_step_works_without_an_installed_command(self):
+        # `uvx mnemonic-proxy demo` leaves no `mnemonic-proxy` on PATH: the hint must not suggest a missing command
+        with mock.patch("ctxproxy.demo.shutil.which", return_value=None):
+            hint = demo.next_step()
+        self.assertIn("uvx mnemonic-proxy check", hint)
+        self.assertIn("uv tool install mnemonic-proxy", hint)
+        uvx_env = os.path.join(tempfile.gettempdir(), "uv", "archive-v0", "AbC123")   # native separators (Windows CI)
+        with mock.patch("ctxproxy.demo.shutil.which", return_value=os.path.join(uvx_env, "bin", "mnemonic-proxy")), \
+                mock.patch("ctxproxy.demo.sys.prefix", uvx_env):
+            hint = demo.next_step()              # running under uvx: the command on PATH is temporary
+        self.assertIn("uvx mnemonic-proxy check", hint)
+        with mock.patch("ctxproxy.demo.shutil.which", return_value="/usr/bin/mnemonic-proxy"):
+            hint = demo.next_step()
+        self.assertIn("mnemonic-proxy check --upstream", hint)
+        self.assertNotIn("uvx", hint)
+        for h in (hint, demo.next_step()):
+            self.assertIn("T1", h)
+            self.assertIn("running engine", h)
+
+    def test_demo_output_has_no_legacy_or_stale_wording(self):
+        out = io.StringIO()
+        self.assertTrue(demo.run(out=out))
+        t = out.getvalue()
+        self.assertNotIn("Tier 1", t)
+        self.assertNotIn("before 0.3.1", t)
+
     def test_subcommand_exit_code(self):
         with redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as cm:
             main(["demo"])

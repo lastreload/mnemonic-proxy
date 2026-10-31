@@ -160,8 +160,9 @@ class Proxy:
 
     def _router_select_alive(self, router, req: dict, emit):
         """Streaming: select() (which may load the model: 70+ s from a slow disk) runs in a thread while this one
-        sends `: loading model <id>` every `router_keepalive_s`, so a client with a read timeout does not give up.
-        The window is still settled before anything is built. A keep-alive that cannot be written = the client is
+        sends `: loading model <id>` during a real load, or a neutral keep-alive during other slow selection steps,
+        every `router_keepalive_s`, so a client with a read timeout does not give up. The window is still settled
+        before anything is built. A keep-alive that cannot be written = the client is
         gone: nothing is generated; the thread is joined first (the load itself cannot be stopped and the router
         state must be settled before the lock is released), then ClientGone."""
         from .router import KEEPALIVE_S
@@ -176,14 +177,19 @@ class Proxy:
         t = threading.Thread(target=run, daemon=True, name="router-select")
         t.start()
         every = float(getattr(self.cfg, "router_keepalive_s", KEEPALIVE_S) or KEEPALIVE_S)
-        sent, model = 0, None
+        sent, load_sent, model = 0, 0, None
         while True:
             t.join(every)
             if not t.is_alive():
                 break
-            model = router.loading or model or req.get("model")
+            loading = router.loading
+            model = loading or model or req.get("model")
             try:
-                emit(Comment("loading model %s" % model))
+                if loading:
+                    emit(Comment("loading model %s" % model))
+                    load_sent += 1
+                else:
+                    emit(None)
                 sent += 1
             except ClientGone:
                 waited = round(time.time() - t0, 1)
@@ -191,8 +197,8 @@ class Proxy:
                 self.journal.log("router_client_gone", model=model, waited_s=waited, keepalives=sent,
                                  load_s=round(time.time() - t0, 1), error=str(box.get("e") or "")[:200] or None)
                 raise
-        if sent:
-            self.journal.log("router_load_keepalive", model=model, keepalives=sent, s=round(time.time() - t0, 1))
+        if load_sent:
+            self.journal.log("router_load_keepalive", model=model, keepalives=load_sent, s=round(time.time() - t0, 1))
         if "e" in box:
             raise box["e"]
 
