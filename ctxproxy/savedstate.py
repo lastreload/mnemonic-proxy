@@ -14,6 +14,11 @@ import threading
 
 FEATURES = ("mask_anchor", "slot_save", "autosave", "autorestore", "seal_experimental", "kv_archive")
 _FATAL_MARKERS = ("the engine answered a session", "the server ended the engine")
+# 501 texts documented as permanent (matched case-insensitively): llama-server and PolyStrata without
+# --slot-save-path, PolyStrata with parallel requests, PolyStrata on strata-poly (VecSzn/PolyStrata#114).
+_CONFIG_501 = ("slot save/restore is disabled", "--slot-save-path", "not available with parallel requests",
+               "not supported by this model's engine")
+COOLDOWN_S = 900.0   # an unrecognised HTTP 501 pauses saved state for 15 minutes, then one call may probe
 
 
 class SavedStateUnavailable(RuntimeError):
@@ -25,20 +30,29 @@ class SavedStateUnavailable(RuntimeError):
                          % (model or "<default>", reason, action))
 
 
-def unsupported_reason(status: int, body: bytes) -> str | None:
-    """Classify only documented permanent session-protocol refusals.
+def classify(status, body) -> tuple[str, str] | None:
+    """-> (kind, reason) for a saved-state refusal, else None.
 
-    HTTP 404/400/503/507, generic HTTP 500 and transport timeouts deliberately
-    do not suspend saved state.
+    kind: "fatal" (documented HTTP 500: the server ended the engine), "config" (documented permanent
+    HTTP 501), "unknown" (any other HTTP 501).  404/400/409/503/507, generic 500 and transport errors
+    are not refusals.
     """
     if status == 501:
-        return _message(body) or "HTTP 501: slot save/restore is not supported"
+        reason = _message(body) or "HTTP 501: slot save/restore is not supported"
+        low = reason.lower()
+        return ("config" if any(m.lower() in low for m in _CONFIG_501) else "unknown"), reason
     if status != 500:
         return None
     text = body.decode("utf-8", "replace") if isinstance(body, bytes) else str(body or "")
     if any(marker in text for marker in _FATAL_MARKERS):
-        return _message(body) or text[:500]
+        return "fatal", _message(body) or text[:500]
     return None
+
+
+def unsupported_reason(status, body) -> str | None:
+    """#47 API kept for its callers and tests: the reason text of any refusal."""
+    c = classify(status, body)
+    return c[1] if c else None
 
 
 def _message(body: bytes) -> str:
