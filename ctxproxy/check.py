@@ -461,8 +461,9 @@ def render(rep: Report, out=sys.stdout):
     print("\n%s (exit %d)" % (word, rep.exit_code), file=out)
 
 
-def main(argv=None):
-    from .server import build_parser, load_config
+def build_check_parser():
+    """The `check` parser: the server's options, plus the two of its own."""
+    from .server import build_parser
     ap = build_parser(prog="mnemonic-proxy check",
                       description="Check the setup the proxy would run with (same options as the server). "
                                   "Exit 0 = ready, 2 = ready with warnings, 1 = not ready.")
@@ -470,6 +471,12 @@ def main(argv=None):
     ap.add_argument("--live", action="store_true",
                     help="also run a short generation, a tool call and a save/restore on the engine "
                          "(refused while the slot is busy; the slot content is put back)")
+    return ap
+
+
+def main(argv=None):
+    from .server import load_config
+    ap = build_check_parser()
     a = ap.parse_args(argv)
     try:
         raw_cfg, cfg = load_config(a)

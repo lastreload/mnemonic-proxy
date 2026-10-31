@@ -266,8 +266,7 @@ def apply(dbpath, p, conv, arc):
     return errors
 
 
-def main(argv=None):
-    from .server import load_config
+def build_forget_parser():
     ap = argparse.ArgumentParser(prog="mnemonic-proxy forget", description=__doc__)
     ap.add_argument("--data", required=True, help="proxy data directory")
     group = ap.add_mutually_exclusive_group(required=True)
@@ -277,6 +276,12 @@ def main(argv=None):
     ap.add_argument("--kv-archive", help="cold archive directory (overrides config)")
     ap.add_argument("--config", help="proxy JSON config; default: MNEMONIC_CONFIG")
     ap.add_argument("--dry-run", action="store_true", help="report without changing stored data")
+    return ap
+
+
+def main(argv=None):
+    from .server import load_config
+    ap = build_forget_parser()
     a = ap.parse_args(argv)
     a.engine = None
     a.config = a.config or os.environ.get("MNEMONIC_CONFIG")   # forget only: the server itself needs --config

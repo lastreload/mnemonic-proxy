@@ -125,6 +125,45 @@ jobs:
           uvx --python ${{ matrix.python }} --from "$WHL" mnemonic-proxy demo | tee uvx.txt
           grep -q PASS uvx.txt
 
+  # README level 2: the blocks labeled `<!-- readme-test: ci -->` are executed for real,
+  # from the built wheel in a clean venv, with no source tree on the import path. Levels 1 (static)
+  # and 3 (exhaustiveness) are part of the `test` job's unit-test suite.
+  readme-run:
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: install the wheel in a clean venv
+        run: |
+          python -m venv "$RUNNER_TEMP/rvenv"
+          "$RUNNER_TEMP/rvenv/bin/pip" install --quiet dist/*.whl
+          "$RUNNER_TEMP/rvenv/bin/mnemonic-proxy" --version
+      - name: run the README's `ci` blocks against the fake engine
+        run: |
+          stage="$RUNNER_TEMP/stage"
+          mkdir -p "$stage/tests" "$stage/tools"
+          cp README.md "$stage/"
+          cp tools/readme_blocks.py tools/readme_cli.py "$stage/tools/"
+          cp tests/__init__.py tests/test_readme_run.py "$stage/tests/"
+          cd "$stage"
+          # no ctxproxy source here: `import ctxproxy` can only resolve to the installed wheel
+          README_RUN=1 \
+            MNEMONIC_PROXY_CMD="$RUNNER_TEMP/rvenv/bin/mnemonic-proxy" \
+            MNEMONIC_MCP_CMD="$RUNNER_TEMP/rvenv/bin/mnemonic-mcp" \
+            "$RUNNER_TEMP/rvenv/bin/python" -m unittest -v tests.test_readme_run
+
   llama-cpu:
     if: github.event_name == 'workflow_dispatch' && inputs.llama
     runs-on: ubuntu-24.04
