@@ -125,7 +125,7 @@ jobs:
           uvx --python ${{ matrix.python }} --from "$WHL" mnemonic-proxy demo | tee uvx.txt
           grep -q PASS uvx.txt
 
-  # README level 2 (0.3.21): the blocks labeled `<!-- readme-test: ci -->` are executed for real,
+  # README level 2: the blocks labeled `<!-- readme-test: ci -->` are executed for real,
   # from the built wheel in a clean venv, with no source tree on the import path. Levels 1 (static)
   # and 3 (exhaustiveness) are part of the `test` job's unit-test suite.
   readme-run:

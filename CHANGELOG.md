@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+- **The README is under test** (three levels, standard library only). A documented command that
+  no longer exists is a worse bug than a missing feature: this README once showed
+  `mnemonic-proxy check` before the subcommand existed. Every fenced block now carries an
+  invisible label in an HTML comment above the fence — `ci`, `windows`, `real-engine` or
+  `illustrative` — and JSON blocks also say whether they are a full proxy configuration, a
+  partial one, or another program's (`tools/readme_blocks.py` lists them).
+  - level 1, `tests/test_readme_static.py`: every executable block is labeled; every
+    `mnemonic-proxy` / `mnemonic-mcp` command line in the README parses with the parser the
+    program really builds; every proxy-configuration example uses only real `Config` fields and
+    is accepted by `Config.from_dict` (the shipped `examples/*.json` too); every internal
+    `#anchor` link resolves to a heading.
+  - level 2, `tests/test_readme_run.py`: the `ci` blocks are executed for real against
+    `ctxproxy.fake_engine` in both the llama-server and the Strata flavor — `demo` prints PASS,
+    `check` says READY, `check` with no engine says NOT READY and *start the engine first*, the
+    proxy answers a Chat Completions request, `forget --list` runs, `mnemonic-mcp` answers an
+    MCP `initialize` and lists `recall` / `conversations` / `journal`. `tools/readme_run.sh`
+    builds the wheel, installs it in a clean venv and runs them from a folder with no source
+    tree, so `import ctxproxy` can only resolve to the installed package; the new CI job
+    `readme-run` does the same on Python 3.10 and 3.14.
+  - level 3, `tests/test_readme_coverage.py`: no subcommand, command-line option or `Config`
+    field may exist in the code without being documented in the README or declared internal in
+    `tools/readme_internal.txt` with a reason. It found 39 undocumented `Config` fields and six
+    undocumented options, now documented: `--mode`, `--version`, `check --json`, `demo --keep`,
+    `mnemonic-mcp --journal` and `--max-tokens`.
+  - `check`, `demo`, `forget` and `mnemonic-mcp` expose their parser builder
+    (`build_check_parser`, `build_demo_parser`, `build_forget_parser`, `build_mcp_parser`) so
+    the tests use the real parsers instead of a copy. No behaviour change.
+  - new README sections: «Every command-line option», «Every configuration field» (the 39
+    remaining `Config` fields with their real defaults) and «This README is tested».
+    `tools/readme_newuser.sh` is the "new user" walk-through for a clean container; developer
+    notes in `docs/dev-notes/README-TESTS.md`.
+
 ## 0.3.20 — 2026-10-31
 
 - Saved engine state on engines that do not support it (#28, #46, #47). After a reply that means "not supported",
