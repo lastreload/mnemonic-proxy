@@ -27,14 +27,15 @@ fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-echo "== building the wheel in $work"
-python3 -m pip install --quiet --upgrade build >/dev/null
-python3 -m build --wheel --outdir "$work/dist" >"$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
-wheel="$(ls "$work"/dist/*.whl)"
-echo "   $wheel"
 
 echo "== clean virtual environment"
 python3 -m venv "$work/venv"
+"$work/venv/bin/python" -m pip install --quiet --upgrade pip build
+
+echo "== building the wheel in $work"
+"$work/venv/bin/python" -m build --wheel --outdir "$work/dist" >"$work/build.log" 2>&1 || { cat "$work/build.log"; exit 1; }
+wheel="$(ls "$work"/dist/*.whl)"
+echo "   $wheel"
 "$work/venv/bin/pip" install --quiet "$wheel"
 
 stage="$work/stage"
