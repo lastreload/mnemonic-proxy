@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `mnemonic-proxy demo`: the closing hint no longer suggests a `mnemonic-proxy check` command that does not exist
+  after `uvx mnemonic-proxy demo` (uvx installs nothing): it suggests `uvx mnemonic-proxy check --upstream ...` or
+  `uv tool install mnemonic-proxy`, says that `check` needs a running engine and points to README T1. Dropped the
+  note about pre-0.3.1 Italian receipts from the demo output.
+
 ## 0.3.19 — 2026-10-28
 
 - Context fitting with fine-tunes that ship their own chat template: when the tokenizer directory contains

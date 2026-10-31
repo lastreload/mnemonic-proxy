@@ -200,7 +200,9 @@ pip install mnemonic-proxy
 mnemonic-proxy demo
 ```
 
-With [uv](https://docs.astral.sh/uv/), no venv to create: `uvx mnemonic-proxy demo`. The development version (the
+With [uv](https://docs.astral.sh/uv/), no venv to create: `uvx mnemonic-proxy demo`. `uvx` runs the command from a
+temporary environment and installs nothing, so keep the prefix for the next commands (`uvx mnemonic-proxy check ...`)
+or install the command once with `uv tool install mnemonic-proxy`. The development version (the
 `main` branch, newer than the last PyPI release): `pip install git+https://github.com/lastreload/mnemonic-proxy`.
 
 The demo starts the real proxy in a temporary folder, in front of a scripted fake model. An agent reads a long
