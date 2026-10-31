@@ -126,7 +126,7 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
 
 ## How it works
 
-No summaries written by a model, no vector database required.
+Archived content stays verbatim; the model writes handoff notes at segment switches. No vector database is required.
 
 1. **Hide — mask, don't summarize.** Old tool outputs and reasoning leave the prompt in stable blocks and become
    one-line receipts with an id. The prefix stays byte-identical between blocks, so the engine's KV cache keeps
@@ -167,7 +167,7 @@ Three levels. Each one stands on its own.
 | | what you see | needs | time |
 |---|---|---|---|
 | **T0 — see it work** | archive, masking, exact recall, with a scripted fake model | Python ≥ 3.10 | 1 minute |
-| **T1 — real model on CPU** | a real agent (pi) writing code through the proxy, masking, recall, resume after an engine restart | + cmake, a C++ compiler, Node.js ≥ 22.19, ~9 GB RAM (the engine at `-c 32768`), 3.5 GB disk | ~45 minutes |
+| **T1 — real model on CPU** | a real agent (pi) writing code through the proxy, masking, a recall probe (the tested 4B model did not call `recall`), resume after an engine restart | + cmake, a C++ compiler, Node.js ≥ 22.19, ~9 GB RAM (the engine at `-c 32768`), 3.5 GB disk | ~45 minutes |
 | **T2 — real use (GPU)** | your own model and agent, long sessions | a GPU engine | — |
 
 Commands are for Linux; see [Platforms](#platforms) for macOS and Windows (native or WSL).
@@ -190,12 +190,13 @@ the proxy answers it internally and the archived text is compared byte for byte 
 `PASS` (exit 0) or `FAIL` (exit 1).
 
 It proves the proxy's own logic: archive, masking, recall. It does not prove anything about a real model, its tool
-calling, or saved engine state — that is T1.
+calling, or saved engine state — T1 exercises those with a real model and reports its limitations.
 
 ### T1 — a real model on CPU
 
 Tested end to end in a clean Ubuntu 24.04 container (see [Tested combinations](#tested-combinations)). A 4B model on
-CPU is slow (seconds per answer) and limited: the point is to see every mechanism work, not to do real work.
+CPU is slow (seconds per answer) and limited: the point is to exercise the proxy with a real model, not to do real
+work. A successful recall is not guaranteed; see the measured [Tested combinations](#tested-combinations).
 
 **0. Prerequisites** (Ubuntu/Debian; other systems: [Platforms](#platforms)):
 
@@ -730,7 +731,7 @@ RTX 4070 Ti — with the proxy in between.
 
 <p align="center"><sub>Replay of a real exchange (animated GIF; <a href="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/replay.mp4">MP4</a>).
 Three hours and two segment switches into the session, one <code>recall</code> call — resolved inside the proxy in
-61 ms — brings back the verbatim first version of the boss block, message 20. No model summarized anything.</sub></p>
+61 ms — brings back the verbatim first version of the boss block, message 20. The recalled block is returned verbatim.</sub></p>
 
 | | |
 |---|---|
