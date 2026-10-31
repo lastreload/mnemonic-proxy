@@ -5,8 +5,12 @@ import json
 import threading
 import time
 import unittest
+import urllib.error
+import urllib.request
+from http.server import ThreadingHTTPServer
 
 from ctxproxy.savedstate import COOLDOWN_S, SavedStateUnavailable, classify
+from ctxproxy.server import is_loopback, make_handler
 from ctxproxy.upstream import UpstreamError
 from tests.test_saved_state_breaker import events, make_runtime, send
 from tests.test_proxy import history
@@ -280,3 +284,53 @@ class ResetTest(unittest.TestCase):
             rt.up.slot("save", "b.bin")
         self.assertEqual(len(rt.eng.slots), 2)
         self.assertEqual(len(events(rt, "saved_state_suspended")), 2)
+
+
+def serve(case, proxy):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(proxy))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    case.addCleanup(srv.server_close)
+    case.addCleanup(srv.shutdown)
+    return "http://127.0.0.1:%d/v1/strata/saved-state" % srv.server_address[1]
+
+
+def post(url, data: bytes):
+    req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read())
+
+
+class EndpointTest(unittest.TestCase):
+    def test_get_reset_and_bad_body(self):
+        rt = runtime(self)
+        with self.assertRaises(UpstreamError):
+            rt.up.slot("save", "a.bin")
+        url = serve(self, rt.proxy)
+        with urllib.request.urlopen(url, timeout=10) as r:
+            self.assertEqual([x["kind"] for x in json.loads(r.read())["suspended"]], ["fatal"])
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            post(url + "/reset", b'{"model": 3}')
+        self.assertEqual(cm.exception.code, 400)
+        self.assertEqual(post(url + "/reset", b"{}"), {"cleared": ["model-A"]})
+        self.assertTrue(rt.up.saved_state.available())
+        self.assertEqual(post(url + "/reset", b"{}"), {"cleared": []})
+
+    def test_reset_refused_from_another_machine(self):
+        rt = runtime(self)
+        with self.assertRaises(UpstreamError):
+            rt.up.slot("save", "a.bin")
+        import ctxproxy.server as server_module
+        real = server_module.is_loopback
+        server_module.is_loopback = lambda host: False     # as if the peer were 10.77.77.2
+        self.addCleanup(setattr, server_module, "is_loopback", real)
+        url = serve(self, rt.proxy)
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            post(url + "/reset", b"{}")
+        self.assertEqual(cm.exception.code, 403)
+        self.assertEqual(len(rt.up.saved_state.view()), 1)
+
+    def test_loopback_rule(self):
+        for host, ok in (("127.0.0.1", True), ("::1", True), ("::ffff:127.0.0.1", True),
+                         ("10.77.77.2", False), ("192.168.1.5", False), ("0.0.0.0", False)):
+            with self.subTest(host=host):
+                self.assertIs(is_loopback(host), ok)

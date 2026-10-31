@@ -14,6 +14,7 @@ Disconnessione del client (Esc in pi): il proxy chiude lo stream verso Strata, c
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
@@ -86,9 +87,23 @@ class Proxy:
         base = upstream
         while hasattr(base, "up") and base.__class__.__name__ in ("Tracker", "ArchivingUpstream"):
             base = base.up
+        self.base_upstream = base if isinstance(base, Upstream) else None
         if isinstance(base, Upstream):
             base.window_guard = self.wguard
             base.saved_state.bind(journal)
+
+    def saved_states(self) -> list:
+        base = getattr(self, "base_upstream", None)
+        return [base.saved_state] if base is not None else []
+
+    def saved_state_view(self) -> dict:
+        return {"suspended": [r for s in self.saved_states() for r in s.view()]}
+
+    def saved_state_reset(self, model=None) -> dict:
+        if model is not None and not isinstance(model, str):
+            raise ValueError("model must be a string")
+        with self.lock:                      # not while a request uses the slot
+            return {"cleared": [k for s in self.saved_states() for k in s.reset(model)]}
 
     def enable_autosave(self, start: bool = True):
         """Avvolge l'upstream nel Tracker (ripristino automatico) e avvia il thread di autosalvataggio."""
@@ -1223,6 +1238,16 @@ def sse_from_response(r: dict):
     yield chunk({}, r["choices"][0].get("finish_reason"), **extra)
 
 
+def is_loopback(host: str) -> bool:
+    """Admin endpoints accept only this machine (the proxy has no client authentication; see #28: 0.0.0.0)."""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    return (mapped or ip).is_loopback
+
+
 def make_handler(proxy: Proxy):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -1262,6 +1287,8 @@ def make_handler(proxy: Proxy):
                 return self._send(200, {"conversation_id": c, **proxy.store.stats(c), "segment_list": segs})
             if parts[:3] == ["v1", "strata", "journal"]:
                 return self._send(200, {"events": proxy.journal.mem[-200:]})
+            if parts == ["v1", "strata", "saved-state"]:
+                return self._send(200, proxy.saved_state_view())
             if parts[:3] == ["v1", "strata", "engine"] or parts[:2] == ["v1", "engine"] and len(parts) == 2:
                 eng = getattr(proxy, "engine", None) or getattr(proxy.up, "engine", None)
                 return self._send(200, eng.summary() if eng else {"kind": "strata", "detected": False})
@@ -1305,6 +1332,17 @@ def make_handler(proxy: Proxy):
                 except (ValueError, KeyError, TypeError) as e:
                     st, out = 400, {"error": {"message": "richiesta non valida: %s" % e}}
                 return self._send(st, out)
+            if path == "/v1/strata/saved-state/reset":
+                if not is_loopback(self.client_address[0]):      # module lookup at call time (patched in tests)
+                    return self._send(403, {"error": {"message": "saved-state reset is accepted only from this machine"}})
+                try:
+                    data = json.loads(body or b"{}")
+                    if not isinstance(data, dict):
+                        raise ValueError("body must be a JSON object")
+                    out = proxy.saved_state_reset(data.get("model"))
+                except ValueError as e:
+                    return self._send(400, {"error": {"message": "invalid request: %s" % e}})
+                return self._send(200, out)
             if path in ("/v1/messages", "/v1/messages/count_tokens", "/messages", "/messages/count_tokens"):
                 from . import api_anthropic
                 return api_anthropic.handle(self, proxy, path, body)
