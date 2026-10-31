@@ -341,6 +341,100 @@ class TestStreamingLoad(ProxyHTTP):
         self.assertFalse([x for _, x in lines if x.startswith(": loading")], "nothing changes when it is loaded")
         self.assertFalse(self.events("router_load_keepalive"))
 
+    def test_slow_metadata_for_loaded_model_gets_neutral_keepalive(self):
+        """A slow metadata read is not a model load, but the stream still needs a keep-alive."""
+        import http.client
+        from unittest import mock
+
+        self.rt.load("big")
+        router_up = self.proxy.engine.router_state.up
+        raw = router_up.raw
+        metadata_blocked = threading.Event()
+        release_metadata = threading.Event()
+
+        def block_metadata(method, path, *args, **kwargs):
+            if method == "GET" and path == "/models" and not metadata_blocked.is_set():
+                metadata_blocked.set()
+                if not release_metadata.wait(10):
+                    raise TimeoutError("metadata was not released by the test")
+            return raw(method, path, *args, **kwargs)
+
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        lines = []
+        try:
+            with mock.patch.object(router_up, "raw", side_effect=block_metadata):
+                c.request("POST", "/v1/chat/completions", json.dumps({
+                    "model": "big", "messages": history(1), "tools": TOOLS, "max_tokens": 256, "stream": True}),
+                    {"Content-Type": "application/json"})
+                r = c.getresponse()
+                self.assertEqual(r.status, 200)
+                self.assertTrue(metadata_blocked.wait(5), "selection did not reach GET /models")
+                first = r.fp.readline().decode().rstrip("\n")
+                lines.append(first)
+                loading_during_metadata = self.proxy.engine.router_state.loading
+                release_metadata.set()
+                while True:
+                    line = r.fp.readline()
+                    if not line:
+                        break
+                    if line.strip():
+                        lines.append(line.decode().rstrip("\n"))
+        finally:
+            release_metadata.set()
+            c.close()
+
+        self.assertEqual(first, ": keep-alive", "neutral keep-alive before metadata is released")
+        self.assertIsNone(loading_during_metadata)
+        self.assertFalse([x for x in lines if x.startswith(": loading")], lines)
+        self.assertFalse(self.events("router_load_keepalive"))
+        self.assertEqual(lines[-1], "data: [DONE]")
+        self.assertTrue(any('"finish_reason"' in x for x in lines), lines)
+        self.assertEqual(self.rt.loads, ["big"], "metadata latency must not load the model again")
+        self.assertEqual(len(self.rt.chats), 1)
+
+    def test_client_gone_during_metadata_counts_keepalive_without_loading(self):
+        """Neutral keep-alives still count for disconnect diagnostics, not for load events."""
+        from unittest import mock
+        from ctxproxy.server import ClientGone
+
+        self.rt.load("big")
+        router_up = self.proxy.engine.router_state.up
+        raw = router_up.raw
+        blocked = threading.Event()
+        release = threading.Event()
+
+        def block_metadata(method, path, *args, **kwargs):
+            if method == "GET" and path == "/models" and not blocked.is_set():
+                blocked.set()
+                if not release.wait(10):
+                    raise TimeoutError("metadata was not released by the test")
+            return raw(method, path, *args, **kwargs)
+
+        sent = []
+
+        def disconnected(chunk):
+            self.assertTrue(blocked.is_set())
+            self.assertIsNone(chunk)
+            if not sent:
+                sent.append(chunk)
+                return
+            release.set()
+            raise ClientGone()
+
+        try:
+            with mock.patch.object(router_up, "raw", side_effect=block_metadata):
+                with self.assertRaises(ClientGone):
+                    self.proxy.chat({"model": "big", "messages": history(1), "max_tokens": 256},
+                                    emit=disconnected)
+        finally:
+            release.set()
+        gone = self.events("router_client_gone")[-1]
+        self.assertEqual(gone["keepalives"], 1, "only successful keep-alive writes are counted")
+        self.assertFalse(self.events("router_load_keepalive"))
+        self.assertEqual(self.rt.chats, [])
+        self.assertTrue(self.proxy.lock.acquire(timeout=1))
+        self.proxy.lock.release()
+
     def test_client_gone_during_the_load_nothing_generated(self):
         import socket
         import struct
