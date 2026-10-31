@@ -334,3 +334,56 @@ class EndpointTest(unittest.TestCase):
                          ("10.77.77.2", False), ("192.168.1.5", False), ("0.0.0.0", False)):
             with self.subTest(host=host):
                 self.assertIs(is_loopback(host), ok)
+
+
+class SignalLock:
+    """Wraps Proxy.lock: sets `waiting` when another thread starts to acquire it."""
+
+    def __init__(self, lock):
+        self.lock, self.waiting = lock, threading.Event()
+
+    def acquire(self, *a, **k):
+        self.waiting.set()
+        return self.lock.acquire(*a, **k)
+
+    def release(self):
+        self.lock.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+class SelectionTest(unittest.TestCase):
+    def test_a_waiting_request_does_not_change_the_selected_model(self):
+        rt = runtime(self, flavor="strata")
+        send(rt, history(2), model="model-A")
+        self.assertEqual(rt.up.saved_state.key(), "model-A")
+        rt.proxy.lock = SignalLock(rt.proxy.lock)
+        rt.proxy.lock.lock.acquire()                # a request for model-A is "in flight" (bypasses the signal)
+        outcome = {}
+
+        def run_b():
+            try:
+                send(rt, history(2), model="model-B")
+                outcome["ok"] = True
+            except BaseException as e:              # reported to the main thread below
+                outcome["error"] = e
+
+        t = threading.Thread(target=run_b, daemon=True)
+        try:
+            t.start()
+            self.assertTrue(rt.proxy.lock.waiting.wait(10), "request B never reached the proxy lock")
+            # B is now blocked on the lock. Before the fix it has already selected model-B.
+            key_while_waiting = rt.up.saved_state.key()
+        finally:
+            rt.proxy.lock.lock.release()
+            t.join(30)
+        self.assertFalse(t.is_alive())
+        self.assertNotIn("error", outcome)
+        self.assertEqual(key_while_waiting, "model-A")
+        self.assertEqual(rt.up.saved_state.key(), "model-B")

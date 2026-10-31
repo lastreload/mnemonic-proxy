@@ -119,13 +119,11 @@ class Proxy:
     def chat(self, req: dict, hint: str | None = None, emit=None) -> tuple[int, dict, dict]:
         """-> (status, corpo risposta non-stream, header extra). Con `emit` (callable(chunk_dict|None)) la risposta
         viene anche trasmessa in streaming chunk per chunk; None = keep-alive."""
-        # Select the concrete id before Tracker autorestore or Manager anchors;
-        # profile runtimes override this with their explicit profile_model.
-        select_model(self.up, req.get("model"))
         router = getattr(self.engine or getattr(self.up, "engine", None), "router_state", None)
         if router is not None:
             # 0.3.7 router mode: model, n_ctx and window are settled before anything is built or sent
             with self.lock:
+                select_model(self.up, req.get("model"))
                 err = self._router_select(router, req, emit)
                 if err is not None:
                     return err
@@ -134,13 +132,16 @@ class Proxy:
         if gw is not None and self.mode != "off":
             # 0.3.8 Ollama / LM Studio: the real context of the model is read before the prompt is built
             with self.lock:
+                select_model(self.up, req.get("model"))
                 err = self._router_select(gw, req, emit, event="engine_refused")
                 if err is not None:
                     return err
                 return self._chat_managed(req, hint, emit)
         if self.mode == "off":
+            select_model(self.up, req.get("model"))
             return self._chat_off(req, emit)
         with self.lock:
+            select_model(self.up, req.get("model"))
             return self._chat_managed(req, hint, emit)
 
     def _router_select(self, router, req: dict, emit=None, event: str = "router_refused"):
