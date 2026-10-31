@@ -48,8 +48,8 @@ class TestDemo(unittest.TestCase):
             hint = demo.next_step()
         self.assertIn("uvx mnemonic-proxy check", hint)
         self.assertIn("uv tool install mnemonic-proxy", hint)
-        uvx_env = "/home/u/.cache/uv/archive-v0/AbC123"
-        with mock.patch("ctxproxy.demo.shutil.which", return_value=uvx_env + "/bin/mnemonic-proxy"), \
+        uvx_env = os.path.join(tempfile.gettempdir(), "uv", "archive-v0", "AbC123")   # native separators (Windows CI)
+        with mock.patch("ctxproxy.demo.shutil.which", return_value=os.path.join(uvx_env, "bin", "mnemonic-proxy")), \
                 mock.patch("ctxproxy.demo.sys.prefix", uvx_env):
             hint = demo.next_step()              # running under uvx: the command on PATH is temporary
         self.assertIn("uvx mnemonic-proxy check", hint)
