@@ -951,10 +951,31 @@ against a mock engine and with short real client runs, not yet on long real sess
   must be trusted: the hashes detect corruption, not tampering. Our measurements are from the session-files build
   (0.1.38 + PR #668, `8d8f664`); on 0.1.40 the proxy ran the AgentLongBench benchmark and the recall tests, but
   restore times were not re-measured there (see [Saved state, measured](#saved-state-measured)).
-  **PolyStrata `strata-poly`:** this backend does not support session SAVE/RESTORE. After a 501 or the documented
-  fatal session reply, the proxy suspends saved state for that concrete model until restart; the first engine kill
-  cannot be undone. For a known `strata-poly` setup, set `mask_anchor`, `slot_save`, `autosave`, `autorestore`,
-  `seal_experimental` and `kv_archive` to `false`.
+**Saved state that the engine does not support.** After a reply that means "not supported", the proxy stops
+saved-state work for that model only (anchors and their one-token calls, segment seal/save, SAVE/RESTORE,
+autosave/autorestore, kv_archive). Masking, the text archive, `recall` and notes keep working.
+
+| Reply to a slot call | What the proxy does |
+|---|---|
+| HTTP 500 "the engine answered a session … the server ended the engine" (PolyStrata `strata-poly`) | suspended until restart or reset |
+| HTTP 501 with a documented permanent text (no `--slot-save-path`, parallel requests, strata-poly with VecSzn/PolyStrata#114) | suspended until restart or reset |
+| any other HTTP 501 | paused for 15 minutes, then one call retries |
+| 404, 400, 409, 503, 507, generic 500, timeouts | not a refusal |
+
+`GET /v1/strata/saved-state` lists the suspended models. `POST /v1/strata/saved-state/reset` with `{}` (all models)
+or `{"model": "<exact id>"}` clears them; it answers `{"cleared": [...]}`, 400 for a bad body, and **403 unless the
+request comes from this machine** (the proxy has no client authentication). The check looks at the direct TCP
+peer: a local reverse proxy can make remote requests look local, so block this endpoint at that proxy if remote
+access must be denied. After a reset the next save is sent again, so on a strata-poly model without the PolyStrata
+fix it ends the engine once more.
+
+The proxy warns once per suspension: after a reset or a successful retry, a new refusal is reported again. The
+retry after the 15-minute pause happens only when the proxy next needs saved state, so `GET` may show
+`retry_after_s: 0` until then. The suspension adds no new requests to the engine's status endpoint.
+
+On current PolyStrata releases the **first** SAVE to a `strata-poly` model still ends the engine: the proxy learns
+from that reply. To avoid it, set `mask_anchor`, `slot_save`, `autosave`, `autorestore`, `seal_experimental` and
+`kv_archive` to `false` (in the configuration, or in that model's profile).
   `setup.sh` and `run-strata-proxy.sh` in the repository root (a venv, then the proxy in front of a running
   Strata, `slot_dir` read from the Strata config) were contributed and are covered by unit tests; they are not yet
   tested by the maintainer on a real Strata install.

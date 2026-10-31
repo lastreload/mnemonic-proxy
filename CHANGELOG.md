@@ -7,6 +7,8 @@
   `kv_archive` until proxy restart, with one stderr warning and one journal event. Missing files, temporary storage
   or memory failures, generic HTTP errors and timeouts do not trip it. `check --live` sends no SAVE/RESTORE when all
   six saved-state options are false and does not retry a restore after a fatal refusal (#28).
+- Saved-state refusal classification fatal/config/unknown; 15-minute pause with a single probe for unrecognised
+  501s; `GET /v1/strata/saved-state` and loopback-only reset; model selection under the proxy lock.
 
 ## 0.3.19 — 2026-10-28
 
