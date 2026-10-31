@@ -1,18 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.3.20 — 2026-10-31
 
-- Add a per-upstream, per-concrete-model saved-state circuit breaker for Strata/PolyStrata. HTTP 501 and the
-  documented fatal session-protocol HTTP 500 now suspend anchors, seal/save, SAVE/RESTORE, autosave/autorestore and
-  `kv_archive` until proxy restart, with one stderr warning and one journal event. Missing files, temporary storage
-  or memory failures, generic HTTP errors and timeouts do not trip it. `check --live` sends no SAVE/RESTORE when all
-  six saved-state options are false and does not retry a restore after a fatal refusal (#28).
-- Saved-state refusal classification fatal/config/unknown; 15-minute pause with a single probe for unrecognised
-  501s; `GET /v1/strata/saved-state` and loopback-only reset; model selection under the proxy lock.
-- `mnemonic-proxy demo`: the closing hint no longer suggests a `mnemonic-proxy check` command that does not exist
-  after `uvx mnemonic-proxy demo` (uvx installs nothing): it suggests `uvx mnemonic-proxy check --upstream ...` or
-  `uv tool install mnemonic-proxy`, says that `check` needs a running engine and points to README T1. Dropped the
-  note about pre-0.3.1 Italian receipts from the demo output.
+- Saved engine state on engines that do not support it (#28, #46, #47). After a reply that means "not supported",
+  the proxy stops saved-state work (anchors and their one-token calls, segment seal/save, SAVE/RESTORE,
+  autosave/autorestore, `kv_archive`) for that model only; masking, the text archive, `recall` and notes keep
+  working. The documented PolyStrata strata-poly HTTP 500 ("the server ended the engine") and documented permanent
+  HTTP 501 texts (no `--slot-save-path`, parallel requests) suspend it until restart or
+  `POST /v1/strata/saved-state/reset` (accepted only from this machine); any other HTTP 501 pauses it for 15 minutes,
+  then a single call retries. `GET /v1/strata/saved-state` lists suspended models. One stderr warning and one journal
+  event per suspension. Missing files, temporary storage or memory failures, generic HTTP errors and timeouts do not
+  suspend it. `check --live` sends no SAVE/RESTORE when all six saved-state options are false. Limit: on current
+  PolyStrata releases the first save to a strata-poly model still ends the engine once; set the six saved-state
+  options to `false` for that model to avoid it.
+- The saved-state model is now selected under the proxy lock, so a request waiting for the lock no longer changes the
+  model of the one in flight.
+- Router mode: slow metadata reads during streaming send a neutral keep-alive instead of falsely announcing a model
+  load (#50).
+- `mnemonic-proxy demo`: the closing hint works after `uvx mnemonic-proxy demo` (uvx installs nothing): it suggests
+  `uvx mnemonic-proxy check --upstream ...` or `uv tool install mnemonic-proxy`, and says that `check` needs a running
+  engine (#51).
+- README: clearer introduction with the one-minute demo first and a table of measured results (#48); handoff notes
+  and T1 recall expectations described precisely (#49).
 
 ## 0.3.19 — 2026-10-28
 
