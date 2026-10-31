@@ -11,7 +11,7 @@ A scripted fake model (ctxproxy.fake_engine) runs behind the real proxy code in 
   5. the archived text returned by `recall` is compared byte for byte with the original output.
 
 What it proves: archive, masking, recall (the proxy's own logic). What it does not prove: the quality of a real
-model, tool calling of a real model, saved engine state (KV) — that needs a real engine (README, Tier 1).
+model, tool calling of a real model, saved engine state (KV) — that needs a real engine (README, T1).
 Exit code 0 = PASS, 1 = FAIL.
 """
 from __future__ import annotations
@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -97,7 +98,7 @@ def run(out=None, keep: str | None = None) -> bool:
     checks: list[tuple[str, bool]] = []
     _p(out, "mnemonic-proxy demo — offline, scripted fake model, temporary folder\n")
     _p(out, "Proves: verbatim archive, masking (receipts), recall resolved inside the proxy.")
-    _p(out, "Does not prove: real model quality or tool calling, saved engine state (KV). See README, Tier 1.\n")
+    _p(out, "Does not prove: real model quality or tool calling, saved engine state (KV). See README, T1.\n")
     tmp = tempfile.TemporaryDirectory(prefix="mnemonic-demo-", ignore_cleanup_errors=True)
     data = keep or tmp.name
     os.makedirs(data, exist_ok=True)
@@ -143,7 +144,6 @@ def run(out=None, keep: str | None = None) -> bool:
         _p(out, "3. What the engine receives in place of build.log (%d chars instead of %d):"
            % (len(str((seen or {}).get("content"))), len(log)))
         _p(out, "     " + str((seen or {}).get("content"))[:400].replace("\n", " "))
-        _p(out, "   (receipts are in English for new conversations; conversations born before 0.3.1 keep Italian)")
         n0 = len(eng.requests)
         h += [{"role": "assistant", "content": "Tests pass."}, {"role": "user", "content": QUESTION}]
         r = send(h)
@@ -176,8 +176,25 @@ def run(out=None, keep: str | None = None) -> bool:
         _p(out, "  [%s] %s" % ("ok" if c else "FAIL", name))
     _p(out, "\n%s in %.1f s" % ("PASS" if ok else "FAIL", time.time() - t0))
     if ok:
-        _p(out, "Next: a real model on CPU — README, Tier 1 (`mnemonic-proxy check` verifies the setup).")
+        _p(out, next_step())
     return ok
+
+
+def next_step() -> str:
+    """The hint printed after PASS. `uvx mnemonic-proxy demo` runs from a temporary environment and leaves no
+    `mnemonic-proxy` command on PATH, so in that case suggest `uvx` again or a permanent install."""
+    check = "check --upstream http://127.0.0.1:8095"
+    found = shutil.which("mnemonic-proxy")
+    # uvx puts its temporary environment (uv cache, ".../archive-v0/<id>") first on PATH while it runs: a command
+    # found there is gone once the demo exits
+    ephemeral = (os.sep + "archive-v") in sys.prefix
+    if found and not (ephemeral and os.path.realpath(found).startswith(os.path.realpath(sys.prefix) + os.sep)):
+        cmd = "  mnemonic-proxy %s" % check
+    else:
+        cmd = ("  uvx mnemonic-proxy %s\n"
+               "  (or install the command once: uv tool install mnemonic-proxy)" % check)
+    return ("Next: a real model on CPU — README, T1. With a running engine (URL as in --upstream), "
+            "verify the setup with:\n" + cmd)
 
 
 def main(argv=None):
