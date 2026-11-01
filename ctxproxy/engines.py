@@ -111,6 +111,11 @@ class Engine:
     router_state: Any = dataclasses.field(default=None, repr=False, compare=False)   # router.Router
     flavor: str | None = None             # 0.3.8: generic engine that tells its context: ollama | lmstudio
     ctx_state: Any = dataclasses.field(default=None, repr=False, compare=False)      # enginectx.GenericWindow
+    # 0.3.23 automatic configuration (autoconfig.py), all from endpoints the proxy already calls:
+    version: str | None = None            # Strata /v1/status "engine", llama-server /props "build_info"
+    parallel: int = 0                     # requests served at once (> 1: the engine refuses save/restore)
+    upstream: str = ""                    # the --upstream URL, to tell a local engine from a remote one
+    machine: dict = dataclasses.field(default_factory=dict, repr=False, compare=False)  # Strata: machine/vram
 
     # il contatore richieste di llama-server (id_task) cresce di più di 1 per richiesta: va riletto dopo
     @property
@@ -125,6 +130,8 @@ class Engine:
             d["router"] = self.router_state.summary() if self.router_state is not None else True
         if self.flavor:            # only Ollama / LM Studio (0.3.8)
             d["flavor"] = self.flavor
+        if self.version:           # 0.3.23: only when the engine reports it
+            d["version"] = self.version
         return d
 
 
@@ -164,6 +171,15 @@ def _slots_enabled(up, slot_id: int) -> bool | None:
 
 def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
     """Riconosce il motore dietro `up` (Upstream). Con `forced` diverso da auto prova solo quel tipo, ma legge
+    comunque n_ctx/salvataggi se gli endpoint rispondono. 0.3.23: annota anche l'URL del motore (locale o
+    remoto), la sua versione e quante richieste serve in parallelo, per la configurazione automatica."""
+    e = _detect(up, forced, slot_id)
+    e.upstream = str(getattr(up, "base", "") or "")
+    return e
+
+
+def _detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
+    """Riconosce il motore dietro `up` (Upstream). Con `forced` diverso da auto prova solo quel tipo, ma legge
     comunque n_ctx/salvataggi se gli endpoint rispondono."""
     kind = norm_kind(forced)
     s = _get_json(up, "/v1/status") if kind in ("auto", "strata") else None
@@ -182,6 +198,19 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
             ctx = s.get("context")
             if isinstance(ctx, dict):
                 e.n_ctx = int(ctx.get("native") or ctx.get("max_positions") or 0) or None
+            # 0.3.23: la versione del motore e la concorrenza sono già in /v1/status (serve/server.py di Strata:
+            # "engine" = info["version"]; "concurrency" = batch slots). Con più di uno slot Strata rifiuta
+            # save/restore con 501, quindi la configurazione automatica non accende lo stato salvato.
+            ver = s.get("engine")
+            if isinstance(ver, (str, int, float)) and str(ver).strip():
+                e.version = str(ver).strip()
+            conc = s.get("concurrency")
+            if isinstance(conc, dict):
+                e.parallel = max(int(conc.get("serving") or 0), int(conc.get("requested") or 0))
+            # VRAM/RAM che il motore riferisce già: nessuno strumento esterno, nessuna richiesta in più
+            mach = s.get("machine")
+            if isinstance(mach, dict):
+                e.machine = mach
         return e
     models = _get_json(up, "/v1/models") if kind in ("auto", "ds4") else None
     ds4_models = [m for m in (models or {}).get("data") or [] if isinstance(m, dict)
@@ -205,6 +234,13 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
                    detected=kind == "auto")
         props = props or {}
         e.model = os.path.basename(str(props.get("model_path") or "")) or None
+        # 0.3.23: llama-server tells its build in /props ("build_info"), e.g. "6123 (abc1234)"
+        bi = props.get("build_info")
+        if isinstance(bi, str) and bi.strip():
+            e.version = bi.strip()
+        total = props.get("total_slots")
+        if isinstance(total, int) and total > 0:
+            e.parallel = total
         slots = _get_json(up, "/slots")
         if isinstance(slots, list):
             mine = next((x for x in slots if x.get("id") == slot_id), None)
@@ -363,15 +399,28 @@ def generic_slack(cfg, engine: Engine, explicit=(), exact: bool = False) -> floa
     return GENERIC_SLACK
 
 
-def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engine:
+def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisions=None,
+          machine=None) -> Engine:
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
-    chiesto e possibile, usa /tokenize del motore per contare i token."""
+    chiesto e possibile, usa /tokenize del motore per contare i token.
+
+    0.3.23: subito dopo `apply` sceglie i valori che dipendono dal motore e dalla macchina (autoconfig.py).
+    `decisions`, se è una lista, raccoglie le scelte fatte (il banner d'avvio le stampa); `machine` evita di
+    rileggere RAM/VRAM quando chi chiama le ha già lette."""
     eng = detect(up, getattr(cfg, "engine", "auto"), int(getattr(cfg, "slot_id", 0) or 0))
     if hasattr(up, "saved_state"):
         up.saved_state.bind(journal)  # breaker warnings have their own stderr sink
     if hasattr(up, "set_engine"):
         up.set_engine(eng, getattr(cfg, "slot_dir", "") or "")
     apply(cfg, eng, journal, explicit, log)
+    from . import autoconfig
+    mach = autoconfig.Machine.read(eng) if machine is None else machine
+    chosen = autoconfig.decide(cfg, eng, explicit or (), mach,
+                               exact=bool(counter is not None and counter.exact))
+    if decisions is not None:
+        decisions.extend(chosen)
+    if journal is not None and chosen:
+        journal.log("auto_config", machine=mach.summary(), decisions=[d.summary() for d in chosen if d.changed])
     if eng.kind == "openai":
         # 0.3.8: generic engines (Ollama, LM Studio, anything OpenAI-compatible): estimate slack and truncation
         # watch; for Ollama / LM Studio also the real context before every request
@@ -449,15 +498,16 @@ BASE_MODE = ("masking, the verbatim archive, `recall` and segments with handoff 
 
 # how to turn saved state on later, per engine: the engine flag plus the config fields
 SAVED_STATE_LATER = {
-    "strata": "optional, later: restart Strata with --slot-save-path DIR (Strata >= 0.1.40), then add "
-              "\"slot_save\": true, \"mask_anchor\": true, \"autosave\": true and \"slot_dir\": \"DIR\" "
-              "to the config",
-    "llama.cpp": "optional, later: restart llama-server with --slot-save-path DIR, then add \"slot_save\": true, "
-                 "\"mask_anchor\": true, \"autosave\": true and \"slot_dir\": \"DIR\" to the config",
+    "strata": "optional, later: restart Strata with --slot-save-path DIR (Strata >= 0.1.40) and add "
+              "\"slot_dir\": \"DIR\" to the config; the proxy then turns slot_save, mask_anchor and autosave "
+              "on by itself (see `check --explain-config`)",
+    "llama.cpp": "optional, later: restart llama-server with --slot-save-path DIR and add \"slot_dir\": \"DIR\" "
+                 "to the config; the proxy then turns slot_save, mask_anchor and autosave on by itself "
+                 "(see `check --explain-config`)",
 }
 SAVED_STATE_LATER_DEFAULT = ("optional, later: an engine that can write its KV state to disk "
                              "(llama-server or Strata >= 0.1.40 with --slot-save-path DIR), then "
-                             "\"slot_save\": true and \"slot_dir\": \"DIR\" in the config")
+                             "\"slot_dir\": \"DIR\" in the config and the proxy turns saved state on by itself")
 
 
 def saved_state_later(kind: str | None) -> str:

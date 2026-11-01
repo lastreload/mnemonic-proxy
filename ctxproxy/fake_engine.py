@@ -80,6 +80,10 @@ class FakeEngine:
         self.loads = 0
         self.truncated: list = []
         self.read_override = None
+        # 0.3.23: what the automatic configuration reads. `version`: Strata /v1/status "engine", llama /props
+        # "build_info"; `gpu`: the GPU figures Strata reports in /v1/status (None = the engine says nothing).
+        self.version = "0.1.51" if flavor in ("strata", "strata-poly") else "6123 (fake)"
+        self.gpu = flavor in ("strata", "strata-poly")
 
     # ---- Ollama / LM Studio (flavor "ollama" | "lmstudio") ----
     def generic_get(self, path: str):
@@ -159,8 +163,12 @@ class FakeEngine:
                 for i in range(self.n_slots)]
 
     def status(self) -> dict:
-        return {"service": "strata", "loaded": True, "started": self.started,
+        # 0.3.23: "engine" (version), "concurrency" and "machine" are what the real Strata reports
+        # (serve/server.py): the proxy's automatic configuration reads them instead of guessing.
+        return {"service": "strata", "loaded": True, "started": self.started, "engine": self.version,
                 "context": {"native": self.n_ctx, "max_positions": self.n_ctx},
+                "concurrency": {"serving": self.n_slots, "requested": self.n_slots},
+                "machine": {"gpu": {"name": "fake", "total_mib": 12288, "used_mib": 8192}} if self.gpu else {},
                 "activity": {"requests": self.n_requests, "in_flight": int(self.busy)}}
 
     # ---- ds4-server (flavor="ds4"): comportamento verificato su ds4_server.c ----
@@ -255,7 +263,8 @@ class FakeEngine:
                 if eng.flavor == "llama":
                     if self.path.startswith("/props"):
                         return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
-                                                "total_slots": eng.n_slots, "model_path": "/m/fake-0.6B.gguf"})
+                                                "total_slots": eng.n_slots, "model_path": "/m/fake-0.6B.gguf",
+                                                "build_info": eng.version})
                     if self.path.startswith("/slots"):
                         return self._send(200, eng.slots_list())
                     if self.path.startswith("/health"):

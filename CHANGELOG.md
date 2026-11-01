@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.3.23 — unreleased
+
+- **Automatic configuration: the proxy now chooses the engine/machine-dependent options, out loud.** Reported
+  on r/LocalLLM: *"why is the default config not the recommended config? It would be so nice if it could detect
+  the engine version, context size, VRAM + RAM and apply the best settings by itself"*, by a user who had
+  enabled saved state by hand and then found a 2 GB state file eating the RAM he needed for the model. The
+  answer was "because those values depend on your engine and your machine, and the proxy did not look". It
+  looks now (`ctxproxy/autoconfig.py`), and nothing is silent: every choice carries its reason and the way to
+  force it otherwise.
+  - **What is read**, all from endpoints and files already in use, no new dependency and no telemetry: the
+    engine version (Strata `/v1/status` → `engine`, e.g. `0.1.51`; llama-server `/props` → `build_info`), the
+    context window, saved-state support, how many requests the engine serves at once (Strata `concurrency`,
+    llama-server `total_slots`), whether the engine is on this host, RAM total and available (Linux
+    `/proc/meminfo`, macOS `sysctl` + `vm_stat`, Windows `GlobalMemoryStatusEx`), the free disk of `slot_dir`,
+    and — only when it comes for free — VRAM from the GPU figures Strata already reports, otherwise
+    `nvidia-smi` if it happens to be on PATH. Nothing is required: an unknown figure never blocks a choice.
+  - **What is decided**, when the user did not write it: `slot_save`, `mask_anchor` and `autosave` (the engine
+    offers saved state, it is on this host, `slot_dir` is set, and one state file fits in the available RAM —
+    `autosave` also needs the disk); `response_floor` = `window / 8` and `notes_max_tokens` =
+    `window * 3 / 32` (16384 and 12288 at 131072, 4096 and 3072 at 32768), from a 16384 window up;
+    `engine_tokenize` when the engine counts exactly and no `--tokenizer` was given. So the recommended
+    saved-state setup is now reached by writing **one** field, `slot_dir`.
+  - **The sizing number is explicit and has a source**: a state file costs about 19.5 KB per token of window
+    (`state_kb_per_token` — the 20000 bytes/token `autosave.py` already uses for its own disk check, so the two
+    agree), so 131072 tokens ≈ 2.4 GiB. The measured spread is wide (37–73 KB/token for Qwen3.5 35B-A3B,
+    7.6–9 KB/token for gemma E2B, ~115 KB/token for llama-server with Qwen3-0.6B), which is why it is a field
+    and why the rule is a floor and not a promise. With less RAM available than that, the saved-state options
+    stay off *and say why*, instead of filling the RAM the model needs. That is the r/LocalLLM case, decided
+    for the user.
+  - **Nothing that changes the prompt is touched.** An old conversation must be replayed byte for byte, so the
+    recommendations that change what the proxy writes into the prompt (`mask_reasoning`, `mask_tool_args`,
+    `recall_struct`, `recall_flex`, `recall_multi`, `tools_paging`) keep their default and the README now says
+    *why*, together with the three that stay opt-in because of what they spend (`seal_experimental`,
+    `kv_archive`, `live_dump`). Making them defaults needs the same per-conversation storage as the receipts.
+  - **Seen without starting anything**: `mnemonic-proxy check --explain-config` prints what was read, every
+    option chosen, every option left alone, each with its reason and its override; `--json` carries the same
+    under `auto_config`. The startup log prints the applied choices as `[mnemonic-proxy] auto config: …` and
+    `journal.jsonl` gets one `auto_config` event. `"auto_config": false` turns the whole mechanism off.
+  - Because `check` now reports the configuration the server would really run with, a Strata or llama-server
+    setup with `slot_dir` goes from *"supported by the engine, not enabled in the proxy config"* to
+    *"supported by the engine, configured in the proxy (slot_save, mask_anchor, autosave)"* with no edit.
+    Below a 16384 window nothing is decided: the proxy already refuses to start there without an explicit
+    opt-in, and the documented choice is the scaled defaults.
+  - Measured output engine by engine, the Strata 0.1.51 source reads behind the `concurrency` rule, and what is
+    deliberately *not* decided: `docs/dev-notes/AUTOCONFIG-RESULT.md`.
+
 ## 0.3.22 — 2026-11-01
 
 - **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the

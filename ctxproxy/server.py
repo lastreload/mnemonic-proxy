@@ -1509,6 +1509,14 @@ def serve(a, raw_cfg, cfg):
     journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
     counter.journal = journal        # rejected calibration samples must be visible in the journal
     from .engines import SAVE_PRODUCING, ensure_slot_dir, mkdir_hint
+    from .engines import setup as setup_engine, window_mismatch, window_problems
+    # 0.3.23: the engine and the machine are read first, so the automatic configuration can choose the
+    # engine/machine-dependent options before the session folder and the saved-state workers are set up.
+    decisions: list = []
+    engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter, decisions=decisions,
+                          log=lambda m: print(m, file=sys.stderr, flush=True))
+    if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
+        cfg.data_dir = os.path.abspath(a.data)
     # 0.3.22: the session folder is the proxy's job, not a setup step for the user. Only when the engine
     # runs on this host: with a remote engine a local folder would not be its --slot-save-path.
     if any(getattr(cfg, k, False) for k in SAVE_PRODUCING):
@@ -1524,9 +1532,6 @@ def serve(a, raw_cfg, cfg):
                   "then; everything else works." % (cfg.slot_dir, why, mkdir_hint(cfg.slot_dir)),
                   file=sys.stderr, flush=True)
             journal.log("slot_dir_missing", slot_dir=cfg.slot_dir, outcome=outcome, error=detail)
-    from .engines import setup as setup_engine, window_mismatch, window_problems
-    engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
-                          log=lambda m: print(m, file=sys.stderr, flush=True))
     small = window_problems(cfg, engine, set(raw_cfg))
     if engine.router_state is not None:
         # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
@@ -1567,6 +1572,15 @@ def serve(a, raw_cfg, cfg):
         from .engines import BASE_MODE, saved_state_later
         print("[mnemonic-proxy] saved state off: the proxy works without it (%s). %s"
               % (BASE_MODE, saved_state_later(engine.kind)), file=sys.stderr, flush=True)
+    # 0.3.23: no silent choice. What the automatic configuration picked for this engine and this machine,
+    # with the reason and the way to force it otherwise (`check --explain-config` prints the full picture).
+    for d in decisions:
+        if d.changed:
+            from .autoconfig import fmt as _fmt_value
+            print("[mnemonic-proxy] auto config: %s = %s, %s%s"
+                  % (d.field, _fmt_value(d.value), d.why,
+                     " (to force it otherwise: %s)" % d.override if d.override else ""),
+                  file=sys.stderr, flush=True)
     from . import __version__
     journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
                 guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen")

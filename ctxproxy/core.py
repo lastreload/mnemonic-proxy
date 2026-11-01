@@ -319,6 +319,17 @@ class Config:
     recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
     final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
     notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
+    # 0.3.23 automatic configuration (autoconfig.py): the options that depend on the engine and on the machine
+    # are chosen at startup from harmless reads (engine version/window/saved state, RAM, optional VRAM) and
+    # printed with their reason by `check --explain-config` and by the startup banner. A field written in the
+    # config file always wins. false = every default is used exactly as written here.
+    auto_config: bool = True
+    # size of one saved engine state file, per token of window. 19.5 KB/token = the 20000 bytes/token that
+    # autosave.py already uses for its disk check, so the two agree; measured values range from 7.6 KB/token
+    # (gemma E2B) to ~115 KB/token (llama-server with Qwen3-0.6B), see docs/dev-notes/ROUTER-MODE-RESULT.md and
+    # ENGINES-RESULT.md. Used only to check that a state file fits in the free RAM before the saved-state
+    # options are switched on by themselves: a floor, not a promise, which is why it is a field.
+    state_kb_per_token: float = 19.5
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
