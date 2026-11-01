@@ -76,15 +76,58 @@ call and a save/restore. `--upstream` is the engine's address. Then point the ag
 instead of the engine. The engine window must be at least 16K tokens, 32K or more recommended
 ([Requirements](#requirements)). Step by step with a small model on CPU: [Quick start](#quick-start).
 
-**Your engine.** Start it as below, copy the config from
-[`examples/`](https://github.com/lastreload/mnemonic-proxy/tree/main/examples) and set `slot_dir` to the engine's
-save folder:
+### Strata in two commands
+
+Strata already running? Then there is nothing to prepare: no folder to create, no extra engine flag, no
+configuration file.
+
+<!-- readme-test: ci -->
+```sh
+pip install mnemonic-proxy
+mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
+```
+
+The proxy creates `./data` itself and reads the window from Strata's `/v1/status`. Point your agent at
+`http://127.0.0.1:8096/v1` instead of 8095 and turn off its own auto-compaction (table below). Everything but
+one feature is already working: masking, the verbatim archive, `recall`, segments with handoff notes, 📌/🗑 and
+tools on demand. Run `mnemonic-proxy check --upstream http://127.0.0.1:8095 --data ./data` first if you want the
+setup verified line by line; the startup log says in one line what is on and what is off.
+
+**Saved state (optional, and only later).** Saved state buys back one thing: the *fast resume* of a long
+session (1.4 s instead of ≈50 s on a 110K-token conversation, [measured](#saved-state-measured)). It needs
+Strata ≥ 0.1.40 restarted with one extra flag — this exact line, added to the Strata start command you already
+use:
+
+<!-- readme-test: real-engine -->
+```sh
+strata --slot-save-path /path/to/sessions        # plus your usual Strata options
+```
+
+and the same folder named in the proxy's config (the proxy creates it if it does not exist, so there is no
+`mkdir` step):
+
+<!-- readme-test: illustrative; config: partial -->
+```json
+{
+  "slot_dir": "/path/to/sessions",
+  "slot_save": true, "mask_anchor": true, "autosave": true
+}
+```
+
+Then start the proxy with `--config config.json`. `check` reports `saved state: supported by the engine,
+configured in the proxy`, and `check --live` verifies that `slot_dir` really is Strata's `--slot-save-path`
+(same folder, same host) by saving and restoring a real state file. Nothing else changes.
+
+**Your engine.** Start it as below and copy the config from
+[`examples/`](https://github.com/lastreload/mnemonic-proxy/tree/main/examples). `slot_dir` and the engine's
+`--slot-save-path` are only for saved state: skip both to run in base mode, add them later (the shortest Strata
+path is [above](#strata-in-two-commands)).
 
 | engine | engine command (minimum) | config | saved state |
 |---|---|---|---|
-| Strata ≥ 0.1.40 | Strata's own start, plus `--slot-save-path DIR` | `config.example.json`, `slot_dir` = DIR | yes |
-| Strata older, or without `--slot-save-path` | Strata's own start | `config.official-strata.json` | no (base mode) |
-| llama-server | `llama-server -m model.gguf -c 32768 --parallel 1 --jinja --slot-save-path ./slots --port 8095` | `config.llama-server.json` | yes |
+| Strata, any version | Strata's own start | none, or `config.official-strata.json` | no (base mode) |
+| Strata ≥ 0.1.40, with saved state | Strata's own start, plus `--slot-save-path DIR` | `config.example.json`, `slot_dir` = DIR | yes |
+| llama-server | `llama-server -m model.gguf -c 32768 --parallel 1 --jinja --port 8095` (add `--slot-save-path ./slots` for saved state) | `config.llama-server.json` | yes with `--slot-save-path` |
 | llama-server, router mode (several models) | `llama-server --models-preset preset.ini --models-max 1 --port 8095`; preset: `[*]` with `slot-save-path` and `parallel = 1`, a `ctx-size` (`c`) ≥ 16384 per model | `config.llama-server-router.json` + `preset.router.example.ini` | yes, per model |
 | ds4-server | `ds4-server -m MODEL.gguf --ctx 65536 --kv-disk-dir ./kv --port 8110` | `config.ds4.json` | kept by ds4 itself |
 | Ollama, LM Studio | engine context set to 32768 (see below); `--tokenizer` recommended | `config.openai-32k.json`, or no `window` (read from the engine) | no (base mode) |
@@ -179,8 +222,10 @@ Archived content stays verbatim; the model writes handoff notes at segment switc
   fix, and failed before it. Small windows stay excluded until they are proven on more runs. Reports (Italian):
   [DS4-QWEN-COMPARE-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/DS4-QWEN-COMPARE-RESULT.md),
   [RECALL-8K-030-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/RECALL-8K-030-RESULT.md).
-- Python ≥ 3.10 (`kv_archive`: ≥ 3.14). An OpenAI-compatible engine; saved state needs llama-server with
-  `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path` (see [Engines](#engines)).
+- Python ≥ 3.10 (`kv_archive`: ≥ 3.14). An OpenAI-compatible engine. **Saved state is optional**: without it the
+  proxy still masks, archives, recalls and switches segments, and only the fast resume of a long session is lost.
+  With it: llama-server with `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path` (see
+  [Engines](#engines)). The proxy creates that folder itself when it is missing and the engine is on this host.
 
 ## Quick start
 
@@ -241,7 +286,7 @@ git clone --depth 1 https://github.com/lastreload/mnemonic-proxy
 python3 -m venv .venv && . .venv/bin/activate
 pip install ./mnemonic-proxy
 cp mnemonic-proxy/examples/config.llama-server-32k.json .
-mkdir -p slots data
+mkdir -p slots
 ```
 
 **2. llama.cpp, the tested release (CPU build, ~2 minutes on 12 cores).**
@@ -686,10 +731,11 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 | llama-server: `failed to allocate` / killed | not enough memory for model + context | a smaller quantisation or a smaller model; the window can go down to 16384 (`-c 16384`), not below |
 | HTTP 400 `exceeds the available context size` | the client asked for more than the window | proxy started with a config whose `window` is larger than the engine's `-c`? The proxy reads `n_ctx` from llama-server at startup: restart the proxy after changing `-c` |
 | the model describes the command instead of calling a tool, or says it "cannot run commands" | chat template without tools, or a model weak at tool calling | llama-server with `--jinja`; `check --live` shows whether a tool call works; try a stronger model (see [Tested combinations](#tested-combinations)) |
-| `check`: saved state supported by the engine, disabled in the proxy | config without `slot_save` | use `examples/config.llama-server.json` |
+| `check`: saved state supported by the engine, not enabled in the proxy | config without `slot_save` | nothing to fix unless you want the fast resume: it is optional, and the line says how to add it later |
 | `check --live`: the state file is not in `slot_dir` | `slot_dir` ≠ llama-server `--slot-save-path`, or the engine runs on another host / in a container with another path | the same folder, as seen from the proxy's host |
 | `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path`; everything else works |
-| Strata has no saved state | Strata older than 0.1.40, or started without `--slot-save-path` | update to Strata ≥ 0.1.40 and start it with `--slot-save-path DIR` |
+| Strata has no saved state | Strata older than 0.1.40, or started without `--slot-save-path` | optional: base mode keeps working. For the fast resume, update to Strata ≥ 0.1.40 and start it with `--slot-save-path DIR` |
+| `check`: `slot_dir … does not exist and the proxy could not create it` | the path is not writable by the user running the proxy | run the `mkdir` command the message prints, or point `slot_dir` at a writable folder (the engine's `--slot-save-path`) |
 | answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses) |
 | Codex: `wire_api = "chat"` rejected | Codex ≥ 0.160 only speaks the Responses API | `wire_api = "responses"` |
 | `kv_archive` refused | needs Python ≥ 3.14 (`compression.zstd`) | Python 3.14, or leave `kv_archive` off (default) |

@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import urllib.parse
 from typing import Any
 
 from .savedstate import FEATURES
@@ -430,3 +431,77 @@ def slot_error_status(engine: Engine | None, action: str, status: int, body: byt
     if slot_dir and filename and not os.path.exists(os.path.join(slot_dir, filename)):
         return 404
     return status
+
+
+# --- saved state is optional: the session folder, and what the user is told about it ------------------
+# A user who followed the README thought `--slot-save-path` and a hand-made session folder were part of
+# the setup (r/LocalLLM). They are not: the proxy creates the folder when it can, and says so.
+
+LOCAL_HOSTS = ("", "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "[::]", "::")
+
+# the saved-state options that really produce a save; `autorestore` alone is inert, so it does not
+# count as "saved state is on" (the same list `check` reports as "configured")
+SAVE_PRODUCING = ("slot_save", "mask_anchor", "autosave", "seal_experimental", "kv_archive")
+
+# what keeps working without saved state, and the single thing that does not
+BASE_MODE = ("masking, the verbatim archive, `recall` and segments with handoff notes keep working; "
+             "only the fast resume of a long session is lost")
+
+# how to turn saved state on later, per engine: the engine flag plus the config fields
+SAVED_STATE_LATER = {
+    "strata": "optional, later: restart Strata with --slot-save-path DIR (Strata >= 0.1.40), then add "
+              "\"slot_save\": true, \"mask_anchor\": true, \"autosave\": true and \"slot_dir\": \"DIR\" "
+              "to the config",
+    "llama.cpp": "optional, later: restart llama-server with --slot-save-path DIR, then add \"slot_save\": true, "
+                 "\"mask_anchor\": true, \"autosave\": true and \"slot_dir\": \"DIR\" to the config",
+}
+SAVED_STATE_LATER_DEFAULT = ("optional, later: an engine that can write its KV state to disk "
+                             "(llama-server or Strata >= 0.1.40 with --slot-save-path DIR), then "
+                             "\"slot_save\": true and \"slot_dir\": \"DIR\" in the config")
+
+
+def saved_state_later(kind: str | None) -> str:
+    """One line telling how to enable saved state after the fact, for `kind`."""
+    return SAVED_STATE_LATER.get(kind or "", SAVED_STATE_LATER_DEFAULT)
+
+
+def upstream_is_local(url: str) -> bool:
+    """True when `url` points at this host, so a path in the config is a path the proxy can see and create.
+    An unparsable or hostless URL counts as local (the proxy is started next to its engine by default)."""
+    try:
+        host = (urllib.parse.urlsplit(url or "").hostname or "")
+    except ValueError:
+        return False
+    return host.lower() in LOCAL_HOSTS
+
+
+def mkdir_hint(path: str) -> str:
+    if os.name == "nt":
+        return "create it by hand: mkdir \"%s\"" % path
+    return "create it by hand: mkdir -p %s" % path
+
+
+def ensure_slot_dir(slot_dir: str, upstream: str = "") -> tuple[str, str]:
+    """Create the engine's session folder if it is missing, so the user does not have to.
+
+    Only when the engine runs on this host: with a remote engine the local path is not the engine's
+    `--slot-save-path`, and creating an empty folder would hide that mismatch instead of reporting it.
+
+    -> (outcome, detail):
+         ""        nothing to do (no slot_dir configured)
+         "exists"  it was already there
+         "created" the proxy created it (with its parents)
+         "remote"  not created: the engine is on another host
+         "failed"  it could not be created; detail = the OS error
+    """
+    if not slot_dir:
+        return "", ""
+    if os.path.isdir(slot_dir):
+        return "exists", ""
+    if not upstream_is_local(upstream):
+        return "remote", ""
+    try:
+        os.makedirs(slot_dir, exist_ok=True)
+    except OSError as e:
+        return "failed", str(e)
+    return "created", ""
