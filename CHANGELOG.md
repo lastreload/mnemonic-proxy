@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not
+  available with strata-poly, this model's engine", VecSzn/PolyStrata#114) is recognised as permanent, so saved
+  state stays suspended for that model instead of pausing and retrying every 15 minutes. README: with poly.7 or later
+  the engine is no longer ended; older releases still need the saved-state options off for those models.
+
+## Unreleased
+
 - **The README is under test** (three levels, standard library only). A documented command that
   no longer exists is a worse bug than a missing feature: this README once showed
   `mnemonic-proxy check` before the subcommand existed. Every fenced block now carries an
