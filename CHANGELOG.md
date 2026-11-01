@@ -7,7 +7,69 @@
   unless an exact `default_profile` is configured. Each concrete model has isolated conversation accounting,
   archive/store and saved-state ownership; switching back resumes its own history. Internal recall, notes,
   retry, seal/anchor and autosave calls retain the originating model. `check`, `check --live` and startup report
-  loaded profiles. The no-profile request path remains byte-identical to 0.3.19.
+  loaded profiles. The no-profile request path remains byte-identical to 0.3.21.
+
+## 0.3.21 — 2026-11-01
+
+- Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not
+  available with strata-poly, this model's engine", VecSzn/PolyStrata#114) is recognised as permanent, so saved
+  state stays suspended for that model instead of pausing and retrying every 15 minutes. README: with poly.7 or later
+  the engine is no longer ended; older releases still need the saved-state options off for those models.
+
+- **The README is under test** (three levels, standard library only). A documented command that
+  no longer exists is a worse bug than a missing feature: this README once showed
+  `mnemonic-proxy check` before the subcommand existed. Every fenced block now carries an
+  invisible label in an HTML comment above the fence — `ci`, `windows`, `real-engine` or
+  `illustrative` — and JSON blocks also say whether they are a full proxy configuration, a
+  partial one, or another program's (`tools/readme_blocks.py` lists them).
+  - level 1, `tests/test_readme_static.py`: every executable block is labeled; every
+    `mnemonic-proxy` / `mnemonic-mcp` command line in the README parses with the parser the
+    program really builds; every proxy-configuration example uses only real `Config` fields and
+    is accepted by `Config.from_dict` (the shipped `examples/*.json` too); every internal
+    `#anchor` link resolves to a heading.
+  - level 2, `tests/test_readme_run.py`: the `ci` blocks are executed for real against
+    `ctxproxy.fake_engine` in both the llama-server and the Strata flavor — `demo` prints PASS,
+    `check` says READY, `check` with no engine says NOT READY and *start the engine first*, the
+    proxy answers a Chat Completions request, `forget --list` runs, `mnemonic-mcp` answers an
+    MCP `initialize` and lists `recall` / `conversations` / `journal`. `tools/readme_run.sh`
+    builds the wheel, installs it in a clean venv and runs them from a folder with no source
+    tree, so `import ctxproxy` can only resolve to the installed package; the new CI job
+    `readme-run` does the same on Python 3.10 and 3.14.
+  - level 3, `tests/test_readme_coverage.py`: no subcommand, command-line option or `Config`
+    field may exist in the code without being documented in the README or declared internal in
+    `tools/readme_internal.txt` with a reason. It found 39 undocumented `Config` fields and six
+    undocumented options, now documented: `--mode`, `--version`, `check --json`, `demo --keep`,
+    `mnemonic-mcp --journal` and `--max-tokens`.
+  - `check`, `demo`, `forget` and `mnemonic-mcp` expose their parser builder
+    (`build_check_parser`, `build_demo_parser`, `build_forget_parser`, `build_mcp_parser`) so
+    the tests use the real parsers instead of a copy. No behaviour change.
+  - new README sections: «Every command-line option», «Every configuration field» (the 39
+    remaining `Config` fields with their real defaults) and «This README is tested».
+    `tools/readme_newuser.sh` is the "new user" walk-through for a clean container; developer
+    notes in `docs/dev-notes/README-TESTS.md`.
+
+## 0.3.20 — 2026-10-31
+
+- Saved engine state on engines that do not support it (#28, #46, #47). After a reply that means "not supported",
+  the proxy stops saved-state work (anchors and their one-token calls, segment seal/save, SAVE/RESTORE,
+  autosave/autorestore, `kv_archive`) for that model only; masking, the text archive, `recall` and notes keep
+  working. The documented PolyStrata strata-poly HTTP 500 ("the server ended the engine") and documented permanent
+  HTTP 501 texts (no `--slot-save-path`, parallel requests) suspend it until restart or
+  `POST /v1/strata/saved-state/reset` (accepted only from this machine); any other HTTP 501 pauses it for 15 minutes,
+  then a single call retries. `GET /v1/strata/saved-state` lists suspended models. One stderr warning and one journal
+  event per suspension. Missing files, temporary storage or memory failures, generic HTTP errors and timeouts do not
+  suspend it. `check --live` sends no SAVE/RESTORE when all six saved-state options are false. Limit: on current
+  PolyStrata releases the first save to a strata-poly model still ends the engine once; set the six saved-state
+  options to `false` for that model to avoid it.
+- The saved-state model is now selected under the proxy lock, so a request waiting for the lock no longer changes the
+  model of the one in flight.
+- Router mode: slow metadata reads during streaming send a neutral keep-alive instead of falsely announcing a model
+  load (#50).
+- `mnemonic-proxy demo`: the closing hint works after `uvx mnemonic-proxy demo` (uvx installs nothing): it suggests
+  `uvx mnemonic-proxy check --upstream ...` or `uv tool install mnemonic-proxy`, and says that `check` needs a running
+  engine (#51).
+- README: clearer introduction with the one-minute demo first and a table of measured results (#48); handoff notes
+  and T1 recall expectations described precisely (#49).
 
 ## 0.3.19 — 2026-10-28
 

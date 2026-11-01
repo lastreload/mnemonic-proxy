@@ -27,6 +27,7 @@ import time
 
 from .core import H
 from .render import render, template_kwargs
+from .savedstate import SavedStateUnavailable, state_available
 from .upstream import UpstreamError
 
 STATE_KEY = "strata_state"
@@ -144,7 +145,7 @@ class Tracker:
         st = self.check(s, "before_call")
         if self.skip_restore:
             self.skip_restore = False
-        elif text is not None and self.cfg.autorestore:
+        elif text is not None and self.cfg.autorestore and state_available(self.up):
             self._maybe_restore(text, st, s)
             s = self.status()
         return text, s
@@ -235,10 +236,11 @@ class Tracker:
                 pass
         try:
             r = self.up.slot("restore", best["file"])
-        except UpstreamError as e:
-            self.journal.log("autorestore_error", conv=best["conv"], file=best["file"], status=e.status,
+        except (UpstreamError, SavedStateUnavailable) as e:
+            status = getattr(e, "status", None)
+            self.journal.log("autorestore_error", conv=best["conv"], file=best["file"], status=status,
                              error=str(e)[:300])
-            if e.status == 404:
+            if status == 404:
                 self.store.autosave_deleted(best["file"])
             self._set(None)
             return
@@ -287,6 +289,8 @@ class AutoSaver:
     def tick(self, now: float | None = None):
         """Un controllo; -> evento autosave o None."""
         cfg, tr = self.cfg, self.tr
+        if not state_available(tr.up):
+            return None  # also stops a worker that was started before the breaker tripped
         now = now or time.time()
         st = tr.state
         if not st or not st.get("conv"):

@@ -235,6 +235,26 @@ class ProfileProxy:
     def tc(self):
         return self.base_proxy.tc
 
+    def saved_states(self) -> list:
+        with self.lock:
+            proxies = [self.base_proxy, *self.contexts.values()]
+        out, seen = [], set()
+        for proxy in proxies:
+            for state in proxy.saved_states():
+                if id(state) not in seen:
+                    seen.add(id(state))
+                    out.append(state)
+        return out
+
+    def saved_state_view(self) -> dict:
+        return {"suspended": [r for s in self.saved_states() for r in s.view()]}
+
+    def saved_state_reset(self, model=None) -> dict:
+        if model is not None and not isinstance(model, str):
+            raise ValueError("model must be a string")
+        with self.lock:
+            return {"cleared": [k for s in self.saved_states() for k in s.reset(model)]}
+
     def profile_summary(self) -> list[dict]:
         return [s.summary() for s in self.specs]
 
