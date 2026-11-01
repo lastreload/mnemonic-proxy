@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the
+  engine's `usage.prompt_tokens` could be moved to its full extent by a single sample, in either direction; a
+  sample that pulls it *down* makes the proxy estimate less than the real prompt, mask too late, and risk a prompt
+  the engine cuts in silence. Now a sample is accepted only above 1,000 estimated tokens and with a real/estimated
+  ratio inside 0.25–4.0 (outside it the sample is rejected and journalled as `calibration_rejected`), and until 5
+  samples have been accepted the factor may only grow, never shrink. Masking decisions are unchanged on the
+  language scenario: only the token counts the proxy prints move, by under 5% on blocks masked during the warm-up
+  (`tests/test_calibration_guards.py`), and the 0.3.0 byte-identity lock still holds for the old rule
+  (`TokenCounter(min_samples=1)`).
+
+  The lower clamp stays **0.5**, deliberately. Replaying 68 recorded local sessions (3,446 first-round requests
+  counted by estimate) the factor ran below 1.0 in 525 of them (15.2%), down to 0.514; the warm-up guard alone
+  brings that to 409 (−22%). Raising the clamp to 1.0 would remove them all, but it only moves the share of
+  requests whose estimate is below the real prompt from 66.5% to 63.6%, while the 95th percentile of
+  estimated/real goes from 1.047 to 1.211: window given away for almost no protection. chars/3.5 is already a
+  pessimistic baseline for prose (unlike the 4.0 of the tool this guard was modelled on), so a factor below 1.0 is
+  a legitimate correction, and prudence against a cut prompt belongs to `window_estimate_slack` and to the
+  `engine_truncated` detection, which already excludes a cut prompt from calibration (0.3.8).
+
 ## 0.3.21 — 2026-11-01
 
 - Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not

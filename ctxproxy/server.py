@@ -1507,6 +1507,7 @@ def serve(a, raw_cfg, cfg):
                          "estimated window guard." % counter.kind)
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
+    counter.journal = journal        # rejected calibration samples must be visible in the journal
     from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, file=sys.stderr, flush=True))

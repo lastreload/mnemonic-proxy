@@ -433,6 +433,14 @@ e.g. `0.3`) when the window is small. On generic engines (Ollama, LM Studio, any
 `--tokenizer` the slack is 0.15 by default (0.3.8); Strata, llama.cpp and ds4 keep 0. This 15% is not an extra reserve
 on top of a loaded tokenizer. `"window_guard": false` explicitly disables the protection.
 
+The calibration factor is learned from the `usage.prompt_tokens` the engine reports, with guards against a
+single misleading sample: samples under 1,000 estimated tokens are ignored, a sample whose real/estimated ratio
+falls outside 0.25–4.0 is rejected and journalled (`calibration_rejected`), and until 5 samples have been accepted
+the factor may only grow, never shrink — overestimating costs a little window, underestimating masks too late. A
+prompt the engine cut is already excluded (0.3.8). The clamp stays 0.5–2.0: chars/3.5 is a deliberately pessimistic
+baseline for prose, so a factor below 1.0 is a legitimate correction, and `window_estimate_slack` is the knob for
+extra prudence. Exact counting with a tokenizer is never calibrated.
+
 **Context diagnostics.** The CLI prints startup/version/window/template and concise runtime events to **stderr**:
 `window_guard` (including every checked call, clamp, count failure, local refusal and engine-count mismatch),
 `response_clamped`, `mask`, `switch`, `switch_skipped`, and `client_disconnected`. No prompt/notes/error-body text
