@@ -195,7 +195,10 @@ Archived content stays verbatim; the model writes handoff notes at segment switc
 
 1. **Hide — mask, don't summarize.** Old tool outputs and reasoning leave the prompt in stable blocks and become
    one-line receipts with an id. The prefix stays byte-identical between blocks, so the engine's KV cache keeps
-   working.
+   working. A receipt says what the call did and how it ended, how big the output was (lines and bytes), the exit
+   code when there is one, the error type and the **first** error line — everything read off the archived bytes, no
+   model involved, so the same output always produces the same receipt:
+   `⟪ctx-archive id=t1a2b… · output of bash "pytest -q" · this agent · hidden to save space (3120 tokens)⟫ Receipt: test: exit code 1, 412 lines/38.2 KB, passed 86, failed 1 (tests/test_a.py::test_adds). Error type: AssertionError. First error line: «E AssertionError: assert 3 == 4». Exact text: recall id=t1a2b…`
 2. **Recall — structured, exact.** A `recall` tool searches the verbatim archive: first write of a file, its full
    edit timeline, command → output, the reasoning behind an edit — every hit tagged with message number and segment.
    The proxy runs these calls itself; the client never sees them, even when streaming.
@@ -1351,6 +1354,7 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `inject_recall`, `max_recall_rounds`, `recall_max_tokens` | true, 4, 6000 | the `recall` tool | default |
 | `recall_tool_name` / `tools_tool_name` | "recall" / "tools" | names of the proxy's tools for new conversations | default |
 | `prompt_language` | "en" | language of the texts the proxy writes into the prompt, for NEW conversations: `"en"` or `"it"`; stored per conversation at first use; conversations from before 0.3.1 stay Italian | default |
+| `rich_receipts` | false | opt-in (benefit not yet measured): richer receipt for a hidden tool output, for NEW conversations: output size in lines/bytes, error type and the FIRST error line (160 characters), plus a receipt for outputs whose kind is not recognised; stored per conversation at first use, so a conversation from before 0.3.22 keeps the receipts it was masked with | default |
 | `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** |
 | `auto_recall` / `auto_recall_hint` | false / false | `auto_recall` enables automatic retrieval on new user messages; `auto_recall_hint` only selects a one-line hint with ids instead of pieces and requires `auto_recall: true` | false / false (automatic retrieval off) |
 | `recall_leaf_select` | false | on structured outputs (yaml/toml (Python ≥ 3.11)/xml/json, tables, diffs, logs, git log, pytest) `recall` returns only the matching record and the key lines of its ancestors, verbatim, with `⋮` markers and offsets for the gaps; falls back to the normal recall when unsure ([dev note](docs/dev-notes/LEAF-SELECT-RESULT.md)) | default (experimental) |
