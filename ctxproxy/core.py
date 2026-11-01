@@ -61,6 +61,8 @@ DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb conclus
              "Testo completo: {rn} id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
 NOTES_MARK = "[strata-context: richiesta note di passaggio]"
+# 0.3.22: ricevute estese, scelte alla prima richiesta e ricordate come la lingua (Manager.receipt_detail)
+RECEIPTS_KEY = "receipts:"
 SEG_MARK = "[strata-context: segmento {seg}]"
 # 0.3.1: English texts for new conversations (prompt_language, see lang.py). The Italian ones above stay verbatim
 # for conversations born before 0.3.1 (byte-identical prefix). Recognition always accepts both.
@@ -304,6 +306,9 @@ class Config:
     # for NEW conversations: "en" (default) | "it". Saved per conversation at first use; conversations born before
     # 0.3.1 keep Italian (byte-identical prefix). Markers are recognized in both languages everywhere.
     prompt_language: str = "en"
+    # 0.3.22: richer receipts for NEW conversations (size of the output, error type, first error line). Saved per
+    # conversation at first use like the language: a conversation born before keeps the receipts it was masked with.
+    rich_receipts: bool = True
     # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
     window_guard: bool = True
     window_margin: int = 64              # technical margin (Strata itself keeps 8)
@@ -1030,6 +1035,8 @@ class Manager:
         self.rn, self.tn = cfg.recall_tool_name or RECALL_NAME, cfg.tools_tool_name or TOOLS_NAME
         # lingua dei testi del proxy nella conversazione corrente (impostata da prepare; 0.3.1)
         self.lang = norm_lang(cfg.prompt_language)
+        # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
+        self.rich = bool(cfg.rich_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
@@ -1048,6 +1055,18 @@ class Manager:
         lang = "it" if existed else norm_lang(self.cfg.prompt_language)
         self.store.kv_set(key, lang)
         return lang
+
+    def receipt_detail(self, conv: str, existed: bool) -> bool:
+        """Ricevute estese per la conversazione (0.3.22), con la stessa regola della lingua: la scelta è fatta alla
+        prima richiesta e ricordata (kv). Una conversazione che ha già un archivio ma nessuna scelta registrata è
+        nata prima: conserva le ricevute con cui è stata mascherata, prefisso identico byte per byte."""
+        key = RECEIPTS_KEY + conv
+        v = self.store.kv_get(key)
+        if v in ("rich", "plain"):
+            return v == "rich"
+        rich = bool(self.cfg.rich_receipts) and not existed
+        self.store.kv_set(key, "rich" if rich else "plain")
+        return rich
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -1101,7 +1120,7 @@ class Manager:
         riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
-            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang)
+            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang, self.rich)
             if rec:
                 return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
                                                                   receipt=rec, rn=self.rn)
@@ -1290,6 +1309,7 @@ class Manager:
         names = self.tool_names(conv, client_tools, legacy=existed)
         self.rn, self.tn = names["recall"], names["tools"]
         self.lang = self.prompt_lang(conv, existed)
+        self.rich = self.receipt_detail(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
         if cfg.tools_paging:

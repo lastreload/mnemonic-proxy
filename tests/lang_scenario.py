@@ -151,8 +151,10 @@ def run_conv(proxy_factory, steps, legacy_until, eng):
 
     def send(msgs):
         if legacy_until and st["n"] == legacy_until:
-            # from here on the conversation looks like one created by 0.3.0: no stored language
+            # from here on the conversation looks like one created by 0.3.0: no stored language, no stored
+            # receipt format (0.3.22), so the proxy keeps the texts it was masked with
             st["proxy"].store.db.execute("DELETE FROM kv WHERE k LIKE 'prompt_language:%'")
+            st["proxy"].store.db.execute("DELETE FROM kv WHERE k LIKE 'receipts:%'")
             st["proxy"].store.db.close()
             st["proxy"] = proxy_factory(None)
         k0 = len(eng.requests)

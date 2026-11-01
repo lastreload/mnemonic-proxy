@@ -110,7 +110,7 @@ class TestCurrentToolEmergency(unittest.TestCase):
         original = content_text(messages[44].get("content"))
         rid = rid_for(44, messages[44])
 
-        self.assertEqual(p.est_tokens, 8885)  # Sanitized fixture result, not tokenizer-exact equivalence.
+        self.assertEqual(p.est_tokens, 8897)  # Sanitized fixture result, not tokenizer-exact equivalence.
         self.assertEqual(p.response_limit, 8192)
         self.assertLessEqual(p.est_tokens + p.response_limit + mgr.cfg.reserve + 8, mgr.cfg.window)
         self.assertIn(question, [content_text(m.get("content")) for m in p.messages])

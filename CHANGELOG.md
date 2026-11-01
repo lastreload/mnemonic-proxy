@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- **Richer receipts for a hidden tool output.** A receipt said what the call did and how it ended; it did not say
+  how big the output was, which kind of error it was, nor where the failure *started*. It now also carries the
+  output's size in lines and UTF-8 bytes, the error type (`AssertionError`, `command not found`, …) and the
+  **first** error line, cut at 160 characters — the last lines are still there for a failure. An output whose kind
+  is not recognised gets a receipt too (size, error fields and its first line) instead of only the first 140
+  characters. Every field is read off the archived bytes with fixed rules: no model, no clock, no counter, so the
+  same output always gives the same receipt and the placeholder stays a fixed point inside the cacheable prefix.
+
+  Measured cost on the regression fixture of an oversized tool result: the prompt after masking goes from 8,885 to
+  8,897 estimated tokens, +12 tokens for one receipt. The receipt is in the stable prefix, so it is paid once per
+  masked block.
+
+  Like the receipt language in 0.3.1, the choice is made at a conversation's first request and remembered: a
+  conversation that already has an archive keeps the receipts it was masked with, so its prefix stays byte-identical
+  and the engine's KV cache is not invalidated. `rich_receipts: false` keeps the 0.3.21 receipts for new
+  conversations as well.
+
 ## 0.3.21 — 2026-11-01
 
 - Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not
