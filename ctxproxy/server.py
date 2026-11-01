@@ -1507,6 +1507,22 @@ def serve(a, raw_cfg, cfg):
                          "estimated window guard." % counter.kind)
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
+    from .engines import SAVE_PRODUCING, ensure_slot_dir, mkdir_hint
+    # 0.3.22: the session folder is the proxy's job, not a setup step for the user. Only when the engine
+    # runs on this host: with a remote engine a local folder would not be its --slot-save-path.
+    if any(getattr(cfg, k, False) for k in SAVE_PRODUCING):
+        outcome, detail = ensure_slot_dir(cfg.slot_dir, a.upstream)
+        if outcome == "created":
+            print("[mnemonic-proxy] created the session folder %s (slot_dir); it must be the engine's "
+                  "--slot-save-path" % cfg.slot_dir, file=sys.stderr, flush=True)
+            journal.log("slot_dir_created", slot_dir=cfg.slot_dir)
+        elif outcome in ("failed", "remote"):
+            why = ("could not create it: " + detail if outcome == "failed"
+                   else "the engine is not on this host, so it was not created")
+            print("[mnemonic-proxy] warning: slot_dir %s does not exist, %s. %s. Saved state will fail until "
+                  "then; everything else works." % (cfg.slot_dir, why, mkdir_hint(cfg.slot_dir)),
+                  file=sys.stderr, flush=True)
+            journal.log("slot_dir_missing", slot_dir=cfg.slot_dir, outcome=outcome, error=detail)
     from .engines import setup as setup_engine, window_mismatch, window_problems
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
                           log=lambda m: print(m, file=sys.stderr, flush=True))
@@ -1539,12 +1555,17 @@ def serve(a, raw_cfg, cfg):
     # Request threads stay daemonic: with HTTP/1.1 keep-alive an idle client connection would otherwise block
     # shutdown forever. The data lock is released by the OS when the process exits.
     srv.daemon_threads = True
+    saved_on = bool(engine.slot_save and any(getattr(cfg, k, False) for k in SAVE_PRODUCING))
     print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
-        "yes" if engine.slot_save else "no", a.mode,
+        "yes" if saved_on else "off (optional)" if engine.slot_save else "no", a.mode,
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
             cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor),
           file=sys.stderr, flush=True)
+    if not saved_on:
+        from .engines import BASE_MODE, saved_state_later
+        print("[mnemonic-proxy] saved state off: the proxy works without it (%s). %s"
+              % (BASE_MODE, saved_state_later(engine.kind)), file=sys.stderr, flush=True)
     from . import __version__
     journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
                 guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen")
