@@ -39,7 +39,7 @@ It does not test a real model's tool use or saved engine state. [Without uv / de
 | Experiment | Result |
 |---|---|
 | [Long coding session, one 12 GB GPU](#one-session-measured) | 3 h 15 min; 448K tokens of history, at most 105K in the prompt. Archived history is not all in context. |
-| [AgentLongBench subset, clarified questions](#benchmark-agentlongbench-with-a-32k-window) | 86/100 right with the proxy at 32K, vs 47 with an LLM summary and 69 with full history in a larger window. |
+| [AgentLongBench subset, clarified questions](#benchmark-agentlongbench-with-a-32k-window) | 86/100 right with the proxy at 32K, vs 47 with an LLM summary and 69 with full history in a larger window; a repeat run gave 85 / 57 / 75. |
 | [Saved engine state](#saved-state-measured) | A 110K-token conversation resumed in 1.4 s instead of ≈50 s; requires a backend with save/restore support. |
 
 [What we have not proven](#what-we-have-not-proven) · [Project page](https://lastreload.github.io/mnemonic-proxy/)
@@ -806,8 +806,14 @@ clarified (one sentence saying which tool output "round N" means; answers and sc
 | 64k (/50) | 38 | **41** | 27 | 23 |
 | 128k (/50) | 31 | **45** | 20 | 26 |
 | both (/100) | 69 | **86** | 47 | 49 |
+| repeat, both (/100) | 75 | **85** | 57 | 62 |
 
-Proxy vs summary: 44 questions right only with the proxy, 5 only with the summary (p = 7.6e-9). With the original,
+Proxy vs summary: 44 questions right only with the proxy, 5 only with the summary (p = 7.6e-9).
+**Repeat run** (31 Oct 2026, proxy 0.3.19, same engine, model, questions, scorer and methods; 64k / 128k: full window
+40 / 35, proxy 42 / 43, summary 32 / 25, truncation 32 / 30): proxy vs summary 35 / 7 (+28 points, p = 1.5e-5), vs
+truncation 30 / 7 (+23, p = 0.0002), vs full window 22 / 12 (+10, p = 0.12, not significant). The proxy stayed at
+85-86 while the other three methods scored 6-13 points higher than in the first run: a single run can be off by that
+much, and questions from the same history are not independent. With the original,
 ambiguous question every method was near chance (51 / 52 / 56 / 44; answering "0 / no" every time scores 50).
 Limits: one model, one engine, one seed, 100 questions; the clarified run exists because of the first one; end to
 end the proxy took a median 136 s / 286 s per question (64k / 128k) vs 70 s / 102 s for the full window, mostly
