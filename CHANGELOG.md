@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.21 — 2026-11-01
 
 - Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not
   available with strata-poly, this model's engine", VecSzn/PolyStrata#114) is recognised as permanent, so saved
