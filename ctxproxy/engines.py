@@ -227,14 +227,19 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         return e
     e = Engine("openai", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
     # 0.3.8: Ollama / LM Studio expose the context they run with (enginectx.py); other generic engines: unchanged
-    from .enginectx import NAME, detect_flavor, read_context
+    from .enginectx import NAME, detect_flavor, loaded_contexts, pick
     fl = detect_flavor(up)
     if fl:
         e.flavor = fl
-        e.model, n = read_context(up, fl)
+        ctxs = loaded_contexts(up, fl)
+        e.model, n = pick(ctxs or {}, None)
         e.n_ctx = n or None
-        if not n:
+        if ctxs is None:
+            e.notes.append("%s: runtime model information unavailable; loaded state and context unknown" % NAME[fl])
+        elif not ctxs:
             e.notes.append("%s: no model loaded, its context is read before the first request" % NAME[fl])
+        elif not n:
+            e.notes.append("%s: model loaded, context not reported" % NAME[fl])
     return e
 
 

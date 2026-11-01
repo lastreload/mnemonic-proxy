@@ -26,7 +26,7 @@ import urllib.request
 
 from . import engines
 from .core import Config
-from .enginectx import NAME
+from .enginectx import NAME, loaded_contexts
 from .savedstate import state_available
 from .upstream import Upstream
 
@@ -156,7 +156,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(FAIL, "model loaded", "/health answers 503: the engine is still loading the model",
                 "wait until llama-server prints 'server is listening', then run check again")
     else:
-        ids = [m.get("id") for m in (models.get("data") or [])] if isinstance(models, dict) else []
+        ids = [m.get("id") for m in (models.get("data") or []) if isinstance(m, dict) and m.get("id")] \
+            if isinstance(models, dict) and isinstance(models.get("data"), list) else []
         if eng.kind == "strata":
             s = engines._get_json(up, "/v1/status") or {}
             loaded = bool(s.get("loaded"))
@@ -165,10 +166,24 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         elif getattr(eng, "router", False):
             rep.add(OK if ids else WARN, "model loaded", "llama-server router mode: models loaded on demand (%s)"
                     % (", ".join(map(str, ids[:8])) or "none listed"), "" if ids else "add models to the preset")
+        elif eng.flavor:
+            ctxs = loaded_contexts(up, eng.flavor)
+            endpoint = "/api/ps" if eng.flavor == "ollama" else "/api/v0/models"
+            evidence = ("runtime information unavailable or malformed; loaded state unknown" if ctxs is None else
+                        "no model loaded" if not ctxs else "loaded: " + ", ".join(ctxs))
+            rep.add(OK if ctxs else WARN, "model loaded", "%s %s: %s" % (NAME[eng.flavor], endpoint, evidence),
+                    "" if ctxs else "check the engine's runtime model status and run check again")
+            if not eng.model and ids:
+                eng.model = ids[0]        # --live target only; catalog is not loaded-state evidence
+        elif eng.kind == "openai":
+            rep.add(WARN, "model availability", "/v1/models catalog: %s; loaded state unverified"
+                    % (", ".join(map(str, ids[:8])) or "none listed"),
+                    "verify model availability and per-model runtime context in the upstream gateway; "
+                    "a catalog does not prove a model is loaded")
+            if ids:
+                eng.model = ids[0]        # --live target only, not proof of loading
         elif ids or eng.model:
             rep.add(OK, "model loaded", "model: %s" % (eng.model or ", ".join(map(str, ids[:3]))))
-            if eng.kind == "openai" and not eng.model and ids:
-                eng.model = ids[0]        # 0.3.8: --live asks a generic engine for a model it has (Ollama: 404 else)
         else:
             rep.add(WARN, "model loaded", "the engine did not list a model (/v1/models %s)" % st_m,
                     "check that the engine has a model loaded")
@@ -216,16 +231,17 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     if "window" in explicit else ""),
                 "give each model a ctx-size of at least %d in the preset" % engines.MIN_WINDOW)
     elif flavor:
-        rep.add(WARN, "context window", "%s: no model loaded, its context is not known yet: the proxy reads it "
-                "before the first request (and loads the model if needed); proxy window=%d is an upper bound only "
-                "if written in the config" % (NAME[flavor], cfg.window),
-                "load the model first and run check again (%s)" % ("ollama run <model> \"\"; ollama ps"
-                                                                     if flavor == "ollama" else
-                                                                     "lms load <model> --context-length 32768; lms ps"))
+        rep.add(WARN, "context window", "%s: runtime context unknown (model unloaded, metadata unavailable or "
+                "context not reported); the proxy reads it before the first request (and loads the model if needed); "
+                "proxy window=%d is not a verified runtime context and is an upper bound only if written in the config"
+                % (NAME[flavor], cfg.window),
+                "check the loaded model's runtime context and run check again")
     elif eng.kind == "openai":
-        rep.add(WARN if "window" not in explicit else OK, "context window",
-                "generic engine: n_ctx unknown, proxy window=%d" % cfg.window,
-                "" if "window" in explicit else "set \"window\" in the config to the engine's real context size")
+        rep.add(WARN, "context window",
+                "generic engine: runtime context unverified; proxy window=%d (%s, not a measured engine window)"
+                % (cfg.window, "configured" if "window" in explicit else "default"),
+                "verify the runtime context of every routed model and set \"window\" no higher than the smallest; "
+                "the proxy cannot discover per-model contexts from this gateway")
     # Report the actual startup adaptations, including explicit small-window budgets.
     probe = Config.from_dict(raw_cfg)
     for warning in engines.apply(probe, eng, None, explicit, log=None):
