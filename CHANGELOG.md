@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.22 — 2026-11-01
 
 - **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the
   engine's `usage.prompt_tokens` could be moved to its full extent by a single sample, in either direction; a
