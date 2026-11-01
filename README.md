@@ -914,8 +914,9 @@ re-ran the setup script and wrote the new, wrong values — the proxy run did be
 true values in the final prompt (none were there, except the omp cases in ¹); one file per configuration was also
 checked by hand.
 
-Across 18 real sessions (pi, Claude Code, Codex) the need is rare: 5 spontaneous recalls against 108 after a question
-about the past; 30 re-reads of a masked, unchanged file (≈37K tokens); 4 edits out of 505 failed because the model
+Across 8 real sessions (4 pi, 3 Claude Code, 1 Codex; 18 journals counting 10 replays) the need is rare: 5 spontaneous
+recalls against 108 after a question about the past; 30 re-reads of a masked, unchanged file (≈37K tokens; ≈46K
+counting the replays); 4 edits out of 505 failed because the model
 misremembered a masked file. When a file can be re-read, the model re-reads it — which is right when it has changed.
 
 Limits: one model, one run of each long session, scaled-down thresholds (32K window) for the long sessions; Cline
