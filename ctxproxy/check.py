@@ -35,7 +35,7 @@ ICON = {OK: "\u2705", WARN: "\u26a0\ufe0f ", FAIL: "\u274c", INFO: "\u2139\ufe0f
 PLAIN = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]", INFO: "[INFO]"}
 # autorestore defaults to true but is inert without one of the save-producing
 # features; keep it out of the configured/verified save decision.
-SAVED_STATE = ("slot_save", "mask_anchor", "autosave", "seal_experimental", "kv_archive")
+SAVED_STATE = engines.SAVE_PRODUCING
 
 
 class Report:
@@ -251,8 +251,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(OK, "saved state", "supported by the engine, configured in the proxy (%s)" % ", ".join(configured),
                 "" if live else "run `mnemonic-proxy check --live ...` to verify a real save/restore")
     elif eng.slot_save:
-        rep.add(WARN, "saved state", "supported by the engine, disabled in the proxy config",
-                "use examples/config.llama-server.json (slot_save, mask_anchor, autosave) with slot_dir set")
+        rep.add(WARN, "saved state", "supported by the engine, not enabled in the proxy config: the proxy works "
+                "without it (%s)" % engines.BASE_MODE, engines.saved_state_later(eng.kind))
     elif configured:
         hint = {"llama.cpp": "start llama-server with --slot-save-path DIR (same folder as slot_dir)",
                 "strata": "official Strata has no session files: build the session-files branch (README, Engines), "
@@ -266,20 +266,34 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(INFO, "saved state", "ds4-server keeps its own state (start it with --kv-disk-dir DIR); the proxy "
                 "does not save or restore it")
     else:
-        rep.add(INFO, "saved state", "not supported by the engine and not configured: base mode (masking, archive, "
-                "recall, segments)")
+        rep.add(INFO, "saved state", "not supported by the engine and not configured: the proxy works without it "
+                "(%s)" % engines.BASE_MODE, engines.saved_state_later(eng.kind))
     if eng.slot_save and configured:
         if not cfg.slot_dir:
             rep.add(WARN, "slot_dir", "not set: old anchors and autosaves are never cleaned up, kv_archive off",
                     "set \"slot_dir\" to the engine's --slot-save-path folder")
-        elif not os.path.isdir(cfg.slot_dir):
-            rep.add(FAIL, "slot_dir", "%s does not exist" % cfg.slot_dir,
-                    "create it and start the engine with --slot-save-path pointing to it (same folder)")
         else:
-            ok, err = _writable(cfg.slot_dir)
-            rep.add(OK if ok else FAIL, "slot_dir", "%s exists%s" % (cfg.slot_dir, ", writable" if ok else
-                                                                     ", NOT writable: " + err),
-                    "" if live else "check --live verifies it is the engine's --slot-save-path")
+            # 0.3.22: the proxy creates the session folder itself (nobody should have to mkdir it by hand),
+            # but only when the engine is on this host: otherwise the local path is not --slot-save-path
+            # and an empty folder would hide the mismatch.
+            outcome, detail = engines.ensure_slot_dir(cfg.slot_dir, getattr(a, "upstream", "") or "")
+            if outcome == "remote":
+                rep.add(FAIL, "slot_dir", "%s does not exist and the engine is not on this host (%s): the proxy "
+                        "did not create it" % (cfg.slot_dir, a.upstream),
+                        "slot_dir must be the engine's --slot-save-path as seen from this host (a shared mount); "
+                        + engines.mkdir_hint(cfg.slot_dir))
+            elif outcome == "failed":
+                rep.add(FAIL, "slot_dir", "%s does not exist and the proxy could not create it: %s"
+                        % (cfg.slot_dir, detail),
+                        engines.mkdir_hint(cfg.slot_dir) + ", or point slot_dir at a writable folder "
+                        "(the engine's --slot-save-path)")
+            else:
+                ok, err = _writable(cfg.slot_dir)
+                made = " (created by the proxy)" if outcome == "created" else ""
+                rep.add(OK if ok else FAIL, "slot_dir", "%s exists%s%s" % (
+                    cfg.slot_dir, made, ", writable" if ok else ", NOT writable: " + err),
+                    "it must be the engine's --slot-save-path folder" if live else
+                    "it must be the engine's --slot-save-path folder; check --live verifies that")
     if live:
         _live(rep, up, eng, cfg)
         if eng.kind == "openai" and not any(
