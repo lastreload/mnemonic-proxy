@@ -496,6 +496,70 @@ compaction:
 Then `omp --model mnemonic/qwen3.8-flash-next-iq3_xxs`. If you use extensions that also shorten tool output (for
 example SoL-Pi's ObservationPack), we have not tested them together with the proxy.
 
+### opencode (Chat Completions)
+
+Tested with opencode **1.19.5** on Strata: one 1 h 32 min session, 554 requests, 51 masks, 44 `recall` calls all
+used, numbers [below](#opencode-on-strata-measured). Put this in `$XDG_CONFIG_HOME/opencode/opencode.json` (global)
+or `opencode.json` in the project:
+
+<!-- readme-test: real-engine; config: client -->
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "compaction": { "auto": false },
+  "autoupdate": false,
+  "provider": {
+    "mnemonic": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "mnemonic-proxy",
+      "options": {
+        "baseURL": "http://127.0.0.1:8096/v1",
+        "apiKey": "local",
+        "timeout": false,
+        "headerTimeout": false,
+        "chunkTimeout": false
+      },
+      "models": {
+        "qwen3.8-flash-next-iq3_xxs": {
+          "name": "Flash Next via mnemonic-proxy",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": { "context": 131072, "output": 16384 },
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
+        }
+      }
+    }
+  },
+  "model": "mnemonic/qwen3.8-flash-next-iq3_xxs"
+}
+```
+
+The model key is the id your engine reports at `/v1/models`; `limit.context` is the engine's real window. Then
+`opencode` (TUI) or, non-interactively, `opencode run --model mnemonic/qwen3.8-flash-next-iq3_xxs --auto "…"` and
+`opencode run -c --model … --auto "…"` to continue the same session.
+
+**Auto-compaction off**: `"compaction": {"auto": false}` is the real option (`Enable automatic compaction when
+context is full`, default `true`, in opencode's own `config.json` schema). With it off, a 537-message session
+produced no summary message and no compaction event in opencode's database. Note that opencode counts tokens from
+the `usage` the proxy returns — the **physical** prompt (max 108K here), not the real history (1.17 M tokens at the
+end) — so it would rarely trigger compaction anyway; turn it off regardless, so only one context manager is at work.
+
+Limits found:
+
+- Use the **`provider`** key with **`npm`**, not the newer plural `providers` + `package`: with `providers` the
+  model does not appear in `opencode models` and `opencode run` fails with
+  `UnknownError … Unexpected server error`.
+- If npm blocks install scripts, `opencode-ai`'s `postinstall` does not fetch the binary: run
+  `cd node_modules/opencode-ai && node postinstall.mjs` once.
+- `opencode run` needs `--auto`, otherwise it waits for permission approvals that never come.
+- Tool calls go through unchanged (669 calls: `read`, `bash`, `edit`, `write`, `grep`; no empty results, no HTTP
+  errors). The only failures were 5 `edit` calls rejected **by opencode** with `Could not find oldString in the
+  file`: the model rebuilt the old text from memory after its own earlier tool arguments had been masked. It
+  recovered with `write`.
+- `recall` never appears in opencode's tool list: the proxy injects it and answers it in its own internal rounds.
+- The model re-reads a lot (415 `reread` events, often `read … limit=60`); in one turn that became a ~20 minute
+  read loop before it wrote the file. That is the model, not the proxy.
+
 ### Claude Code (Anthropic Messages)
 
 Checked against Claude Code 2.1.287; a 1 h 41 min session with 2.1.284 on Strata is measured
@@ -598,6 +662,39 @@ engine. The proxy's own:
 | `GET /v1/strata/journal` | the last 200 journal events |
 
 ## Tested combinations
+
+### opencode on Strata, measured
+
+**0.3.21, opencode 1.19.5 on Strata** (2026-11-01): PC4070TI, Strata 0.2.6 / engine 0.1.50 with Qwen3.8 Flash Next
+GSQ-RCO IQ3_XXS, `--max-context 131072 --kv int8 --kv-resident 32768`, proxy window 131072 (mask trigger ~80K,
+target ~40K), `--tokenizer` from the pack. opencode installed in an isolated prefix with its own `XDG_*` dirs,
+auto-compaction off, one session, eight consecutive turns driven with `opencode run` / `run -c` on a throwaway copy
+of 29 Python modules (13,911 lines): write one markdown document per group of modules, then write and test a new
+module, then answer questions about the session from memory.
+
+| | |
+|---|---|
+| session | 1 h 32 min 30 s, 554 requests, 235,380 tokens generated |
+| history vs prompt | real history up to **1,171,531** tokens; physical prompt median 77,027, max **108,332** |
+| prefill | 1,866,843 tokens actually read, 40,031,102 reused from saved state (**97.8 % reuse**) |
+| TTFT (proxy-side prefill), all requests | median **1,902 ms**, max 30,279 ms |
+| TTFT on the 51 requests where masking happens | median **7,023 ms**, max 19,574 ms |
+| TTFT on the 51 requests right after a mask | median **1,930 ms**, max 17,188 ms |
+| generation | median 49.5 tok/s, max 90.5 tok/s |
+| masking | 51 masks, from `93,470 → 57,659` (3 pieces) down to 1-piece emergency batches |
+| segments | 3 switches; `seal` 1.8–2.8 s, `save` 0.80–0.84 s per file |
+| anchor | 39 `anchor_save`, 36 `anchor_restore`, 2 `anchor_skip` |
+| `recall` | **44 calls by the model, all 44 served and used** (22 of them in one turn, 7 in the memory-quiz turn) |
+| tool calls | 669 (`read` 434, `bash` 190, `edit` 33, `write` 10, `grep` 2); 0 empty results |
+| errors | 0 `proxy_error`, 0 `upstream_error`, 0 `client_disconnect`, 0 non-200; 5 `edit` calls rejected by opencode (stale `oldString`), 1 turn with no final answer (`final_answer_missing`) |
+
+What it shows: masking costs about **5 s of extra prefill on the request where it happens** (7.0 s against a 1.9 s
+median) and **nothing on the next one** (1.93 s against 1.886 s for requests far from a mask), because the anchor is
+saved and restored instead of re-prefilling the shortened prompt. The model asked for `recall` on its own whenever
+it needed a masked tool result, and the three memory questions at the end of the session were answered correctly
+after seven `recall` calls. What it does not show: the interactive TUI, `opencode serve`/`web`/`attach`, MCP servers
+or sub-agents, opencode's own compaction running *together* with the proxy, and the client-side TTFT (we measured
+the proxy's `prompt_ms`). One turn out of eight ended with no final answer: the model spent the whole turn reading.
 
 **0.3.8, Ollama and LM Studio: window read from the engine** (2026-10-19): same machine, engines and model as the
 0.3.7 run below (Ollama with the integrated GPU, `OLLAMA_IGPU_ENABLE=1`, context set with `OLLAMA_CONTEXT_LENGTH`;
@@ -948,7 +1045,7 @@ own. In our tests with Claude Code, pi and omp the model did call `recall` by it
 from disk ([Does the model recall on its own?](#does-the-model-recall-on-its-own)); with Cline we could not test it.
 
 **Share your numbers.** If you run the proxy on your own hardware, a report helps — especially with clients and models
-we have not tested (Cline, OpenCode, other models). Useful: GPU/RAM, engine and model, client, session length (total
+we have not tested (Cline, other models). Useful: GPU/RAM, engine and model, client, session length (total
 history and tokens in the last request), restore time, how many `recall` calls and whether the model made them on its
 own. `data/journal.jsonl` holds most of it; check it before sharing, it contains your recall queries. Open an issue
 with the [user report](https://github.com/lastreload/mnemonic-proxy/issues/new?template=user-report.md) template.
@@ -965,6 +1062,7 @@ with the [user report](https://github.com/lastreload/mnemonic-proxy/issues/new?t
 | client \ engine | Strata | llama-server | ds4-server | any OpenAI-compatible |
 |---|---|---|---|---|
 | Chat Completions (pi, omp, Hermes, Continue…) | tested · full | tested on CPU · full | tested with pi (GLM 5.3, Qwen3.8) · engine keeps its own state | base (no saved state) |
+| opencode (Chat Completions) | **tested** (1 h 32 min live session, 554 requests) | experimental | experimental | experimental |
 | Claude Code (Anthropic Messages) | **tested** (1 h 41 min live session) | experimental | experimental | experimental |
 | Codex (Responses) | **tested** (live, exact recall) | experimental | experimental | experimental |
 | MCP recall server (Claude Code, Codex, Hermes) | tested read-only on a real archive | | | |
