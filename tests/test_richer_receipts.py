@@ -165,18 +165,24 @@ class TestPerConversationChoice(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.db = os.path.join(self.tmp.name, "a.sqlite")
 
-    def test_new_conversation_gets_rich_receipts(self):
+    def test_rich_receipts_are_off_by_default(self):
+        self.assertFalse(Config().rich_receipts)
         m = self.mgr(self.db)
+        self.assertFalse(m.receipt_detail("c0", existed=False))
+        self.assertEqual(m.store.kv_get(RECEIPTS_KEY + "c0"), "plain")
+
+    def test_new_conversation_gets_rich_receipts(self):
+        m = self.mgr(self.db, rich_receipts=True)
         self.assertTrue(m.receipt_detail("c1", existed=False))
         self.assertEqual(m.store.kv_get(RECEIPTS_KEY + "c1"), "rich")
 
     def test_conversation_with_an_archive_but_no_choice_keeps_plain(self):
-        m = self.mgr(self.db)
+        m = self.mgr(self.db, rich_receipts=True)
         self.assertFalse(m.receipt_detail("old", existed=True))
         self.assertEqual(m.store.kv_get(RECEIPTS_KEY + "old"), "plain")
 
     def test_the_stored_choice_wins_over_the_configuration(self):
-        m = self.mgr(self.db)
+        m = self.mgr(self.db, rich_receipts=True)
         m.receipt_detail("c2", existed=False)
         m2 = self.mgr(self.db, rich_receipts=False)
         self.assertTrue(m2.receipt_detail("c2", existed=False))

@@ -308,7 +308,8 @@ class Config:
     prompt_language: str = "en"
     # 0.3.22: richer receipts for NEW conversations (size of the output, error type, first error line). Saved per
     # conversation at first use like the language: a conversation born before keeps the receipts it was masked with.
-    rich_receipts: bool = True
+    # Off by default until an A/B run shows the model uses them at least as well as the plain ones.
+    rich_receipts: bool = False
     # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
     window_guard: bool = True
     window_margin: int = 64              # technical margin (Strata itself keeps 8)

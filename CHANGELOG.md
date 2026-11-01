@@ -10,14 +10,17 @@
   characters. Every field is read off the archived bytes with fixed rules: no model, no clock, no counter, so the
   same output always gives the same receipt and the placeholder stays a fixed point inside the cacheable prefix.
 
-  Measured cost on the regression fixture of an oversized tool result: the prompt after masking goes from 8,885 to
-  8,897 estimated tokens, +12 tokens for one receipt. The receipt is in the stable prefix, so it is paid once per
+  Measured cost (with `rich_receipts: true`) on the regression fixture of an oversized tool result: the prompt after
+  masking goes from 8,885 to 8,897 estimated tokens, +12 tokens for one receipt. The receipt is in the stable prefix, so it is paid once per
   masked block.
 
   Like the receipt language in 0.3.1, the choice is made at a conversation's first request and remembered: a
   conversation that already has an archive keeps the receipts it was masked with, so its prefix stays byte-identical
-  and the engine's KV cache is not invalidated. `rich_receipts: false` keeps the 0.3.21 receipts for new
-  conversations as well.
+  and the engine's KV cache is not invalidated.
+
+  **Off by default** (`rich_receipts: false`): the cost is measured, the benefit is not. A richer receipt could also
+  make a model reason on the first error line instead of recalling the full output, so it stays opt-in until an
+  A/B run shows it does not hurt. Set `rich_receipts: true` to try it on new conversations.
 
 ## 0.3.21 — 2026-11-01
 
