@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the
+  engine's `usage.prompt_tokens` could be moved to its full extent by a single sample, in either direction; a
+  sample that pulls it *down* makes the proxy estimate less than the real prompt, mask too late, and risk a prompt
+  the engine cuts in silence. Now a sample is accepted only above 1,000 estimated tokens and with a real/estimated
+  ratio inside 0.25–4.0 (outside it the sample is rejected and journalled as `calibration_rejected`), and until 5
+  samples have been accepted the factor may only grow, never shrink. Masking decisions are unchanged on the
+  language scenario: only the token counts the proxy prints move, by under 5% on blocks masked during the warm-up
+  (`tests/test_calibration_guards.py`), and the 0.3.0 byte-identity lock still holds for the old rule
+  (`TokenCounter(min_samples=1)`).
+
+  The lower clamp stays **0.5**, deliberately. Replaying 68 recorded local sessions (3,446 first-round requests
+  counted by estimate) the factor ran below 1.0 in 525 of them (15.2%), down to 0.514; the warm-up guard alone
+  brings that to 409 (−22%). Raising the clamp to 1.0 would remove them all, but it only moves the share of
+  requests whose estimate is below the real prompt from 66.5% to 63.6%, while the 95th percentile of
+  estimated/real goes from 1.047 to 1.211: window given away for almost no protection. chars/3.5 is already a
+  pessimistic baseline for prose (unlike the 4.0 of the tool this guard was modelled on), so a factor below 1.0 is
+  a legitimate correction, and prudence against a cut prompt belongs to `window_estimate_slack` and to the
+  `engine_truncated` detection, which already excludes a cut prompt from calibration (0.3.8).
+
+- **Setup: saved state is optional, and the session folder is the proxy's job.** Reported on r/LocalLLM: the
+  setup looked like it required `--slot-save-path` in the Strata configuration and a session folder created by
+  hand. It never did, and now nothing suggests it does.
+  - The proxy **creates `slot_dir` itself** (with its parents) when it is missing, both in `check` and at
+    startup, and says so (`slot_dir … (created by the proxy)`; `created the session folder …`). When it cannot,
+    the message carries the exact `mkdir -p` command. It does **not** create it when the engine is not on this
+    host: the local path would not be the engine's `--slot-save-path`, so `check` keeps failing with that
+    reason instead of hiding the mismatch behind an empty folder. `check --live` still verifies that the state
+    file really appears in `slot_dir`.
+  - `check` no longer calls base mode "disabled": with an engine that supports saved state but a config that
+    does not enable it, the line now reads *supported by the engine, not enabled in the proxy config: the proxy
+    works without it* and names what keeps working (masking, the verbatim archive, `recall`, segments with
+    handoff notes) and the one thing that is lost (the fast resume of a long session), plus how to turn it on
+    later. The old hint pointed Strata users at a llama-server example file.
+  - The **startup banner** reports the configuration, not just the engine: `saved state yes` only when a
+    save-producing option is on, otherwise `saved state off (optional)` followed by one line saying what still
+    works and how to enable it later. Before, a Strata engine printed `saved state yes` even with every
+    saved-state option set to `false`.
+  - **README**: a new *Strata in two commands* section — `pip install` plus one `mnemonic-proxy` line, no
+    configuration file, no folder to create, no engine flag — with saved state as a clearly optional later
+    step that gives the exact Strata command line and the three config fields. The engine table, Requirements
+    and Troubleshooting no longer present `--slot-save-path` and `slot_dir` as part of the basic setup, and T1
+    no longer tells the user to `mkdir` the proxy's own data folder.
+  - New tests: `tests/test_setup_optional_saved_state.py` (folder creation, the remote-engine refusal, the
+    unwritable-parent message, the `check` and startup wording, and the README's minimal path executed against
+    the fake Strata engine).
+
 - **Richer receipts for a hidden tool output.** A receipt said what the call did and how it ended; it did not say
   how big the output was, which kind of error it was, nor where the failure *started*. It now also carries the
   output's size in lines and UTF-8 bytes, the error type (`AssertionError`, `command not found`, …) and the

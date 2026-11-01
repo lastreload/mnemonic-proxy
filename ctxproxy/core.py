@@ -576,6 +576,18 @@ def head_text(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
+# ---------------------------------------------------------------- guards on the estimate's calibration
+# The estimate drives masking: estimating *less* than the real prompt makes the proxy mask too late and
+# lets the engine cut the prompt in silence, so every guard here is biased towards overestimating.
+CALIB_ALPHA = 0.3               # weight of a new sample in the exponential average
+CALIB_MIN_EST_TOKENS = 1000     # under this the estimate is too noisy to teach anything
+CALIB_MIN_SAMPLES = 5           # accepted samples needed before the factor may be lowered
+CALIB_MIN_RATIO = 0.25          # real/estimated outside [MIN, MAX] is not a calibration sample
+CALIB_MAX_RATIO = 4.0
+CALIB_FLOOR = 0.5               # lower clamp (see CHANGELOG: not raised to 1.0)
+CALIB_CEILING = 2.0
+
+
 def receipt(info: dict | None, result: str, is_error=None, lang: str = "it") -> str:
     """Ricevuta di una riga degli effetti di una chiamata: «write src/a.js: riuscito»."""
     if not info:
@@ -587,9 +599,14 @@ class TokenCounter:
     """Stima token: tokenizer HF (tokenizers) se disponibile, altrimenti caratteri / chars_per_token.
     `scale` si calibra con i prompt_tokens reali restituiti da Strata."""
 
-    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None):
+    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None,
+                 min_samples: int = CALIB_MIN_SAMPLES):
         self.cpt = chars_per_token
         self.scale = 1.0
+        self.samples = 0            # accepted calibration samples (see calibrate)
+        self.min_samples = min_samples          # 1 reproduces the pre-0.3.22 rule (tests of old prompts)
+        self._pending = 1.0         # factor being learned; may only raise `scale` during warm-up
+        self.journal: Journal | None = None   # set by the server so rejected samples are visible
         self.tk = None
         self.kind = "chars/%.1f" % chars_per_token
         if tokenizer_path:
@@ -625,12 +642,28 @@ class TokenCounter:
     def count(self, text: str) -> int:
         return int(self.raw(text) * self.scale + 0.5)
 
-    def calibrate(self, estimated: int, real: int, alpha: float = 0.3) -> None:
+    def calibrate(self, estimated: int, real: int, alpha: float = CALIB_ALPHA) -> None:
+        """Teach the scale from the engine's real prompt_tokens, with the guards above.
+
+        Until CALIB_MIN_SAMPLES accepted samples have been seen the factor may only grow: one early sample
+        can make the proxy overestimate (it masks a little sooner, costing window) but cannot make it
+        underestimate, which would mask too late and let the engine cut the prompt. Samples whose
+        real/estimated ratio is implausible are rejected and journalled instead of averaged in.
+        """
         if self.tk is not None:
             return          # conteggio esatto (template + tokenizer del pack): nessuna scala da correggere
-        if estimated > 1000 and real > 0:
-            r = real / estimated
-            self.scale = min(2.0, max(0.5, self.scale * ((1 - alpha) + alpha * r)))
+        if not (estimated > CALIB_MIN_EST_TOKENS and real > 0):
+            return
+        r = real / estimated
+        if not (CALIB_MIN_RATIO <= r <= CALIB_MAX_RATIO):
+            if self.journal is not None:
+                self.journal.log("calibration_rejected", estimated=int(estimated), prompt_tokens=int(real),
+                                 ratio=round(r, 4), min_ratio=CALIB_MIN_RATIO, max_ratio=CALIB_MAX_RATIO,
+                                 samples=self.samples, scale=round(self.scale, 4))
+            return
+        self.samples += 1
+        self._pending = min(CALIB_CEILING, max(CALIB_FLOOR, self._pending * ((1 - alpha) + alpha * r)))
+        self.scale = self._pending if self.samples >= self.min_samples else max(self.scale, self._pending)
 
 
 def load_tokenizer(path: str):
