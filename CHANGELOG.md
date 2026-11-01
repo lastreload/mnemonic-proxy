@@ -7,8 +7,6 @@
   state stays suspended for that model instead of pausing and retrying every 15 minutes. README: with poly.7 or later
   the engine is no longer ended; older releases still need the saved-state options off for those models.
 
-## Unreleased
-
 - **The README is under test** (three levels, standard library only). A documented command that
   no longer exists is a worse bug than a missing feature: this README once showed
   `mnemonic-proxy check` before the subcommand existed. Every fenced block now carries an
