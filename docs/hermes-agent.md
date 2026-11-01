@@ -32,7 +32,7 @@ proxy is already running. For exact counts, install the optional tokenizer
 support and pass the model's actual tokenizer file:
 
 ```sh
-pip install 'mnemonic-proxy[exact]==0.3.17'
+pip install 'mnemonic-proxy[exact]'
 mnemonic-proxy --upstream http://127.0.0.1:8095 \
   --host 127.0.0.1 --port 8096 --data ./mnemonic-hermes-data \
   --tokenizer /path/to/model/tokenizer.json

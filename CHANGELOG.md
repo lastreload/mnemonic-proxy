@@ -48,6 +48,15 @@
     unwritable-parent message, the `check` and startup wording, and the README's minimal path executed against
     the fake Strata engine).
 
+- **README: opencode** — opencode 1.19.5 tested live against the proxy on Strata (Qwen3.8 Flash Next IQ3_XXS),
+  one 1 h 32 min session: 554 requests, real history up to 1.17 M tokens against a physical prompt of at most
+  108K, 51 masks, 3 segment switches, 44 `recall` calls by the model all served and used, 669 tool calls with no
+  empty result and no HTTP error. Masking costs ~5 s of extra prefill on the request where it happens (median
+  7.0 s against 1.9 s) and nothing on the next one. New *opencode (Chat Completions)* section with the minimal
+  copyable configuration (`provider` + `npm`, not the newer plural `providers`), the real auto-compaction switch
+  (`"compaction": {"auto": false}`) and the limits found; new *opencode on Strata, measured* table under *Tested
+  combinations*; opencode moved from the untested clients to the tested ones in the engines table.
+
 - **Richer receipts for a hidden tool output.** A receipt said what the call did and how it ended; it did not say
   how big the output was, which kind of error it was, nor where the failure *started*. It now also carries the
   output's size in lines and UTF-8 bytes, the error type (`AssertionError`, `command not found`, …) and the
