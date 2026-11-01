@@ -32,6 +32,12 @@ options go on, with the number and its source printed next to the decision.
   The session-folder creation moved *after* engine detection, so it sees the options that were just chosen.
 - `ctxproxy/core.py`: `auto_config` (true) and `state_kb_per_token` (19.5).
 - `tests/test_autoconfig.py`: 37 tests. Full suite: **809 tests, OK (20 skipped)**, Python 3.14.7.
+- CI on the pull request: green on every job — `test` and `readme-run` on Python 3.10 and 3.14,
+  `test-windows` on 3.10 and 3.14, `package` and `package-install` on Ubuntu and Windows. The push-event run
+  of the same commit had one unrelated failure,
+  `tests/test_router.TestStreamingLoad.test_loaded_model_gets_no_comment` on Windows 3.10 (a router
+  keepalive-comment timing assertion, 718 s run on that runner); the same test passes in the pull-request run
+  of the identical commit, and nothing here touches the router keepalive.
 
 ## What is read, and from where
 
@@ -44,7 +50,7 @@ required external tool.
 | context window | `/v1/status` → `context.native`, `/props`, `/slots` | unchanged from 0.3.8 |
 | requests served at once | Strata `/v1/status` → `concurrency`; llama-server `/props` → `total_slots` | Strata `serve/server.py:4714` |
 | local or remote engine | the `--upstream` URL (`engines.upstream_is_local`) | unchanged from 0.3.22 |
-| RAM total/available | Linux `/proc/meminfo`, macOS `sysctl hw.memsize` + `vm_stat`, Windows `GlobalMemoryStatusEx` via `ctypes` | Linux measured; the other two are code paths with no CI runner here |
+| RAM total/available | Linux `/proc/meminfo`, macOS `sysctl hw.memsize` + `vm_stat`, Windows `GlobalMemoryStatusEx` via `ctypes` | Linux measured here; Windows measured in CI (`windows-latest`, Python 3.10 and 3.14: `test_ram_is_read_on_this_platform` passes, so `GlobalMemoryStatusEx` really answers); macOS has no runner |
 | free disk of `slot_dir` | `shutil.disk_usage` | measured |
 | VRAM (optional) | the GPU figures Strata already reports in `/v1/status` (`machine.gpu`), otherwise `nvidia-smi` if on PATH | measured against the fake engine's `machine.gpu` |
 
@@ -219,9 +225,9 @@ the fact.
 
 ## What is not proven here
 
-- The macOS and Windows RAM readers are written against their documented APIs and are exercised only on the
-  platform the test runs on (`test_ram_is_read_on_this_platform`); they have not been run on macOS or Windows.
-  A failure there degrades to "RAM unknown", which does not block any decision.
+- The macOS RAM reader is written against its documented tools (`sysctl`, `vm_stat`) and has no runner here:
+  it is not exercised anywhere. A failure degrades to "RAM unknown", which blocks no decision. The Windows
+  reader *is* exercised, by the Windows CI jobs.
 - 19.5 KB/token is a heuristic, not a per-model measurement; the real figure for a given model can be three to
   six times larger. The RAM check is therefore a floor. A per-model refinement would be
   `router.bytes_per_token`-style measurement reused across restarts: a separate change.
