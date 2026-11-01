@@ -16,9 +16,10 @@ import time
 FEATURES = ("mask_anchor", "slot_save", "autosave", "autorestore", "seal_experimental", "kv_archive")
 _FATAL_MARKERS = ("the engine answered a session", "the server ended the engine")
 # 501 texts documented as permanent (matched case-insensitively): llama-server and PolyStrata without
-# --slot-save-path, PolyStrata with parallel requests, PolyStrata on strata-poly (VecSzn/PolyStrata#114).
+# --slot-save-path, PolyStrata with parallel requests, PolyStrata on strata-poly (VecSzn/PolyStrata#114: the text
+# v0.1.45-poly.7 returns, and the wording proposed in that issue).
 _CONFIG_501 = ("slot save/restore is disabled", "--slot-save-path", "not available with parallel requests",
-               "not supported by this model's engine")
+               "not available with strata-poly", "not supported by this model's engine")
 COOLDOWN_S = 900.0   # an unrecognised HTTP 501 pauses saved state for 15 minutes, then one call may probe
 
 

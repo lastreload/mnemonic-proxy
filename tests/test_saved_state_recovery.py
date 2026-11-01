@@ -57,6 +57,8 @@ class ClassifyTest(unittest.TestCase):
             (501, "slot save/restore is disabled (start the server with --slot-save-path DIR)", "config"),
             (501, 'slot save/restore is not available with parallel requests ("parallel" / --batch)', "config"),
             (501, "slot save/restore is not supported by this model's engine (strata-poly)", "config"),
+            # the text PolyStrata v0.1.45-poly.7 actually returns (serve/server.py, VecSzn/PolyStrata#114)
+            (501, "slot save/restore is not available with strata-poly, this model's engine", "config"),
             (501, "Not Implemented", "unknown"),
             (500, POLY_500, "fatal"),
         ]
