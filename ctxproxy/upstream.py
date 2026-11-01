@@ -34,6 +34,9 @@ class Upstream:
         self.truncwatch: Any = None  # 0.3.8: enginectx.TruncWatch (generic engines), None otherwise
         self.watch_ctx = None        # (conv, seg) of the request in progress, for truncwatch (set by the proxy)
         self.saved_state = SavedState(self)  # process-local circuit breaker, keyed by concrete model id
+        # Optional per-model profile runtime (issue #27). Both default to None on the legacy path.
+        self.profile_model = None
+        self.slot_owners = None
 
     def _count(self):
         g = self.window_guard
@@ -55,8 +58,12 @@ class Upstream:
         return self.window_guard.enforce(body)
 
     def _model(self, body: dict) -> dict:
-        """Router mode: every call goes to the model whose window was applied (internal calls included)."""
-        return {**body, "model": self.router_model} if self.router is not None and self.router_model else body
+        """Every call goes to the selected model (router/profile; internal calls included)."""
+        if self.router is not None and self.router_model:
+            return {**body, "model": self.router_model}
+        if self.profile_model:
+            return {**body, "model": self.profile_model}
+        return body
 
     def set_engine(self, engine, slot_dir: str = ""):
         self.engine = engine
@@ -160,8 +167,12 @@ class Upstream:
         return sc
 
     def slot_file_ok(self, filename: str) -> bool:
-        """Router mode: may this saved file be restored with the current model? Always True otherwise."""
-        return self.router is None or self.router.restore_refusal(filename) is None
+        """May this saved file be restored with the current model? Always True on the legacy path."""
+        if self.router is not None:
+            return self.router.restore_refusal(filename) is None
+        if self.profile_model and self.slot_owners is not None:
+            return self.slot_owners.get(filename) == self.profile_model
+        return True
 
     def slot(self, action: str, filename: str) -> dict:
         """Strata e llama-server hanno la stessa forma: POST /slots/{id}?action=save|restore {"filename"} ->
@@ -177,12 +188,24 @@ class Upstream:
             if self.router is not None:
                 result = self._router_slot(action, filename)
             else:
+                if self.profile_model and action == "restore" and self.slot_owners is not None:
+                    owner = self.slot_owners.get(filename)
+                    if owner != self.profile_model:
+                        why = "model unknown" if owner is None else "saved by model %s, current model is %s" % (
+                            owner, self.profile_model)
+                        raise UpstreamError(409, json.dumps({"error": {"message":
+                            "model profile: not restored %s (%s)" % (filename, why)}}).encode("utf-8"))
+                payload = {"filename": filename}
+                if self.profile_model:
+                    payload["model"] = self.profile_model
                 st, _, body = self.raw("POST", "/slots/%d?action=%s" % (self.slot_id, action),
-                                       json.dumps({"filename": filename}, ensure_ascii=False).encode("utf-8"))
+                                       json.dumps(payload, ensure_ascii=False).encode("utf-8"))
                 if st >= 400:
                     from .engines import slot_error_status
                     raise UpstreamError(slot_error_status(self.engine, action, st, body, self.slot_dir, filename),
                                         body)
+                if self.profile_model and action == "save" and self.slot_owners is not None:
+                    self.slot_owners.record(filename, self.profile_model)
                 result = json.loads(body)
             ok = True
             return result
