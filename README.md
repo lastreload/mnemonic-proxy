@@ -1155,7 +1155,7 @@ For PolyStrata or another engine that switches models, `profiles` binds each req
 (including an adjacent `chat_template.jinja`), slot directory, window and optional thresholds. Example with three
 models (the Cyber pack supplies its Sharp template as `chat_template.jinja` beside the tokenizer):
 
-<!-- readme-test: illustrative; config: proxy -->
+<!-- readme-test: illustrative; config: partial -->
 ```json
 {
   "slot_save": true,
