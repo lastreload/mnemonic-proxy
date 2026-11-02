@@ -2,6 +2,51 @@
 
 ## 0.3.24 — unreleased
 
+- **The automatic choices no longer change between two restarts of the same installation.** Reported by the first
+  Windows user: first start on an empty data folder with a 115000-token window applied `response_floor = 14375`
+  and `notes_max_tokens = 10781` (`[mnemonic-proxy] auto config: response_floor = 14375 …`); an hour later, on
+  the **same** folder, `check` printed `auto config 2 choices not applied: this data folder already has
+  conversations`, `kept response_floor = 0`, `kept notes_max_tokens = 7187`, so the next restart would have run
+  with different values than the first. The cause: `autoconfig.existing_install` answered "does this folder hold
+  conversations?" and every folder gets conversations — including the ones 0.3.23 had just created with the
+  choices applied. The rule it implements is about **upgrades** (a PolyStrata release before v0.1.45-poly.7 ends
+  the engine at the first save, and it answers like Strata), i.e. about installations that predate the automatic
+  configuration.
+  - **Where the data folder comes from is now recorded in the data folder**, in `autoconfig.json`
+    (`autoconfig.MARK_FILE`: mark version, proxy version, window, the values applied, when), kept apart from the
+    presence of conversations. `autoconfig.origin` answers with one of three cases and its reason, read-only:
+    **new** (the folder is not there yet, or is empty) → the choices are applied and the mark is written;
+    **created with the automatic configuration** (the mark is there) → the choices keep being applied at every
+    start, conversations or not; **from an earlier setup** (files but no mark) → the choices are reported, marked
+    `kept`, and nothing changes, exactly as in 0.3.23.
+  - **Folders created by 0.3.23 get their choices back.** 0.3.23 applied the choices to new folders but wrote no
+    mark, so those folders (the reporter's among them) would have stayed "earlier" for good. Their journal is the
+    record: `journal.jsonl` is append-only and the server logs `auto_config` before `startup`, so the **first**
+    start in the journal tells which version created the folder. A folder whose first start is a 0.3.23 start
+    whose `auto_config` event applied at least one choice counts as created with the automatic configuration, and
+    the next start writes the mark (`autoconfig.born_with_0323`). Anything else stays earlier: an older first
+    start, a first 0.3.23 start that applied nothing (an old folder whose journal was deleted), an unreadable line
+    before the first start, no journal.
+  - **The answer is taken before the start can spoil it.** `server.main` reads the provenance *before*
+    `os.makedirs` and before the journal is opened (both are created by the very process that is deciding), and
+    passes it to `engines.setup`, which writes the mark only for a folder recognised as new.
+  - **Conservative on every doubt, which 0.3.23 could not be.** An old folder whose archive happens to be empty
+    now counts as an earlier folder instead of a new one; so do a folder that cannot be listed and an
+    `autoconfig.json` that cannot be read. An `auto_config` event alone in an old `journal.jsonl` is not a consent
+    (only the first-start rule above is).
+    `check` reads the provenance and **never** writes the mark, so a `check` run before the first start cannot
+    make an earlier folder look automatic. Saved state is still never switched on by itself on a folder that
+    predates the automatic configuration (PolyStrata guarantee, `tests/test_autoconfig.py`).
+  - **One line says which case it is**, in `check` (`data folder origin`), in the startup log
+    (`[mnemonic-proxy] auto config: …`) and in the `auto_config` journal event (field `data_folder`). What
+    happens when the choices change between two starts of the same "automatic" folder is now written in the
+    README: every gate is re-evaluated each time, switching **off** (less RAM available → `slot_save`/`autosave`
+    back to `false`) is always safe, and switching saved state **on** where it was off is only ever done on a new
+    folder or on one this mechanism created itself — never on an earlier one.
+  - New `tests/test_autoconfig_sticky.py`: the reported sequence end to end (two real starts of the proxy on the
+    same folder with a conversation archived in between, then `check`, all three with `response_floor = 14375`
+    and `notes_max_tokens = 10781`), plus the provenance cases above.
+
 - **The recall of the current turn: the proxy handed out ids it then refused.** A single human prompt followed by
   hundreds of tool calls — `opencode run`, a Hermes worker, any headless agent — is the shape where masking does
   the most work, and it was exactly the shape where recall was blind. `server.py` passed `max_idx=last_user` (the

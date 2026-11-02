@@ -116,6 +116,10 @@ class Engine:
     parallel: int = 0                     # requests served at once (> 1: the engine refuses save/restore)
     upstream: str = ""                    # the --upstream URL, to tell a local engine from a remote one
     machine: dict = dataclasses.field(default_factory=dict, repr=False, compare=False)  # Strata: machine/vram
+    # 0.3.24: where the data folder comes from (autoconfig.origin): fresh | auto | earlier, with its reason.
+    # Only an "earlier" folder keeps the automatic choices unapplied, as an upgrade must.
+    data_origin: str = ""
+    data_origin_why: str = ""
 
     # il contatore richieste di llama-server (id_task) cresce di più di 1 per richiesta: va riletto dopo
     @property
@@ -405,13 +409,18 @@ def generic_slack(cfg, engine: Engine, explicit=(), exact: bool = False) -> floa
 
 
 def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisions=None,
-          machine=None, data_dir: str = "") -> Engine:
+          machine=None, data_dir: str = "", origin=None, mark: bool = False) -> Engine:
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
     chiesto e possibile, usa /tokenize del motore per contare i token.
 
     0.3.23: subito dopo `apply` sceglie i valori che dipendono dal motore e dalla macchina (autoconfig.py).
     `decisions`, se è una lista, raccoglie le scelte fatte (il banner d'avvio le stampa); `machine` evita di
-    rileggere RAM/VRAM quando chi chiama le ha già lette."""
+    rileggere RAM/VRAM quando chi chiama le ha già lette.
+
+    0.3.24: `origin` è la provenienza della cartella dati (`autoconfig.origin`), letta da chi chiama **prima**
+    di creare la cartella o di scriverci; se manca viene letta qui. Solo una cartella "precedente" protegge le
+    scelte come un aggiornamento; `mark` (solo il server) registra nella cartella appena creata che è nata con
+    la configurazione automatica, così le scelte non cambiano al riavvio successivo."""
     eng = detect(up, getattr(cfg, "engine", "auto"), int(getattr(cfg, "slot_id", 0) or 0))
     if hasattr(up, "saved_state"):
         up.saved_state.bind(journal)  # breaker warnings have their own stderr sink
@@ -420,13 +429,22 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisio
     apply(cfg, eng, journal, explicit, log)
     from . import autoconfig
     mach = autoconfig.Machine.read(eng) if machine is None else machine
+    where, why = autoconfig.origin(data_dir) if origin is None else origin
+    eng.data_origin, eng.data_origin_why = where, why
     chosen = autoconfig.decide(cfg, eng, explicit or (), mach,
                                exact=bool(counter is not None and counter.exact),
-                               existing=autoconfig.existing_install(data_dir))
+                               existing=(where == autoconfig.ORIGIN_EARLIER))
+    # a folder recognised as new, or one 0.3.23 created (recognised from its journal, no mark yet): record it,
+    # so from now on the provenance never depends on the journal
+    if mark and (where == autoconfig.ORIGIN_FRESH or (where == autoconfig.ORIGIN_AUTO
+                                                       and not os.path.exists(autoconfig.mark_path(data_dir)))):
+        if autoconfig.write_mark(data_dir, cfg, chosen):
+            eng.data_origin = autoconfig.ORIGIN_AUTO
     if decisions is not None:
         decisions.extend(chosen)
     if journal is not None and chosen:
-        journal.log("auto_config", machine=mach.summary(), decisions=[d.summary() for d in chosen if d.changed])
+        journal.log("auto_config", machine=mach.summary(), data_folder=where,
+                    decisions=[d.summary() for d in chosen if d.changed])
     if eng.kind == "openai":
         # 0.3.8: generic engines (Ollama, LM Studio, anything OpenAI-compatible): estimate slack and truncation
         # watch; for Ollama / LM Studio also the real context before every request

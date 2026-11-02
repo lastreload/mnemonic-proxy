@@ -1513,6 +1513,8 @@ $ mnemonic-proxy check --explain-config --upstream http://127.0.0.1:8095 --confi
 automatic configuration (a field written in the config always wins):
   engine: strata 0.1.51, window 131072, saved state available, on this host
   machine: RAM 31.3 GiB total, 19.4 GiB available; VRAM 12.0 GiB total, 4.0 GiB free
+  data folder: new data folder: the automatic choices are applied and recorded in autoconfig.json (the data
+      folder does not exist yet)
   auto slot_save = true: the engine saves its state, slot_dir is on this host, and the estimated session file
       (2.4 GiB at 19.5 KB/token, the 20000 bytes/token of autosave.py) fits: 19.4 GiB available
       -> set the saved-state options to false in the config to keep them off
@@ -1524,15 +1526,50 @@ READY (exit 0)
 ```
 
 The same lines appear in the startup log as `[mnemonic-proxy] auto config: …`, and in `journal.jsonl` as one
-`auto_config` event. `"auto_config": false` turns the whole mechanism off: every default is then used exactly
-as written in the table below.
+`auto_config` event (its `data_folder` field carries the case below). `"auto_config": false` turns the whole
+mechanism off: every default is then used exactly as written in the table below.
 
-**Upgrades keep what was running.** The choices are *applied* only on a fresh data folder (no archived
-conversation yet). On a data folder that already has conversations they are reported, marked `kept`, with the
-value the proxy would pick and why, and nothing changes; write `"auto_config": true` in the config to apply
-them. The reason: the proxy cannot tell every engine apart (a PolyStrata release before v0.1.45-poly.7 ends
-the engine at the first save on a `strata-poly` model, and it answers like Strata), so an upgrade must never
-turn saved state on by itself. The measured output of all of this, engine by engine, is in the
+**Upgrades keep what was running; a restart keeps what this installation chose.** What the automatic
+configuration does depends on **where the data folder comes from**, which is recorded in the folder itself
+(`autoconfig.json`) and is kept apart from the presence of conversations. `check` and the startup log always
+name the case in one line (`data folder origin`):
+
+| the data folder | what happens | the line |
+|---|---|---|
+| **new** — not there yet, or empty | the choices are applied, and `autoconfig.json` records this version, the window and the values applied | `new data folder: the automatic choices are applied and recorded in autoconfig.json` |
+| **created with the automatic configuration** — it carries `autoconfig.json`, or its journal shows that its first start was a 0.3.23 start that applied the choices (0.3.23 wrote no mark; the next start writes it) | the choices keep being applied at every start, conversations or not | `data folder created with the automatic configuration: the choices stay applied` |
+| **from an earlier setup** — it holds files but no `autoconfig.json`, or the mark cannot be read | the choices are only reported, marked `kept`, with the value the proxy would pick and why; nothing changes | `data folder from an earlier setup: the automatic choices are reported, not applied` |
+
+Write `"auto_config": true` in the config to apply them on an earlier folder as well; delete `autoconfig.json`
+to have a folder treated as an earlier one. The reason an earlier folder is protected: the proxy cannot tell
+every engine apart (a PolyStrata release before v0.1.45-poly.7 ends the engine at the first save on a
+`strata-poly` model, and it answers like Strata), so an **upgrade** must never turn saved state on by itself.
+That is a statement about installations that predate the automatic configuration, so it is now decided by the
+provenance of the folder and not by "does this folder have conversations?" — up to 0.3.23 the second question
+made the proxy apply `response_floor = 14375` on a brand-new folder and then go back to `0` after the first
+archived conversation, so the same installation ran with different values at every restart (reported by the
+first Windows user, window 115000).
+
+Three details worth knowing:
+
+- **An old folder whose archive happens to be empty is treated as an earlier folder**, not as a new one: the
+  question is where the folder comes from, and an empty archive does not answer it. Same for a folder that
+  cannot be listed and for an `autoconfig.json` that cannot be read — the conservative case wins. An
+  `auto_config` event in an old `journal.jsonl` is not a consent either.
+- **`check` only reads the provenance.** It never writes `autoconfig.json`, so running `check` before the
+  first start cannot make an earlier folder look automatic.
+- **The choices are recomputed at every start, and may change** — on an "automatic" folder they are then
+  applied. Every gate is re-evaluated (engine support and version, local or remote, parallel slots, free RAM,
+  free disk), so a machine that has less RAM available than it had yesterday makes `slot_save`/`autosave` go
+  back to `false`: switching **off** is always safe, it only costs the saved-state speed-up. The opposite
+  direction — switching saved state **on** where it was off — is only ever done on a new folder or on a folder
+  this mechanism created itself, never on an earlier one, which is exactly the PolyStrata guarantee above; on
+  such a folder it is the same decision the first start already took, with the same gates. The mark records
+  the values that were applied, so `autoconfig.json` also tells you what the previous start chose. If your
+  engine is one the gates cannot recognise, `"slot_save": false` (or `"auto_config": false`) in the config
+  wins over all of this, at every start.
+
+The measured output of all of this, engine by engine, is in the
 [dev note](docs/dev-notes/AUTOCONFIG-RESULT.md).
 
 **Why the rest of the recommended config is still not the default.** The proxy guarantees that an old
