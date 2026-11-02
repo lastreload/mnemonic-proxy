@@ -1334,9 +1334,102 @@ For 32K, prefer removing these three overrides to get scaled defaults, or start 
 works, and check the startup log for `window from engine n_ctx: 32768`. The 128K recommendations below are not
 32K settings. Existing values within these bounds are unchanged.
 
+### Automatic configuration
+
+> *"Why is the default config not the recommended config? It would be so nice if it could detect the engine
+> version, context size, VRAM + RAM and apply the best settings by itself."* — a user on r/LocalLLM, who had
+> turned saved state on by hand and then found a 2 GB state file eating the RAM he needed for the model.
+
+Since 0.3.23 the proxy looks, decides, and says what it decided. At startup (and in `check`, without starting
+anything) it reads the engine and the machine, then sets the options that depend on them. **A field written in
+the config file or on the command line always wins and is never touched.**
+
+What is read — all of it from endpoints and files the proxy already uses, no new dependency, no telemetry:
+
+| read | where from |
+|---|---|
+| engine kind, context window, saved-state support | `/v1/status` (Strata: `context.native`), `/props` + `/slots` (llama-server), as before |
+| engine version | Strata `/v1/status` → `engine` (e.g. `0.1.51`); llama-server `/props` → `build_info` |
+| requests served at once | Strata `/v1/status` → `concurrency`; llama-server `/props` → `total_slots` |
+| local or remote engine | the `--upstream` URL |
+| RAM, total and available | Linux `/proc/meminfo`, macOS `sysctl hw.memsize` + `vm_stat`, Windows `GlobalMemoryStatusEx` |
+| free disk of `slot_dir` | `shutil.disk_usage` |
+| VRAM (optional, never required) | the GPU figures Strata already reports in `/v1/status`, otherwise `nvidia-smi` if it happens to be on PATH |
+
+What is decided, and the rule behind it:
+
+| field | chosen when | why that rule |
+|---|---|---|
+| `slot_save`, `mask_anchor`, `autosave` | the engine offers saved state, it runs on this host, `slot_dir` is set, and one state file fits in the available RAM | these three only move engine state files: they never change a byte of the prompt. `slot_dir` is required because without it old anchors and autosaves could never be cleaned up; `autosave` also needs `state_file + autosave_min_free_gb` of free disk |
+| `response_floor` | the window is 16384 or more: `window / 8` (16384 at 131072, 4096 at 32768 — the values this README already suggested) | the recommended value, scaled. Below 16384 the proxy already refuses to start without an explicit opt-in and the documented choice there is the scaled defaults, so nothing is decided |
+| `notes_max_tokens` | same range: `window * 3 / 32` (12288 at 131072) | same |
+| `engine_tokenize` | the engine has `/tokenize` and no `--tokenizer` was given | an exact count from the engine beats the `chars_per_token` estimate; a local tokenizer, when present, beats both |
+
+The size rule has one number: a saved state file costs about **19.5 KB per token** of window
+(`state_kb_per_token`), so a 131072-token window is roughly 2.4 GiB of engine state. That default is the
+20000 bytes/token `autosave.py` already uses for its own disk check, so the two parts of the proxy agree; the
+measured spread is wide — 37–73 KB/token for Qwen3.5 35B-A3B and 7.6–9 KB/token for gemma E2B
+([dev note](docs/dev-notes/ROUTER-MODE-RESULT.md)), ~115 KB/token for llama-server with Qwen3-0.6B
+([dev note](docs/dev-notes/ENGINES-RESULT.md)) — which is why it is a field and why this is a floor, not a
+promise. With 1 GiB available the saved-state options stay off and say so, instead of filling the RAM the model
+needs. Nothing is decided from VRAM: it is printed as evidence, because no rule here has a defensible
+VRAM threshold yet.
+
+`check --explain-config` prints the whole picture — what was read, what was chosen, what was left alone, and
+how to force each one otherwise — without starting the proxy:
+
+<!-- readme-test: illustrative -->
+```
+$ mnemonic-proxy check --explain-config --upstream http://127.0.0.1:8095 --config config.json
+...
+ℹ️  auto config        chosen for this engine and this machine: slot_save=true, mask_anchor=true, autosave=true,
+                      response_floor=16384, notes_max_tokens=12288 (RAM 31.3 GiB total, 19.4 GiB available;
+                      VRAM 12.0 GiB total, 4.0 GiB free [ram: /proc/meminfo, vram: engine /v1/status machine.gpu])
+✅ saved state        supported by the engine, configured in the proxy (slot_save, mask_anchor, autosave)
+
+automatic configuration (a field written in the config always wins):
+  engine: strata 0.1.51, window 131072, saved state available, on this host
+  machine: RAM 31.3 GiB total, 19.4 GiB available; VRAM 12.0 GiB total, 4.0 GiB free
+  auto slot_save = true: the engine saves its state, slot_dir is on this host, and the estimated session file
+      (2.4 GiB at 19.5 KB/token, the 20000 bytes/token of autosave.py) fits: 19.4 GiB available
+      -> set the saved-state options to false in the config to keep them off
+  auto response_floor = 16384: an eighth of the 131072-token window: a short replay no longer forces a
+      segment switch (16384 at 131072, the README value)
+      -> set "response_floor" in the config (0 = no floor)
+
+READY (exit 0)
+```
+
+The same lines appear in the startup log as `[mnemonic-proxy] auto config: …`, and in `journal.jsonl` as one
+`auto_config` event. `"auto_config": false` turns the whole mechanism off: every default is then used exactly
+as written in the table below.
+
+**Upgrades keep what was running.** The choices are *applied* only on a fresh data folder (no archived
+conversation yet). On a data folder that already has conversations they are reported, marked `kept`, with the
+value the proxy would pick and why, and nothing changes; write `"auto_config": true` in the config to apply
+them. The reason: the proxy cannot tell every engine apart (a PolyStrata release before v0.1.45-poly.7 ends
+the engine at the first save on a `strata-poly` model, and it answers like Strata), so an upgrade must never
+turn saved state on by itself. The measured output of all of this, engine by engine, is in the
+[dev note](docs/dev-notes/AUTOCONFIG-RESULT.md).
+
+**Why the rest of the recommended config is still not the default.** The proxy guarantees that an old
+conversation is replayed byte for byte: the receipts, the tool names and `prompt_language` are stored per
+conversation at first use precisely so that a new default cannot rewrite history. Every remaining
+recommendation changes what the proxy *writes into the prompt*, so flipping its default would change the
+prompt of conversations that already exist. These stay opt-in on purpose, and the reason is now in the table:
+
+- `mask_reasoning`, `mask_tool_args`, `recall_struct`, `recall_flex`, `recall_multi`, `tools_paging`: they
+  change the prompt the engine sees. Turn them on when you start a new conversation (that is what the
+  benchmarks above use); they need the same per-conversation storage as the receipts before they can become
+  defaults.
+- `seal_experimental`, `kv_archive`, `live_dump`: no prompt effect, but each one spends something the proxy
+  should not spend without being asked — an experimental save trick, a background compression thread, and the
+  full prompt written to disk for the dashboard.
+
 `--config` takes a JSON object with any field of `ctxproxy.core.Config`. Defaults below are the real ones in the
-code. Most features are off by default so that 0.1 behaviour is unchanged; the last column is what we recommend
-with an engine that has saved state (`examples/config.example.json` plus the options the benchmarks above support).
+code. The last column is what we recommend with an engine that has saved state
+(`examples/config.example.json` plus the options the benchmarks above support); **chosen automatically** marks
+the ones the proxy now picks for you when the engine and the machine allow it.
 
 | field | default | meaning | recommended |
 |---|---|---|---|
@@ -1345,30 +1438,31 @@ with an engine that has saved state (`examples/config.example.json` plus the opt
 | `mask_trigger` / `mask_target` | 80000 / 40000 | start a masking block above trigger, mask oldest-first down to target | default |
 | `min_batch_tokens` | 16000 | a block runs only if it frees at least this much | default |
 | `keep_recent_tokens` / `min_age_turns` | 16000 / 2 | protected tail, never masked | default |
-| `mask_reasoning` / `mask_tool_args` | false / false | also mask old reasoning / large old tool-call arguments | **true / true** |
-| `mask_anchor`, `anchor_min_tokens` | false, 24000 | save/restore engine state at the masking frontier (saved state) | **true**, 24000 |
-| `slot_dir` | "" | the engine's `--slot-save-path` folder, same host (anchor cleanup, autosave, `kv_archive`) | set |
-| `segments_enabled`, `tail_max`, `notes_max_tokens` | true, 24000, 8192 | segment switch with handoff notes | true, 24000, **12288** |
-| `slot_save` / `seal_experimental` | false / false | save the old segment to disk before switching (saved state) | **true / true** |
-| `response_floor` | 0 | minimum useful response budget for segment switching (bounded to a quarter of the window) | **16384** |
+| `mask_reasoning` / `mask_tool_args` | false / false | also mask old reasoning / large old tool-call arguments | **true / true** (opt-in: they change the prompt, see [Automatic configuration](#automatic-configuration)) |
+| `mask_anchor`, `anchor_min_tokens` | false, 24000 | save/restore engine state at the masking frontier (saved state) | **chosen automatically**, 24000 |
+| `slot_dir` | "" | the engine's `--slot-save-path` folder, same host (anchor cleanup, autosave, `kv_archive`) | set (one field: the saved-state options then follow by themselves) |
+| `segments_enabled`, `tail_max`, `notes_max_tokens` | true, 24000, 8192 | segment switch with handoff notes | true, 24000, **chosen automatically** (`window * 3 / 32`) |
+| `slot_save` / `seal_experimental` | false / false | save the old segment to disk before switching (saved state) | **chosen automatically** / **true** (opt-in: experimental) |
+| `response_floor` | 0 | minimum useful response budget for segment switching (bounded to a quarter of the window) | **chosen automatically** (`window / 8`) |
+| `auto_config`, `state_kb_per_token` | true, 19.5 | choose the engine/machine-dependent options at startup and print every choice with its reason (`check --explain-config`); KB of engine state per token of window (the 20000 bytes/token of `autosave.py`), used to check a state file fits in the available RAM | default |
 | `inject_recall`, `max_recall_rounds`, `recall_max_tokens` | true, 4, 6000 | the `recall` tool | default |
 | `recall_tool_name` / `tools_tool_name` | "recall" / "tools" | names of the proxy's tools for new conversations | default |
 | `prompt_language` | "en" | language of the texts the proxy writes into the prompt, for NEW conversations: `"en"` or `"it"`; stored per conversation at first use; conversations from before 0.3.1 stay Italian | default |
 | `rich_receipts` | false | opt-in (benefit not yet measured): richer receipt for a hidden tool output, for NEW conversations: output size in lines/bytes, error type and the FIRST error line (160 characters), plus a receipt for outputs whose kind is not recognised; stored per conversation at first use, so a conversation from before 0.3.22 keeps the receipts it was masked with | default |
-| `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** |
+| `recall_struct`, `recall_flex`, `recall_multi` | false, false, false | structured recall: file timelines, links, flexible words, several queries per call (the benchmark above) | **true, true, true** (opt-in: they change the prompt) |
 | `auto_recall` / `auto_recall_hint` | false / false | `auto_recall` enables automatic retrieval on new user messages; `auto_recall_hint` only selects a one-line hint with ids instead of pieces and requires `auto_recall: true` | false / false (automatic retrieval off) |
 | `recall_leaf_select` | false | on structured outputs (yaml/toml (Python ≥ 3.11)/xml/json, tables, diffs, logs, git log, pytest) `recall` returns only the matching record and the key lines of its ancestors, verbatim, with `⋮` markers and offsets for the gaps; falls back to the normal recall when unsure ([dev note](docs/dev-notes/LEAF-SELECT-RESULT.md)) | default (experimental) |
 | `answer_thinking_after_recall`, `answer_thinking_budget` | false, 512 | turn thinking on only for the answer that follows a recall (fixes answers cut in the middle of a value) | default (experimental) |
 | `truncation_guard` | false | replay once, with thinking, a short answer that ends on a prefix of a recalled token | default (experimental) |
-| `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls | tools on demand: only core tools + `recall` + `tools` in the prompt | **true** |
+| `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls | tools on demand: only core tools + `recall` + `tools` in the prompt | **true** (opt-in: it changes the prompt) |
 | `typed_receipts`, `receipt_guard` | true, true | typed one-line receipts for hidden outputs; block write/edit/shell calls (pi, Claude Code, Codex names) that copy a receipt or the shortened form of an old argument | default |
 | `pins_max_tokens` | 8192 | cap of the carried-over 📌 block | default |
-| `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb` | false, 180, 10, 25 | save engine state when the conversation is idle (saved state) | **true**, 180, 10, 25 |
+| `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb`, `autosave_min_free_gb` | false, 180, 10, 25, 8 | save engine state when the conversation is idle (saved state) | **chosen automatically**, 180, 10, 25, 8 |
 | `autorestore`, `autorestore_min_gain` | true, 8192 | restore before forwarding when it saves at least this many tokens | default |
-| `kv_archive`, `kv_archive_idle_s`, `kv_archive_min_age_s` | false, 600, 1800 | cold archive of state files (needs Python ≥ 3.14 for `compression.zstd`) | **true** |
-| `engine`, `slot_id`, `engine_tokenize` | "auto", 0, false | engine type, slot, token counting via the engine's `/tokenize` | auto |
+| `kv_archive`, `kv_archive_idle_s`, `kv_archive_min_age_s` | false, 600, 1800 | cold archive of state files (needs Python ≥ 3.14 for `compression.zstd`) | **true** (opt-in: a background compression thread) |
+| `engine`, `slot_id`, `engine_tokenize` | "auto", 0, false | engine type, slot, token counting via the engine's `/tokenize` | auto, 0, **chosen automatically** |
 | `router_model`, `router_load_timeout_s`, `router_keepalive_s` | "", 600, 10 | llama-server router mode: model used when the client's `model` is not served (empty = refuse), how long a model may take to load, seconds between two SSE comments to a streaming client while the model loads | default |
-| `live_dump` | false | write `data/live/last_request.json` for the dashboard | **true** |
+| `live_dump` | false | write `data/live/last_request.json` for the dashboard | **true** (opt-in: it writes the full prompt to disk) |
 
 A config for llama-server with saved state, as recommended above:
 
@@ -1419,7 +1513,8 @@ listed here.
 | `mnemonic-proxy demo` | `--keep DIR` | keep the demo's archive in `DIR` (`archive.sqlite`, `journal.jsonl`) instead of a temporary folder, to look at it afterwards or to point `mnemonic-mcp --db` at it |
 | `mnemonic-proxy check` | all the server options | `check` reads the configuration the server would run with |
 | | `--live` | also run a real generation, a tool call and a save/restore on the engine |
-| | `--json` | machine-readable report: `{"ready", "exit_code", "checks": [...]}`, for a script or a health probe |
+| | `--json` | machine-readable report: `{"ready", "exit_code", "checks": [...], "auto_config": {...}}`, for a script or a health probe |
+| | `--explain-config` | print the automatic configuration in full: what was read about the engine and the machine, every option chosen (and every one left alone) with its reason and how to force it otherwise ([Automatic configuration](#automatic-configuration)) |
 | `mnemonic-proxy forget` | `--data DIR` | the data folder to delete from (required) |
 | | `--list` | list conversation ids, logical sizes and UTC timestamps |
 | | `--conv ID` | the conversation to remove |

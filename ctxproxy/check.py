@@ -41,6 +41,7 @@ SAVED_STATE = engines.SAVE_PRODUCING
 class Report:
     def __init__(self):
         self.items: list[dict] = []
+        self.auto: dict | None = None      # 0.3.23: automatic configuration (machine, decisions, report lines)
 
     def add(self, status, name, evidence, fix=""):
         self.items.append({"status": status, "check": name, "evidence": evidence, "fix": fix})
@@ -245,6 +246,36 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 % (cfg.chars_per_token, ", slack %.2f" % sl if sl is not None else
                    ", slack %.2f from the config" % cfg.window_estimate_slack),
                 "use --tokenizer <tokenizer.json of the model> for an exact count")
+    # --- 0.3.23 automatic configuration: the engine/machine-dependent options the proxy chooses by itself.
+    # The decisions are applied to `cfg` so that every check below reports the configuration the server would
+    # really run with, and are printed with their reason (`--explain-config` adds what was NOT changed).
+    from . import autoconfig
+    auto_probe = Config.from_dict(raw_cfg)
+    engines.apply(auto_probe, eng, None, explicit, log=None)
+    machine = autoconfig.Machine.read(eng)
+    decisions = autoconfig.decide(auto_probe, eng, explicit, machine, exact=bool(getattr(a, "tokenizer", None)),
+                                  existing=autoconfig.existing_install(getattr(a, "data", "") or ""))
+    for d in decisions:
+        if d.changed:
+            setattr(cfg, d.field, d.value)
+    rep.auto = {"machine": machine.summary(), "decisions": [d.summary() for d in decisions],
+                "lines": autoconfig.explain(auto_probe, eng, machine, decisions, full=True)}
+    picked = [d for d in decisions if d.changed]
+    if not cfg.auto_config:
+        rep.add(INFO, "auto config", "off (\"auto_config\": false): every default is used as written",
+                "remove \"auto_config\" from the config to let the proxy choose the engine/machine-dependent "
+                "options")
+    elif picked:
+        rep.add(INFO, "auto config", "chosen for this engine and this machine: %s (%s)"
+                % (", ".join("%s=%s" % (d.field, autoconfig.fmt(d.value)) for d in picked), machine.line()),
+                "`mnemonic-proxy check --explain-config ...` prints every reason; a field written in the config "
+                "always wins")
+    else:
+        why = list(dict.fromkeys(d.why for d in decisions))
+        rep.add(INFO, "auto config", "nothing to choose: %s (%s)"
+                % ("; ".join(why) or "the config already decides every engine/machine-dependent option",
+                   machine.line()),
+                "`mnemonic-proxy check --explain-config ...` prints every reason")
     # --- saved state: supported / configured / verified
     configured = [k for k in SAVED_STATE if getattr(cfg, k, False)]
     if eng.slot_save and configured:
@@ -460,7 +491,7 @@ def _reminder(rep):
             "Claude Code: DISABLE_AUTO_COMPACT=1), otherwise two context managers fight over the same history")
 
 
-def render(rep: Report, out=sys.stdout):
+def render(rep: Report, out=sys.stdout, explain: bool = False):
     enc = (getattr(out, "encoding", None) or "ascii").lower()
     try:
         "\u2705\u26a0\ufe0f\u274c\u2139\ufe0f".encode(enc)
@@ -471,6 +502,10 @@ def render(rep: Report, out=sys.stdout):
         print("%s %-18s %s" % (icons[i["status"]], i["check"], i["evidence"]), file=out)
         if i["fix"]:
             print("   %-18s -> %s" % ("", i["fix"]), file=out)
+    if explain and rep.auto:
+        print("\nautomatic configuration (a field written in the config always wins):", file=out)
+        for line in rep.auto["lines"]:
+            print("  " + line, file=out)
     word = {0: "READY", 2: "READY with warnings", 1: "NOT READY"}[rep.exit_code]
     print("\n%s (exit %d)" % (word, rep.exit_code), file=out)
 
@@ -485,6 +520,10 @@ def build_check_parser():
     ap.add_argument("--live", action="store_true",
                     help="also run a short generation, a tool call and a save/restore on the engine "
                          "(refused while the slot is busy; the slot content is put back)")
+    ap.add_argument("--explain-config", action="store_true",
+                    help="print the automatic configuration in full: what was read about the engine and the "
+                         "machine, every option chosen (and every one left alone) with its reason and how to "
+                         "force it otherwise. The proxy is not started.")
     return ap
 
 
@@ -500,10 +539,12 @@ def main(argv=None):
     else:
         rep = run_checks(a, raw_cfg, cfg, live=a.live)
     if a.json:
-        print(json.dumps({"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items},
-                         ensure_ascii=False, indent=1))
+        out = {"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items}
+        if rep.auto is not None:
+            out["auto_config"] = rep.auto
+        print(json.dumps(out, ensure_ascii=False, indent=1))
     else:
-        render(rep)
+        render(rep, explain=bool(getattr(a, "explain_config", False)))
     sys.exit(rep.exit_code)
 
 
