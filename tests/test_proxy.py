@@ -267,6 +267,10 @@ class TestRecall(Base):
         out = mgr.recall(p.conv, {"id": rid})
         self.assertIn("[continues: recall id=%s offset=100]" % rid, out)   # 0.3.1: English
         self.assertIn("not found", mgr.recall(p.conv, {"id": "rnonesiste"}))
+        # filtro di catena (0.3.24): il blocco è nella richiesta in corso, quindi max_idx non lo esclude;
+        # senza richiesta in corso (catena vuota) resta il solo taglio per indice.
+        self.assertIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
+        self.proxy.store.set_chain([])
         self.assertNotIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
 
 

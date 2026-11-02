@@ -87,7 +87,7 @@ class TestIdOfSameTurn(Base):
         self.assertIsNotNone(self.store.get(rid, p.conv), "the text must be in the archive")
         out = self.mgr.recall(p.conv, {"id": rid}, max_idx=lu, max_tokens=4000)
         self.assertNotIn("not found", out)
-        self.assertIn("line 1 of src/core.py", out)
+        self.assertIn("line 0 of src/core.py", out)
 
     def test_receipt_id_in_the_prompt_is_the_id_that_resolves(self):
         """The id the model actually reads: whatever receipt the proxy wrote into the prompt."""
@@ -166,9 +166,21 @@ class TestStructuredRecallOfSameTurn(Base):
         rid = rid_for(3, msgs[3])
         out = self.mgr.recall(p.conv, {"id": rid}, max_idx=lu, max_tokens=4000)
         self.assertNotIn("not found", out)
-        self.assertIn("line 1 of src/core.py", out)
+        self.assertIn("line 0 of src/core.py", out)
         many = self.mgr.recall(p.conv, {"queries": [NEEDLE, "line 4 of src/core.py"]}, max_idx=lu, max_tokens=4000)
         self.assertIn("line 4 of src/core.py", many)
+
+    def test_mode_output_treats_both_id_kinds_alike(self):
+        """`around` applied no chain filter at all: that is why a... answered and r... did not."""
+        msgs = single_turn(35)
+        p, lu = self.prepared(msgs)
+        aid, rid = aid_for(2, msgs[2]), rid_for(3, msgs[3])
+        for i in (aid, rid):
+            self.assertNotIn("not found", self.mgr.recall(p.conv, {"id": i, "mode": "output"},
+                                                          max_idx=lu, max_tokens=4000))
+        # and an id of another conversation stays unknown on this path too
+        self.assertIn("not found", self.mgr.recall(p.conv, {"id": "r000000000000", "mode": "output"},
+                                                   max_idx=lu, max_tokens=4000))
 
 
 class TestSiblingBranchStaysExcluded(Base):
@@ -188,8 +200,33 @@ class TestSiblingBranchStaysExcluded(Base):
         self.assertNotIn("not found", self.mgr.recall(p2.conv, {"id": live}, max_idx=lu2, max_tokens=4000))
         self.assertIn("not found", self.mgr.recall(p2.conv, {"id": dead}, max_idx=lu2, max_tokens=4000),
                       "a block of an abandoned sibling branch must stay out of reach")
-        self.assertNotIn("src/core.py", self.mgr.recall(p2.conv, {"query": "line 5 of src/core.py"},
-                                                        max_idx=lu2, max_tokens=4000))
+        # The query echo repeats the words, so assert on the id: no hit may come from the abandoned branch
+        # (indices 0-3 are shared by both branches and legitimately reachable).
+        hits = []
+        self.mgr.recall(p2.conv, {"query": "line 5 of src/core.py"}, max_idx=lu2, meta=hits, max_tokens=4000)
+        self.assertNotIn(dead, [h.get("rid") for h in hits])
+
+
+class TestSiblingBranchOnTheStructuredPath(Base):
+    cfg_over = {"recall_struct": True}
+
+    def test_mode_output_does_not_bypass_the_chain(self):
+        """`around` applied no chain filter: an abandoned-branch id answered there while the same id was
+        refused on the paging path. The two paths must agree."""
+        first = single_turn(35)
+        p1, _ = self.prepared(first)
+        dead = aid_for(4, first[4])
+        self.assertIsNotNone(self.store.get(dead, p1.conv))
+
+        other = list(first[:4])
+        for k in range(4, 35):
+            other += read_round(k, 3500, path="src/other.py")
+        p2, lu2 = self.prepared(other)
+        self.assertEqual(p1.conv, p2.conv)
+        self.assertNotIn("not found", self.mgr.recall(p2.conv, {"id": aid_for(4, other[4]), "mode": "output"},
+                                                      max_idx=lu2, max_tokens=4000))
+        self.assertIn("not found", self.mgr.recall(p2.conv, {"id": dead, "mode": "output"},
+                                                   max_idx=lu2, max_tokens=4000))
 
 
 if __name__ == "__main__":

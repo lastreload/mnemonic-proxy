@@ -2,6 +2,37 @@
 
 ## 0.3.24 — unreleased
 
+- **The recall of the current turn: the proxy handed out ids it then refused.** A single human prompt followed by
+  hundreds of tool calls — `opencode run`, a Hermes worker, any headless agent — is the shape where masking does
+  the most work, and it was exactly the shape where recall was blind. `server.py` passed `max_idx=last_user` (the
+  index of the last human message) to every recall and the archive filter was `idx < max_idx`, so **every block
+  masked after that message was unreachable for the rest of the turn**: its receipt was in the prompt, its id was
+  valid, its text was in the archive, and `recall(id=…)` answered `not found`. It became reachable only when a new
+  user message arrived — i.e. once the turn it belonged to was over. The same filter also hid the turn's own
+  `query` hits and the turn's `path` timeline.
+  - **Measured on our own journals, after the fact** (31 syntaxis sessions + the 0.3.23 production journal, read
+    only, indices compared against the human message recorded in each `recall` event): of 65 id calls, **32 asked
+    for a block past the last human message and all 32 came from one opencode session** — the one the README
+    quotes as "44 recall calls all used". 21 of them (output ids, `r…`) returned no text at all; 4 `path` calls
+    came back empty although the file had been read in that very turn. The 10 `emergency=current_tool` masks of
+    that session are unreachable by construction: that mask archives the LAST message of the request.
+  - **Why the arguments id seemed to work.** Two code paths, two different rules. `Recall2.around`
+    (`mode=output/call/neighbors`) resolved the id with **no chain filter at all**, so an arguments id (`a…`)
+    answered; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`, so the output id (`r…`)
+    of the same message did not. The model felt the asymmetry and groped for the working id — and the one that
+    worked gave 700-char excerpts, never the verbatim text. Both paths now apply the same rule.
+  - **The fix is a chain filter, not a wider window.** `idx < max_idx` was doing two jobs with one line: keeping
+    out sibling branches (edits, regenerations) and the current question, which is right, and keeping out the
+    current agentic turn, which is not. New `chain_ok()` (`core.py`) turns the filter into
+    `(idx < ? OR rid IN (SELECT rid FROM cur_chain))`, where `cur_chain` is a TEMP table holding the archive ids
+    of the prefix sent **now**, minus the current question (which the model sees in full). Same parameter list, so
+    every query keeps its signature. A sibling branch has different ids (`rid` = hash of index + content), so it
+    stays out; a test regenerates a turn and proves the abandoned text is still unreachable.
+  - **No change to the prompt.** The filter only decides what a recall answer may contain; masking, segments,
+    anchors and the prompt sent to the engine are untouched. `tests/test_recall_current_turn.py` (10 tests) covers
+    ids, `emergency=current_tool`, `query`, `path`, the structured engine, the arguments/output symmetry, the
+    exclusion of the current question and the exclusion of sibling branches.
+
 - **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
   head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an
   interactive prompt (19 166 tokens median, 24.8 % of the prompt in the measurement of card `t_d1134087`), yet it

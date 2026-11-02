@@ -661,8 +661,9 @@ example SoL-Pi's ObservationPack), we have not tested them together with the pro
 
 ### opencode (Chat Completions)
 
-Tested with opencode **1.19.5** on Strata: one 1 h 32 min session, 554 requests, 51 masks, 44 `recall` calls all
-used, numbers [below](#opencode-on-strata-measured). Put this in `$XDG_CONFIG_HOME/opencode/opencode.json`
+Tested with opencode **1.19.5** on Strata: one 1 h 32 min session, 554 requests, 51 masks, 44 `recall` calls of
+which 19 returned archived text, numbers [below](#opencode-on-strata-measured). Put this in
+`$XDG_CONFIG_HOME/opencode/opencode.json`
 (global; `$XDG_CONFIG_HOME` defaults to `~/.config`, so that is usually `~/.config/opencode/opencode.json`)
 or `opencode.json` in the project:
 
@@ -848,7 +849,7 @@ module, then answer questions about the session from memory.
 | masking | 51 masks, from `93,470 → 57,659` (3 pieces) down to 1-piece emergency batches |
 | segments | 3 switches; `seal` 1.8–2.8 s, `save` 0.80–0.84 s per file |
 | anchor | 39 `anchor_save`, 36 `anchor_restore`, 2 `anchor_skip` |
-| `recall` | **44 calls by the model, all 44 served and used** (22 of them in one turn, 7 in the memory-quiz turn) |
+| `recall` | **44 calls by the model; 19 returned archived text** (8 by `query`, 11 by arguments id as 700-char excerpts), 25 returned none (21 output ids answered only with the pointer to the arguments id, 4 `path` calls empty): all 32 id calls asked for blocks masked *after* the last user message, which 0.3.23 refused (fixed in 0.3.24, see CHANGELOG). `recall_use` marks 35 of 44 as used |
 | tool calls | 669 (`read` 434, `bash` 190, `edit` 33, `write` 10, `grep` 2); 0 empty results |
 | errors | 0 `proxy_error`, 0 `upstream_error`, 0 `client_disconnect`, 0 non-200; 5 `edit` calls rejected by opencode (stale `oldString`), 1 turn with no final answer (`final_answer_missing`) |
 
@@ -856,7 +857,11 @@ What it shows: masking costs about **5 s of extra prefill on the request where i
 median) and **nothing on the next one** (1.93 s against 1.886 s for requests far from a mask), because the anchor is
 saved and restored instead of re-prefilling the shortened prompt. The model asked for `recall` on its own whenever
 it needed a masked tool result, and the three memory questions at the end of the session were answered correctly
-after seven `recall` calls. What it does not show: the interactive TUI, `opencode serve`/`web`/`attach`, MCP servers
+after seven `recall` calls. What it does NOT show, and what a re-reading of this journal found later: the id calls
+of this session all pointed at blocks masked inside the *current* turn, and 0.3.23 refused those ids
+(`idx < max_idx`), so the model worked from 700-char excerpts reached through the arguments id instead of the
+verbatim text. That filter is fixed in 0.3.24; these numbers are the 0.3.23 behaviour. Also not shown: the
+interactive TUI, `opencode serve`/`web`/`attach`, MCP servers
 or sub-agents, opencode's own compaction running *together* with the proxy, and the client-side TTFT (we measured
 the proxy's `prompt_ms`). One turn out of eight ended with no final answer: the model spent the whole turn reading.
 
