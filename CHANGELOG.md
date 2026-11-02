@@ -2,6 +2,20 @@
 
 ## 0.3.23 — unreleased
 
+- **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
+  @lupus0).** With `--tokenizer` on a Strata pack, a request with a picture used to fail with a misleading 400
+  ("prompt 131072 + margin 64 leaves no room in the window"). Now the template writes one vision marker per
+  picture and the guard prices each one at `image_tokens`, an upper bound (`image_tokens >= vision.max_tokens + 2`;
+  default **1026**, Strata's GPU clamp of 1024 plus the two markers that stay; 302 for a CPU reader clamped to 300).
+  `window_guard` events for such prompts carry `guarantee=image_bounded`; text-only prompts stay `exact` and
+  byte-identical. Fail-closed where the count could not be honest: a picture in a `system` message, a picture with
+  no readable source, a template without a vision branch, video and audio are refused with the real reason. Picture
+  bytes never reach disk (`live_dump` and the KV sidecar name a picture by hash), and saved-state identity includes
+  the pictures. Tested live on Strata 0.1.50 with a CPU picture reader: 0.3.22 returned the 400; with the patch the
+  model read the test picture correctly, at about 230 prompt tokens per picture. Review fix on top: the default was
+  1024, which broke the rule on a GPU reader (an under-count of 2 per picture).
+- **When a count fails, the client gets the real reason** instead of the window message above (same patch).
+
 - **The proxy no longer re-delivers a client's out-of-band message (issue #61).** Reported by @akohlsmith with
   Hermes over Slack: a mid-turn steering message he sent **once** ("there is no vision model running on port
   8080; the proxy is 8001 …") reached the model **5+ times**, in new positions, sometimes after a segment
