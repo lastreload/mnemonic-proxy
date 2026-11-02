@@ -1551,16 +1551,22 @@ def main(argv=None):
         # 0.3.23: a --config that is not there is a one-line message with the three real options, never a
         # FileNotFoundError traceback (friction A1 of the "new user" trial).
         raise SystemExit("mnemonic-proxy: %s" % config_error_line(a.config, e)) from None
+    # 0.3.24: where the data folder comes from has to be read BEFORE this start creates it or writes into it
+    # (the folder and the journal below are created by this very process): a folder born with the automatic
+    # configuration keeps its choices at every restart, an earlier folder keeps how it ran. autoconfig.origin
+    # is read-only and never creates the mark.
+    from . import autoconfig as _autoconfig
+    origin = _autoconfig.origin(a.data)
     os.makedirs(a.data, exist_ok=True)
     from .datalock import DataLock
     try:
         with DataLock(a.data):
-            return serve(a, raw_cfg, cfg)
+            return serve(a, raw_cfg, cfg, origin=origin)
     except ValueError as e:
         raise SystemExit("mnemonic-proxy: %s" % e) from None
 
 
-def serve(a, raw_cfg, cfg):
+def serve(a, raw_cfg, cfg, origin=None):
     """Run only while main owns the data directory's maintenance lock."""
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
@@ -1579,7 +1585,8 @@ def serve(a, raw_cfg, cfg):
     # engine/machine-dependent options before the session folder and the saved-state workers are set up.
     decisions: list = []
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter, decisions=decisions,
-                          log=lambda m: print(m, file=sys.stderr, flush=True), data_dir=a.data)
+                          log=lambda m: print(m, file=sys.stderr, flush=True), data_dir=a.data,
+                          origin=origin, mark=True)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     # 0.3.22: the session folder is the proxy's job, not a setup step for the user. Only when the engine
@@ -1639,6 +1646,13 @@ def serve(a, raw_cfg, cfg):
               % (BASE_MODE, saved_state_later(engine.kind)), file=sys.stderr, flush=True)
     # 0.3.23: no silent choice. What the automatic configuration picked for this engine and this machine,
     # with the reason and the way to force it otherwise (`check --explain-config` prints the full picture).
+    # 0.3.24: one line first on which of the three cases this data folder is, so a restart that changes the
+    # applied values can never be a surprise.
+    if cfg.auto_config:
+        from .autoconfig import origin_line as _origin_line
+        print("[mnemonic-proxy] auto config: %s"
+              % _origin_line(origin[0] if origin else engine.data_origin, engine.data_origin_why),
+              file=sys.stderr, flush=True)
     for d in decisions:
         if d.changed:
             from .autoconfig import fmt as _fmt_value

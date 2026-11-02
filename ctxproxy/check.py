@@ -297,15 +297,25 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False, config_error=N
     auto_probe = Config.from_dict(raw_cfg)
     engines.apply(auto_probe, eng, None, explicit, log=None)
     machine = autoconfig.Machine.read(eng)
+    # 0.3.24: the provenance of the data folder, read-only -- `check` must never create the folder nor the mark
+    where, where_why = autoconfig.origin(getattr(a, "data", "") or "")
     decisions = autoconfig.decide(auto_probe, eng, explicit, machine, exact=bool(getattr(a, "tokenizer", None)),
-                                  existing=autoconfig.existing_install(getattr(a, "data", "") or ""))
+                                  existing=(where == autoconfig.ORIGIN_EARLIER))
     for d in decisions:
         if d.changed:
             setattr(cfg, d.field, d.value)
     rep.auto = {"machine": machine.summary(), "decisions": [d.summary() for d in decisions],
-                "lines": autoconfig.explain(auto_probe, eng, machine, decisions, full=True)}
+                "data_folder": {"origin": where, "why": where_why},
+                "lines": autoconfig.explain(auto_probe, eng, machine, decisions, full=True,
+                                            origin=(where, where_why))}
     picked = [d for d in decisions if d.changed]
     kept_existing = [d for d in decisions if d.kept_existing]
+    if cfg.auto_config:
+        # 0.3.24: one line on which of the three cases this data folder is (new / created with the automatic
+        # configuration / earlier, protected), so the applied values cannot change between two restarts of the
+        # same installation without the reason being on screen.
+        rep.add(INFO, "data folder origin", autoconfig.origin_line(where, where_why),
+                autoconfig.ORIGIN_FIX.get(where, ""))
     if not cfg.auto_config:
         rep.add(INFO, "auto config", "off (\"auto_config\": false): every default is used as written",
                 "remove \"auto_config\" from the config to let the proxy choose the engine/machine-dependent "

@@ -35,12 +35,14 @@ that much RAM is actually free, which is what the 32 GB report on r/LocalLLM nee
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import shutil
 import sqlite3
 from pathlib import Path
 import subprocess
 import sys
+import time
 
 GIB = float(2 ** 30)
 MIB = float(2 ** 20)
@@ -360,6 +362,129 @@ def existing_install(data_dir) -> bool:
         return True
 
 
+# --- where this data folder comes from (0.3.24) -----------------------------------------------------
+#
+# `existing_install` above answers "does this folder hold conversations?", which is not the question the rule
+# wanted to ask. The rule protects installations that predate the automatic configuration (PolyStrata before
+# poly.7: switching saved state on by itself would end the engine at the first save). A folder this version
+# created with the choices already applied is not such an installation -- but it does get conversations, and
+# from then on 0.3.23 reported the choices instead of applying them, so the proxy ran with different values at
+# every restart of the same installation (reported by the first Windows user).
+#
+# So the provenance is recorded in the data folder, kept apart from the presence of conversations: one small
+# JSON file written the first time the choices are applied to a folder that was recognised as new. Three cases,
+# always named in one line by `check` and by the startup banner:
+#
+#   fresh    the folder is not there yet, or is empty: the choices are applied and the mark is written.
+#   auto     the folder carries the mark: it was created by the automatic configuration, so the choices keep
+#            being applied at every start (the engine/machine gates are re-evaluated each time).
+#   earlier  anything else -- a folder with files but no mark, an unreadable mark, a folder that cannot be
+#            listed: an earlier setup, kept exactly as it ran. Note that an old folder whose archive happens
+#            to be empty lands here too, which `existing_install` could not tell.
+#
+# Only the server writes the mark. `check` reads it and never creates it.
+MARK_FILE = "autoconfig.json"
+MARK_VERSION = 1
+
+ORIGIN_FRESH = "fresh"
+ORIGIN_AUTO = "auto"
+ORIGIN_EARLIER = "earlier"
+
+ORIGIN_LABEL = {
+    ORIGIN_FRESH: "new data folder: the automatic choices are applied and recorded in " + MARK_FILE,
+    ORIGIN_AUTO: "data folder created with the automatic configuration: the choices stay applied",
+    ORIGIN_EARLIER: "data folder from an earlier setup: the automatic choices are reported, not applied",
+}
+ORIGIN_FIX = {
+    ORIGIN_FRESH: "",
+    ORIGIN_AUTO: 'delete %s to have this folder treated as an earlier setup, or write "auto_config": false'
+                 % MARK_FILE,
+    ORIGIN_EARLIER: 'write "auto_config": true in the config to apply the automatic choices here as well',
+}
+
+
+def mark_path(data_dir) -> str:
+    return os.path.join(str(data_dir), MARK_FILE)
+
+
+def read_mark(data_dir) -> dict | None:
+    """The recorded provenance of this data folder, or None when there is none or it cannot be read.
+
+    Read-only, and never raises: an unreadable mark must be answered conservatively, not with a traceback.
+    """
+    if not data_dir:
+        return None
+    try:
+        with open(mark_path(data_dir), encoding="utf-8") as f:
+            mark = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(mark, dict) or not isinstance(mark.get("version"), int):
+        return None
+    return mark
+
+
+def origin(data_dir) -> tuple[str, str]:
+    """Where this data folder comes from -> (ORIGIN_*, the reason, in one line).
+
+    Read-only: it neither creates the folder nor the mark, so `check` and the startup banner agree. The answer
+    must be taken BEFORE the start creates the folder or writes into it (server.main does, before makedirs).
+    """
+    if not data_dir:
+        return ORIGIN_FRESH, "no data folder was given"
+    if not os.path.isdir(data_dir):
+        return ORIGIN_FRESH, "the data folder does not exist yet"
+    if os.path.exists(mark_path(data_dir)):
+        if read_mark(data_dir) is not None:
+            return ORIGIN_AUTO, "%s records that this folder was created with the automatic configuration" % MARK_FILE
+        return ORIGIN_EARLIER, ("%s is there but cannot be read as a provenance mark: treated as an earlier "
+                                "setup" % MARK_FILE)
+    try:
+        names = sorted(n for n in os.listdir(data_dir) if not n.startswith("."))
+    except OSError as e:
+        return ORIGIN_EARLIER, "the data folder cannot be listed (%s): treated as an earlier setup" % e
+    if not names:
+        return ORIGIN_FRESH, "the data folder is empty"
+    shown = ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
+    return ORIGIN_EARLIER, ("the data folder already holds %s and carries no %s: an earlier setup, kept as it "
+                            "ran" % (shown, MARK_FILE))
+
+
+def origin_line(where: str, why: str) -> str:
+    """The one line that names which of the three cases this data folder is."""
+    return "%s (%s)" % (ORIGIN_LABEL.get(where, where), why)
+
+
+def write_mark(data_dir, cfg, decisions) -> bool:
+    """Record that this data folder was created with the automatic configuration. -> True when written.
+
+    Called by the server only, right after the choices were applied to a folder `origin` called ORIGIN_FRESH.
+    Never raises: a read-only folder must not stop the proxy (the folder then stays "earlier" next time, which
+    is the conservative answer).
+    """
+    if not data_dir or not getattr(cfg, "auto_config", True):
+        return False
+    try:
+        from . import __version__
+    except Exception:  # noqa: BLE001  - version is evidence, not a requirement
+        __version__ = ""
+    payload = {"version": MARK_VERSION, "proxy_version": __version__,
+               "window": int(getattr(cfg, "window", 0) or 0), "created": int(time.time()),
+               "applied": {d.field: d.value for d in decisions if d.changed}}
+    tmp = mark_path(data_dir) + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=1, sort_keys=True)
+        os.replace(tmp, mark_path(data_dir))
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
 EXISTING_WHY = ("not applied: this data folder already has conversations, so an upgrade keeps how they ran "
                 "(automatic choice: %s, because %s)")
 EXISTING_FIX = 'write "auto_config": true in the config to apply the automatic choices, or set "%s" yourself'
@@ -460,7 +585,8 @@ def _decide(cfg, engine, explicit, machine, exact) -> list[Decision]:
     return out
 
 
-def explain(cfg, engine, machine: Machine | None, decisions: list[Decision], full: bool = False) -> list[str]:
+def explain(cfg, engine, machine: Machine | None, decisions: list[Decision], full: bool = False,
+            origin: tuple[str, str] | None = None) -> list[str]:
     """The human-readable report: what was found, what was chosen, how to force it. -> lines."""
     lines = []
     kind = getattr(engine, "kind", "?")
@@ -473,6 +599,8 @@ def explain(cfg, engine, machine: Machine | None, decisions: list[Decision], ful
         "on this host" if _local(engine) else "on another host (%s)" % (getattr(engine, "upstream", "") or "?")))
     if machine is not None:
         lines.append("machine: " + machine.line())
+    if origin is not None:
+        lines.append("data folder: " + origin_line(*origin))
     if not getattr(cfg, "auto_config", True):
         lines.append("automatic configuration off (\"auto_config\": false): every default is used as written")
         return lines
