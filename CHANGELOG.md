@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.23 — unreleased
+## 0.3.23 — 2026-11-02
 
 - **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
   @lupus0).** With `--tokenizer` on a Strata pack, a request with a picture used to fail with a misleading 400
