@@ -57,6 +57,19 @@ RECEIPT_OPEN = "\u27eactx-archive"
 OUT_RECEIPT = ("\u27eactx-archive id={rid} \u00b7 uscita di {origin} \u00b7 questo agente \u00b7 nascosta per spazio "
                "({n} token)\u27eb Ricevuta: {receipt}. Testo esatto: {rn} id={rid}. Per lo stato ATTUALE "
                "rileggi il file o riesegui il comando.")
+# 0.3.24: ricevute compatte (compact_receipts). Nel segnaposto l'id compariva DUE volte — nella cornice e nella riga
+# che il modello deve ricopiare — e l'istruzione finale, identica in ogni blocco, si ripeteva ogni volta: 48 token su
+# 135 senza informazione propria (misura in workspaces/placeholder-cost). Nella forma compatta l'id resta una volta
+# sola, nella forma «{rn} id={rid}» a cui la descrizione dello strumento si riferisce già, e l'istruzione va una volta
+# nella descrizione di recall (recall_tool_def). Nient'altro cambia: tipo, origine, esito, intervallo di righe,
+# sha256 e la citazione visibile restano. Scelta per conversazione come rich_receipts (Manager.receipt_compact).
+COMPACT_KEY = "compact:"
+OUT_RECEIPT_COMPACT = ("\u27eactx-archive \u00b7 uscita di {origin} \u00b7 questo agente \u00b7 nascosta per spazio "
+                       "({n} token)\u27eb Ricevuta: {receipt}. Testo esatto: {rn} id={rid}.")
+OUT_PLACEHOLDER_COMPACT = ("[gestore del contesto: uscita di {origin} nascosta per spazio ({n} token). "
+                           "Inizio: \u00ab{head}\u00bb. Testo esatto: {rn} id={rid}.]")
+RECALL_STATE_NOTE = (" Per lo stato ATTUALE di un file o di un comando rileggi il file o riesegui il comando: "
+                     "l'archivio conserva il testo di allora.")
 DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb concluso e nascosto ({n} token). Effetti: {fx}. "
              "Testo completo: {rn} id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
@@ -75,6 +88,12 @@ OUT_PREFIXES = (OUT_PREFIX, OUT_PREFIX_EN)
 OUT_RECEIPT_EN = ("\u27eactx-archive id={rid} \u00b7 output of {origin} \u00b7 this agent \u00b7 hidden to save space "
                   "({n} tokens)\u27eb Receipt: {receipt}. Exact text: {rn} id={rid}. For the CURRENT state "
                   "re-read the file or re-run the command.")
+OUT_RECEIPT_COMPACT_EN = ("\u27eactx-archive \u00b7 output of {origin} \u00b7 this agent \u00b7 hidden to save space "
+                          "({n} tokens)\u27eb Receipt: {receipt}. Exact text: {rn} id={rid}.")
+OUT_PLACEHOLDER_COMPACT_EN = ("[context manager: output of {origin} hidden to save space ({n} tokens). "
+                              "Start: \u00ab{head}\u00bb. Exact text: {rn} id={rid}.]")
+RECALL_STATE_NOTE_EN = (" For the CURRENT state of a file or of a command re-read the file or re-run the command: "
+                        "the archive keeps the text as it was then.")
 DROP_NOTE_EN = ("\n\n[context manager: \u00abdisposable\u00bb exchange finished and hidden ({n} tokens). Effects: {fx}. "
                 "Full text: {rn} id={rid}.]")
 PIN_HEAD_EN = "[strata-context: pinned points]"
@@ -97,11 +116,14 @@ def is_placeholder(text) -> bool:
                                       or RECEIPT_OPEN in text)
 
 
-def recall_tool_def(name: str = RECALL_NAME, lang: str = "it") -> dict:
-    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome e della lingua).
-    Conversazioni nate prima della 0.2.0 (nome strata_recall): testo italiano di allora, byte per byte (prefisso
-    invariato); nomi nuovi: testo inglese (fino alla 0.3.0 con l'avviso che risultati e ricevute possono essere in
-    italiano; dalla 0.3.1, lang="en", senza avviso: risultati e ricevute sono in inglese)."""
+def recall_tool_def(name: str = RECALL_NAME, lang: str = "it", compact: bool = False) -> dict:
+    """Definizione dello strumento di recall col nome della conversazione (funzione pura del nome, della lingua e
+    della forma delle ricevute). Conversazioni nate prima della 0.2.0 (nome strata_recall): testo italiano di allora,
+    byte per byte (prefisso invariato); nomi nuovi: testo inglese (fino alla 0.3.0 con l'avviso che risultati e
+    ricevute possono essere in italiano; dalla 0.3.1, lang="en", senza avviso: risultati e ricevute sono in inglese).
+    compact=True (0.3.24, compact_receipts): i segnaposti non ripetono più l'istruzione sullo stato ATTUALE, che
+    compare qui una volta sola, nella lingua della conversazione. La versione legacy non è toccata: una conversazione
+    con il nome vecchio è per definizione già esistente, quindi non ha mai le ricevute compatte."""
     if name != LEGACY_RECALL_NAME:
         return {"type": "function", "function": {
             "name": name,
@@ -111,7 +133,8 @@ def recall_tool_def(name: str = RECALL_NAME, lang: str = "it") -> dict:
                 "archive index; use `query` to search (words, path, function name, error message) across "
                 "everything archived; use `path` for the history of operations on a file (reads, writes, edits, "
                 "with outcome and id). Runs on the server and is cheap: use it instead of guessing or re-running "
-                "commands." + (" Results and receipts may be in Italian." if lang == "it" else "")),
+                "commands." + (" Results and receipts may be in Italian." if lang == "it" else "")
+                + (((RECALL_STATE_NOTE if lang == "it" else RECALL_STATE_NOTE_EN)) if compact else "")),
             "parameters": {"type": "object", "properties": {
                 "id": {"type": "string", "description": "id of the archived block, e.g. r1a2b3c4d5e6"},
                 "query": {"type": "string", "description": "text to search in the archive (words or substring)"},
@@ -314,6 +337,12 @@ class Config:
     # conversation at first use like the language: a conversation born before keeps the receipts it was masked with.
     # Off by default until an A/B run shows the model uses them at least as well as the plain ones.
     rich_receipts: bool = False
+    # 0.3.24: compact receipts for NEW conversations. The archive id is written once (in the `recall id=<id>` form
+    # the tool description points at, not twice) and the fixed instruction about the CURRENT state leaves every
+    # placeholder and appears once in the description of the conversation's recall tool. Nothing else is removed.
+    # Saved per conversation at first use like the language and the receipts: a conversation born before keeps the
+    # placeholders it was masked with, byte for byte. Off by default until an A/B run decides.
+    compact_receipts: bool = False
     # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
     window_guard: bool = True
     window_margin: int = 64              # technical margin (Strata itself keeps 8)
@@ -1122,6 +1151,8 @@ class Manager:
         self.lang = norm_lang(cfg.prompt_language)
         # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
         self.rich = bool(cfg.rich_receipts)
+        # ricevute compatte nella conversazione corrente (impostata da prepare; 0.3.24)
+        self.compact = bool(cfg.compact_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
@@ -1152,6 +1183,19 @@ class Manager:
         rich = bool(self.cfg.rich_receipts) and not existed
         self.store.kv_set(key, "rich" if rich else "plain")
         return rich
+
+    def receipt_compact(self, conv: str, existed: bool) -> bool:
+        """Ricevute compatte per la conversazione (0.3.24), con la stessa regola della lingua e delle ricevute estese:
+        scelta alla prima richiesta e ricordata (kv). Una conversazione che ha già un archivio ma nessuna scelta
+        registrata è nata prima: conserva i segnaposti con cui è stata mascherata, prefisso identico byte per byte
+        (il testo del segnaposto e la descrizione dello strumento cambiano insieme)."""
+        key = COMPACT_KEY + conv
+        v = self.store.kv_get(key)
+        if v in ("compact", "full"):
+            return v == "compact"
+        compact = bool(self.cfg.compact_receipts) and not existed
+        self.store.kv_set(key, "compact" if compact else "full")
+        return compact
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -1209,9 +1253,12 @@ class Manager:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
             kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang, self.rich)
             if rec:
-                return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
-                                                                  receipt=rec, rn=self.rn)
-        return self.L(OUT_PLACEHOLDER, OUT_PLACEHOLDER_EN).format(
+                tpl = (self.L(OUT_RECEIPT_COMPACT, OUT_RECEIPT_COMPACT_EN) if self.compact
+                       else self.L(OUT_RECEIPT, OUT_RECEIPT_EN))
+                return tpl.format(origin=origin_text(info, self.lang), n=n, rid=rid, receipt=rec, rn=self.rn)
+        tpl = (self.L(OUT_PLACEHOLDER_COMPACT, OUT_PLACEHOLDER_COMPACT_EN) if self.compact
+               else self.L(OUT_PLACEHOLDER, OUT_PLACEHOLDER_EN))
+        return tpl.format(
             origin=origin_text(info, self.lang), n=n, rid=rid, rn=self.rn,
             head=head_text(orig).replace("\u00bb", "\"").replace("\u00ab", "\""))
     def _segment_for(self, conv: str, hs: list[str]):
@@ -1403,13 +1450,14 @@ class Manager:
         self.rn, self.tn = names["recall"], names["tools"]
         self.lang = self.prompt_lang(conv, existed)
         self.rich = self.receipt_detail(conv, existed)
+        self.compact = self.receipt_compact(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == self.rn for t in tools):
             from .recall2 import recall_tool
-            tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang), self.lang))
+            tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang, self.compact), self.lang))
         if catalog:
             tools.append(self.pager.tools_tool(catalog, self.tn))
 

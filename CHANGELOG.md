@@ -2,6 +2,25 @@
 
 ## 0.3.24 — unreleased
 
+- **A placeholder no longer repeats what it already said: `compact_receipts` (off by default).** Every placeholder
+  of a hidden tool output carried the archive id **twice** — once in the frame (`⟪ctx-archive id=…⟫`) and once in
+  the line the model is meant to copy (`Exact text: recall id=…`) — and then the same closing instruction, *"For
+  the CURRENT state re-read the file or re-run the command"*, identical in every block. Measured with the pack
+  tokenizer on real sessions that is **29 tokens of a 135-token typed receipt** (−21%) and 16 of the 186-token
+  fallback (−9%), with no information of their own per block.
+  With `compact_receipts: true`, in **new** conversations: the id is written **once**, in the `recall id=<id>` form
+  the tool description already points at (the copy in the frame goes away, so the one the model is told to look for
+  survives), and the fixed instruction leaves the placeholders and appears **once** in the description of that
+  conversation's `recall` tool (+31 tokens in English, +33 in Italian, per conversation: break-even after two
+  placeholders). Nothing else is removed: kind, origin, outcome, line range, `sha256` and the visible
+  `Start:`/`Last line:` quote stay, in both languages.
+  The choice is stored per conversation at first use, like `prompt_language` (0.3.1) and `rich_receipts` (0.3.22):
+  a conversation that already has an archive keeps the placeholders it was masked with, byte for byte, so the
+  physical prompt and the engine's prefix cache are untouched. The legacy `strata_recall` description is not
+  touched at all (such a conversation is by definition an old one). The outgoing receipt guard still recognises a
+  compact receipt copied into a write/edit/bash call. Off by default until an A/B run decides whether writing the
+  instruction once is as clear to the model as repeating it.
+
 - **A version string is not a protocol: llama-swap gateways are no longer taken for Ollama.** A gateway that
   exposes `GET /api/version` but answers HTTP 404 to `GET /api/ps` was identified as Ollama, reported "no model
   loaded" and suggested `ollama run`. Recognition now requires both the version answer and a coherent `/api/ps`
