@@ -2,6 +2,52 @@
 
 ## 0.3.24 — unreleased
 
+- **`init-config` writes a minimal file and leaves the automatic configuration in charge** (reported by the first
+  Windows user). `mnemonic-proxy init-config --engine strata` used to copy `examples/config.example.json` out:
+  sixteen explicit fields, among them `window` 131072, a `/path/to/strata/sessions` placeholder,
+  `slot_save`/`mask_anchor`/`autosave` true, `notes_max_tokens` 12288, `response_floor` 16384, `live_dump` true
+  (the whole prompt to disk) and `seal_experimental` true. A field written in the config always wins over
+  `autoconfig.py`, so the command `check` itself suggests *switched the automatic configuration off*: on an engine
+  with a 115K window, or on a machine without the RAM for a session file, it handed the user a wrong setup.
+  The file now holds only what nothing can work out:
+  - `--engine strata`, `llama-server`, `llama-server-32k`, `llama-server-router`, `ds4` -> `{}`. The window comes
+    from the engine; the saved-state options, the exact token count and the window-sized budgets are chosen from
+    the engine and the machine, and reported line by line at startup and by `check --explain-config`.
+  - `--slot-dir DIR` (Strata and llama-server) adds `"slot_dir"` and nothing else: it is the engine's own
+    `--slot-save-path`, the one thing the proxy cannot discover, and the one thing
+    `autoconfig.saved_state_gate` asks for before it turns saved state on by itself. Without it no placeholder is
+    written: a `/path/to/...` in there is worse than an absent field.
+  - `--engine openai-32k` -> `{"window": 32768}`: a plain OpenAI-compatible engine reports no context at all.
+  - `--engine official-strata` -> `{"slot_save": false, "autosave": false}`: the engine *can* save state, so base
+    mode is a choice only the user can make.
+  - **`"auto_config": true` is never written**, although it is exactly what the file leaves in charge. It is
+    already the default, so on a new data folder it adds nothing; on a folder that already holds conversations it
+    would *remove* a protection — the automatic choices are only applied there when `auto_config` is explicit,
+    precisely so an upgrade cannot change how a running setup behaves.
+  - `--full` still writes the complete documented example from inside the package (no network), now with
+    `--slot-dir` substituted into its `slot_dir` placeholder when given, and a line saying that every explicit
+    field is one the automatic configuration no longer decides. The shipped `examples/*.json` are unchanged.
+  - `check`'s hints and `--config`-not-found message name the minimal command (and `--full`) instead of
+    "download the example".
+- **One click, any engine: `init-config --launcher`.** Writes `start-mnemonic-proxy.bat` on Windows and
+  `start-mnemonic-proxy.sh` elsewhere, next to the config, with the `--upstream`, `--port`, `--data`, `--config`
+  and (optional) `--tokenizer` that were actually passed. It starts **only the proxy** — the engine's command line
+  stays the user's — and in this order: it stops with one line if the engine does not answer, runs `check` once (a
+  port already taken is reported there, with the fix), then the proxy. Every value is a variable at the top of the
+  file and can be overridden from the environment; the `TOKENIZER` line is present but commented out unless
+  `--tokenizer` was given; no personal path anywhere; on Windows it ends with `pause`, so a console opened by a
+  double-click does not vanish with the error in it. `examples/start-windows.bat` (which also *starts*
+  llama-server) is unchanged. Windows CI runs the generated `.bat` end to end against a fake engine, as it already
+  did for `start-windows.bat`.
+- **A `window` written in the config now scales the thresholds too.** The window-sized defaults (`mask_trigger`,
+  `mask_target`, `keep_recent_tokens`, `min_batch_tokens`, `tail_max`, `reserve`, `default_response`,
+  `pins_max_tokens`, `recall_struct_max_tokens`, `auto_recall_max_tokens`, …) scaled only when the window was read
+  from the engine; with a generic engine, which reports none, they stayed at their 131072 sizes behind a
+  `"window": 32768` — so `mask_trigger` 80000 never fired on a 32K window. They are now scaled from `BASE_WINDOW`
+  by the same formula (one `engines._scale`, two callers), and a threshold written by the user still wins. The
+  numbers `examples/config.openai-32k.json` spells out are exactly this scaling, so `{"window": 32768}` is a
+  complete 32K configuration; a startup warning says it happened.
+
 - **The first Windows user: the console no longer mangles what the commands print.** On a PowerShell window whose
   code page is not UTF-8, `mnemonic-proxy`, `demo`, `check`, `init-config` and `mnemonic-mcp` produced output the
   user could not read: `compat.console_safe` switched the stream to `errors="backslashreplace"`, so the receipt

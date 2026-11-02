@@ -285,6 +285,55 @@ jobs:
           & $py -c "import json; d = json.load(open('check8k.json', encoding='utf-8-sig')); assert not d['ready'] and d['exit_code'] == 1, d"
           if ($LASTEXITCODE -ne 0) { exit 1 }
           exit 0
+      # 0.3.24: the one-click launcher `init-config --launcher` writes, run end to end as a user would
+      # double-click it (fake Strata as the engine, so no model is needed). The .bat starts only the proxy.
+      - name: init-config --launcher, then run the generated start-mnemonic-proxy.bat
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          $work = "$env:RUNNER_TEMP\launcher"
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Set-Location $work
+          $py = "$env:RUNNER_TEMP\venv\Scripts\python.exe"
+          $mp = "$env:RUNNER_TEMP\venv\Scripts\mnemonic-proxy.exe"
+          & $mp init-config --engine strata --launcher --dir $work `
+            --upstream http://127.0.0.1:18195 --port 18196 --data "$work\data"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          # minimal means minimal: `{}` for Strata, and never "auto_config"
+          & $py -c "import json; d = json.load(open('config.json')); assert d == {}, d"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $bat = Get-Content start-mnemonic-proxy.bat -Raw
+          if ($bat -notmatch 'pause') { throw 'the generated .bat does not pause at the end' }
+          if ($bat -notmatch '18196') { throw 'the generated .bat does not carry --port' }
+          # no engine yet: the .bat must refuse, say so, and never start the proxy.
+          # Empty stdin, because the failure paths end with `pause`, which would otherwise wait forever.
+          New-Item -ItemType File -Force empty.txt | Out-Null
+          $no = Start-Process -FilePath cmd.exe -ArgumentList "/c","start-mnemonic-proxy.bat" `
+            -RedirectStandardInput empty.txt `
+            -RedirectStandardOutput noengine.log -RedirectStandardError noengine.err.log -PassThru -Wait
+          if ($no.ExitCode -ne 1) { throw "the .bat did not refuse without an engine (exit $($no.ExitCode))" }
+          if ((Get-Content noengine.log -Raw) -notmatch 'does not answer') { throw 'no clear message about the missing engine' }
+          # now the engine answers: check passes and the proxy comes up on 18196
+          Start-Process -FilePath $py -ArgumentList "-m","ctxproxy.fake_engine","--flavor","strata","--n-ctx","32768","--port","18195" -RedirectStandardOutput fe.log -RedirectStandardError fe.err.log
+          foreach ($i in 1..50) { try { Invoke-RestMethod http://127.0.0.1:18195/v1/status | Out-Null; break } catch { Start-Sleep -Milliseconds 200 } }
+          $b = Start-Process -FilePath cmd.exe -ArgumentList "/c","start-mnemonic-proxy.bat" -RedirectStandardOutput bat.log -RedirectStandardError bat.err.log -PassThru
+          $ok = $false
+          foreach ($i in 1..60) { try { Invoke-RestMethod http://127.0.0.1:18196/v1/engine | Out-Null; $ok = $true; break } catch { Start-Sleep -Milliseconds 500 } }
+          Get-Content bat.log -Raw
+          if (-not $ok) { throw "the proxy started by start-mnemonic-proxy.bat does not answer on 18196" }
+          if (-not (Test-Path data\journal.jsonl)) { throw "the data folder was not created where --data said" }
+          # a taken port has to be reported by `check`, not by a traceback: 18195 is the engine's own port
+          $env:PORT = "18195"
+          $env:DATA = "$work\data2"
+          $busy = Start-Process -FilePath cmd.exe -ArgumentList "/c","start-mnemonic-proxy.bat" `
+            -RedirectStandardInput empty.txt `
+            -RedirectStandardOutput busy.log -RedirectStandardError busy.err.log -PassThru -Wait
+          Remove-Item Env:PORT, Env:DATA
+          $txt = (Get-Content busy.log -Raw) + (Get-Content busy.err.log -Raw)
+          Write-Host $txt
+          if ($busy.ExitCode -ne 1) { throw "the .bat did not stop on a taken port (exit $($busy.ExitCode))" }
+          if ($txt -notmatch 'taken by another program') { throw 'a taken port is not reported clearly' }
+          Stop-Process -Id $b.Id -Force -ErrorAction SilentlyContinue
+          exit 0
 
   # Native Windows with the official llama.cpp Windows CPU build (llama-server.exe) and Qwen3-0.6B.
   llama-windows:

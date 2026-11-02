@@ -262,6 +262,54 @@ class ReadmeRunTests(unittest.TestCase):
         self.assertEqual(0, p.returncode, p.stdout + p.stderr)
         self.assertTrue(os.path.exists(os.path.join(keep, "archive.sqlite")), os.listdir(keep))
 
+    # ---------------------------------------------------------------- init-config
+
+    def test_every_init_config_block_runs_and_writes_what_it_claims(self):
+        """The `ci` blocks that call `init-config`, each in its own folder, really executed.
+
+        0.3.24: the file is minimal, so what it holds is small enough to assert field by field — and that is
+        the point of the test: a README that promises `{}` and a command that writes sixteen fields is how
+        the automatic configuration got switched off for the first Windows user.
+        """
+        seen = 0
+        for line, argv in ci_commands():
+            rest = argv[1:]
+            if cli.program(argv) != "server" or not rest or rest[0] != "init-config":
+                continue
+            seen += 1
+            with self.subTest(readme_line=line):
+                d = self.workdir("init-config-%d" % line)
+                p = run(self.proxy + rest, d)
+                self.assertEqual(0, p.returncode, p.stdout + p.stderr)
+                written = [os.path.join(dirpath, n) for dirpath, _, names in os.walk(d) for n in names]
+                cfgs = [w for w in written if w.endswith("config.json")]
+                self.assertTrue(cfgs, "no config.json written: %s" % written)
+                for c in cfgs:
+                    with open(c, encoding="utf-8") as f:
+                        raw = json.load(f)
+                    self.assertNotIn("auto_config", raw, c)
+                    self.assertNotIn("live_dump", raw, c)
+                    for field in ("slot_save", "mask_anchor", "autosave", "response_floor",
+                                  "notes_max_tokens", "engine_tokenize"):
+                        self.assertNotIn(field, raw, "%s: %s is the proxy's choice, not the file's"
+                                                     % (c, field))
+                    if "--slot-dir" in rest:
+                        self.assertEqual(raw, {"slot_dir": rest[rest.index("--slot-dir") + 1]})
+                    else:
+                        self.assertEqual(raw, {})
+                if "--launcher" in rest:
+                    launchers = [w for w in written if os.path.basename(w).startswith("start-mnemonic-proxy")]
+                    self.assertTrue(launchers, "--launcher wrote nothing: %s" % written)
+                    with open(launchers[0], encoding="utf-8") as f:
+                        txt = f.read()
+                    self.assertIn("does not answer", txt)
+                    self.assertIn(" check ", txt)
+                    if launchers[0].endswith(".sh"):
+                        self.assertTrue(os.access(launchers[0], os.X_OK), launchers[0])
+                        sh = run(["/bin/sh", "-n", launchers[0]], d)
+                        self.assertEqual(0, sh.returncode, sh.stdout + sh.stderr)
+        self.assertGreaterEqual(seen, 2, "the README should run init-config in Install and for saved state")
+
     # ---------------------------------------------------------------- check
 
     def test_check_is_READY_against_the_fake_engine(self):

@@ -89,8 +89,9 @@ class InitConfigTests(unittest.TestCase):
         return code, out.getvalue() + err.getvalue()
 
     def test_it_writes_the_config_of_the_chosen_engine(self):
+        # 0.3.24: minimal by default, the complete example behind --full (tests/test_init_config_minimal.py)
         with tempfile.TemporaryDirectory() as d:
-            code, out = self.run_cli("init-config", "--engine", "llama-server", "--dir", d)
+            code, out = self.run_cli("init-config", "--engine", "llama-server", "--dir", d, "--full")
             self.assertEqual(code, 0, out)
             p = os.path.join(d, "config.json")
             self.assertTrue(os.path.isfile(p), out)
@@ -101,11 +102,13 @@ class InitConfigTests(unittest.TestCase):
 
     def test_every_engine_alias_can_be_written(self):
         for alias in examples.ENGINES:
-            with self.subTest(alias=alias), tempfile.TemporaryDirectory() as d:
-                code, out = self.run_cli("init-config", "--engine", alias, "--dir", d)
-                self.assertEqual(code, 0, out)
-                with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
-                    json.load(f)
+            for full in (False, True):
+                with self.subTest(alias=alias, full=full), tempfile.TemporaryDirectory() as d:
+                    argv = ["init-config", "--engine", alias, "--dir", d] + (["--full"] if full else [])
+                    code, out = self.run_cli(*argv)
+                    self.assertEqual(code, 0, out)
+                    with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
+                        json.load(f)
 
     def test_it_never_overwrites_without_force(self):
         with tempfile.TemporaryDirectory() as d:
@@ -117,7 +120,7 @@ class InitConfigTests(unittest.TestCase):
             self.assertIn("--force", out)
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(json.load(f), {"window": 65536})
-            code, out = self.run_cli("init-config", "--engine", "ds4", "--dir", d, "--force")
+            code, out = self.run_cli("init-config", "--engine", "ds4", "--dir", d, "--force", "--full")
             self.assertEqual(code, 0, out)
             with open(p, encoding="utf-8") as f:
                 self.assertEqual(json.load(f)["engine"], "ds4")
@@ -144,7 +147,7 @@ class InitConfigTests(unittest.TestCase):
         # end to end through the real entry point, as the README tells the user to run it
         with tempfile.TemporaryDirectory() as d:
             p = subprocess.run([sys.executable, "-m", "ctxproxy.server", "init-config",
-                                "--engine", "openai-32k", "--dir", d],
+                                "--engine", "openai-32k", "--dir", d, "--full"],
                                capture_output=True, text=True, timeout=60, cwd=ROOT)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             with open(os.path.join(d, "config.json"), encoding="utf-8") as f:
