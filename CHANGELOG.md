@@ -2,6 +2,37 @@
 
 ## 0.3.24 — unreleased
 
+- **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
+  head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an
+  interactive prompt (19 166 tokens median, 24.8 % of the prompt in the measurement of card `t_d1134087`), yet it
+  was **recorded nowhere**: the `request` event carries aggregate counters only and the archive holds messages,
+  not tools. Consequence: the two levers that act on the head (`tooldefs_desc_max`/`tooldefs_param_max` and
+  `tools_paging`) could not be measured even after the fact, and a production journal with `tools_paging` on but
+  **0** `tool_not_loaded` and **0** `tools_search` over 599 requests did not say whether the pager had ever run.
+  New event **`tool_heads`** (`ctxproxy/toolheads.py`, switch `journal_tool_heads`, on by default), written **once
+  per conversation and once per change of the tool list** — not per request: fingerprint of the list, number of
+  tools, for each tool its **name** plus the tokens of the full definition and of its `description` alone, the
+  counted head total (`head_tokens` = `defs_tokens` + `system_tokens` + `frame_tokens`) and, with the pager on,
+  which tools stayed in the head (`base`) and which went to the catalog (`catalog`). `counting` declares `exact`
+  (pack tokenizer + real template) or `estimated` (chars/`chars_per_token`); the counter is the one the proxy
+  already uses for the window.
+  - **Names and numbers only.** No definition text, no `description` text, no system prompt. The guarantee is
+    structural, not a promise: `toolheads.payload()` never receives the tools, only their names and lists of
+    integers, so it has no text to copy; the only text-dependent value is the non-invertible fingerprint. Two
+    predicates (`toolheads.leaks`, `toolheads.unknown_strings`) prove it in `tests/test_tool_heads.py`.
+  - **Why the pager looks silent in production.** `ToolPager.split` and its call site in `core.py` journal
+    nothing; `tools_search` and `tool_not_loaded` are written in `server.py` only when the **model** calls
+    `tools` or an unloaded tool. So an empty journal could not distinguish "the pager never ran" from "the pager
+    ran and the model never touched the catalog". `tool_heads` now records the split itself. The split also
+    depends entirely on the client's naming: with opencode's documented tools, `tools_core` keeps 5 in the head
+    (`bash edit write read grep`) and sends 6 to the catalog; with Hermes' tool names (`read_file`, `terminal`,
+    `search_files`, …) **no** name matches `tools_core`, so the whole list goes to the catalog and the head keeps
+    only `recall` + `tools` — a test covers both.
+  - **Measured cost, no behaviour change.** About 450 bytes per line, one line per 200 requests in the test, and
+    the line's size does not grow with the length of the definitions; the prompt sent to the engine is
+    byte-identical with the event on or off (identity test, pager on and off). `render.prompt_head` factors the
+    head out of `render_pieces` with no change to the rendered text.
+
 - **A version string is not a protocol: llama-swap gateways are no longer taken for Ollama.** A gateway that
   exposes `GET /api/version` but answers HTTP 404 to `GET /api/ps` was identified as Ollama, reported "no model
   loaded" and suggested `ollama run`. Recognition now requires both the version answer and a coherent `/api/ps`

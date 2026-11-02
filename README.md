@@ -587,6 +587,25 @@ port with the proxy's. `where=answer|recall_round|final|notes|seal|anchor|answer
 a client continuation is a new answer request, not a distinct server-side phase. `seal` and `anchor` deliberately
 request one token to establish saved state; this differs from a client answer clamped to one token.
 
+**The prompt head is measured, not guessed (`tool_heads`, 0.3.24).** The head — the template scaffolding, the tool
+definitions and the system prompt — is the largest single occupant of an interactive prompt, and until 0.3.24 it was
+recorded nowhere: the `request` event carries aggregate counters only, and the archive holds messages, not tools.
+`journal_tool_heads` (on by default) writes **one** `tool_heads` line **per conversation and per change of the tool
+list** — not per request — with the list's fingerprint, the number of tools, for every tool its **name**, the tokens
+of the full definition and the tokens of its `description` alone, the counted head total (`head_tokens` =
+`defs_tokens` + `system_tokens` + `frame_tokens`), and, when `tools_paging` is on, which tools stayed in the head
+(`base`) and which went to the loadable catalog (`catalog`). `counting` says whether the numbers are `exact` (pack
+tokenizer + real template) or `estimated` (the chars/`chars_per_token` fallback); the counter is the one the proxy
+already uses for the window. **Names and numbers only: no definition text, no `description` text and no system
+prompt ever enter the journal** — the record is built from names and integers, so it cannot carry text, and
+`tests/test_tool_heads.py` proves it (`toolheads.leaks`, `toolheads.unknown_strings`). One line is about 450 bytes
+and its size does not grow with the length of the definitions. This makes `tooldefs_desc_max`, `tooldefs_param_max`
+and `tools_paging` measurable after the fact. Note that the pager itself journals nothing: `tools_search` and
+`tool_not_loaded` only appear when the **model** calls `tools` or an unloaded tool, so before this event a journal
+without them could not tell "paging never ran" from "paging ran and the model never touched the catalog" — this line
+tells them apart. `tool_heads` is a measurement, not a decision: the prompt sent to the engine is byte-identical
+with it on or off.
+
 If PolyStrata rejects a request *before generation* with its explicit context/count error, the proxy records
 both counts and retries **once**, unchanged except for lower output/reasoning limits derived from that engine
 count. An engine-counted prompt with no answer room becomes a local `window_guard` error without a retry.
@@ -1647,6 +1666,7 @@ measurements, and changing them is rarely necessary.
 | `tooldefs_param_max` | 0 | the same for every parameter description, nested ones included |
 | `tooldefs_keep` | `recall`, `read`, `bash`, `edit`, `write`, `grep`, `find`, `ls` | tools whose definitions are never shortened |
 | `tools_load_max` | 5 | how many tool definitions one `tools` call may load (`tools_paging`) |
+| `journal_tool_heads` | true | journal one `tool_heads` line per conversation and per tool-list change: names and token weight of the definitions in the prompt head (names and numbers only, never text) |
 | `auto_recall_on_error` | false | automatic retrieval also after a failed tool result |
 | `auto_recall_k` | 4 | pieces at most per injection |
 | `auto_recall_max_tokens` | 4000 | cap of the injected message |
@@ -1723,7 +1743,8 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
   no other network access. The dashboard and the MCP server bind to `127.0.0.1` and are read-only.
 - **The archive is plaintext.** `data/archive.sqlite` holds everything the agent saw — file contents, command
   outputs, reasoning — secrets included. `data/journal.jsonl` holds request metadata and recall queries;
-  `data/live/last_request.json` (with `live_dump`) the whole last prompt - pictures named by hash, never as base64.
+  tool names and token counts as well (`tool_heads`), but never the text of a tool definition or of the system
+  prompt. `data/live/last_request.json` (with `live_dump`) the whole last prompt - pictures named by hash, never as base64.
   Saved engine state files (`slot_dir`) and `kv-archive/` hold the conversation's tokens.
 - The proxy binds to `127.0.0.1` by default and has no authentication; do not expose it (`--host`) on a shared
   network. The MCP server's HTTP mode also binds to `127.0.0.1`.

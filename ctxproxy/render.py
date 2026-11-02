@@ -454,23 +454,32 @@ def message_piece(m: dict, role: str | None = None, prev_role: str | None = None
     raise ValueError("Unexpected message role.")
 
 
-def render_pieces(messages: list, tools: list | None, kwargs: dict | None = None,
-                  add_generation_prompt: bool = True) -> list[tuple]:
-    """-> [(indice messaggio | None, testo)] la cui concatenazione è il prompt che Strata tokenizza.
-    None = testa (system+tool) o coda (prompt di generazione)."""
-    kw = kwargs or {}
+def _normalized(messages: list) -> list[tuple]:
+    """I ruoli come li vede il template: `developer` -> system, un system tardivo -> user (_late_system_to_user)."""
     msgs = []
     for i, m in enumerate(messages):
         role = m.get("role")
         if role == "developer":
             role = "system"
         if role == "system" and i > 0:
-            role = "user"         # _late_system_to_user
+            role = "user"
         msgs.append((i, role, m))
-    tdefs = [t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
-             for t in tools or []] or None
-    n_img = [0]
-    # system iniziali fusi
+    return msgs
+
+
+def tool_defs(tools: list | None) -> list | None:
+    """Le definizioni come le scrive il template: il contenuto di `function`, senza l'involucro `{type, function}`."""
+    return [t.get("function", t) if isinstance(t, dict) and t.get("type") == "function" else t
+            for t in tools or []] or None
+
+
+def def_text(tdef) -> str:
+    """Il testo di UNA definizione nel prompt: la riga JSON che il template scrive nel blocco <tools>."""
+    return _tojson(tdef)
+
+
+def _merged_system(msgs: list) -> tuple[str, int]:
+    """Testo dei messaggi di sistema INIZIALI fusi, e quanti sono."""
     sys_text, num_sys = "", 0
     for k, (i, role, m) in enumerate(msgs):
         if num_sys == k and role == "system":
@@ -478,9 +487,17 @@ def render_pieces(messages: list, tools: list | None, kwargs: dict | None = None
             if s:
                 sys_text += ("\n" if sys_text else "") + s
             num_sys += 1
-    instr = ""
+    return sys_text, num_sys
+
+
+def _effort_instr(kw: dict) -> str:
     if kw.get("enable_thinking") is None or kw.get("enable_thinking") is True:
-        instr = EFFORT_TEXT[kw.get("reasoning_effort") or "xhigh"]
+        return EFFORT_TEXT[kw.get("reasoning_effort") or "xhigh"]
+    return ""
+
+
+def _head_text(sys_text: str, tdefs: list | None, kw: dict) -> str:
+    instr = _effort_instr(kw)
     head = ""
     if tdefs:
         head = IM_START + "system\n" + (instr + "\n\n" if instr else "") + TOOLS_HEAD
@@ -492,6 +509,33 @@ def render_pieces(messages: list, tools: list | None, kwargs: dict | None = None
         head = IM_START + "system\n" + (instr + "\n\n" if instr else "") + sys_text + IM_END + "\n"
     elif instr:
         head = IM_START + "system\n" + instr + IM_END + "\n"
+    return head
+
+
+def prompt_head(messages: list, tools: list | None, kwargs: dict | None = None) -> tuple[str, str, list]:
+    """La TESTA del prompt: il primo pezzo di `render_pieces` (indice None), cioè impalcatura del template +
+    definizioni degli strumenti + messaggi di sistema iniziali fusi.
+
+    -> (testo della testa, testo di sistema fuso, definizioni come le rende il template).
+    Funzione di sola lettura: serve a contare la testa (`toolheads`), non entra nella costruzione del prompt.
+    """
+    msgs = _normalized(messages)
+    tdefs = tool_defs(tools)
+    sys_text, _ = _merged_system(msgs)
+    return _head_text(sys_text, tdefs, kwargs or {}), sys_text, list(tdefs or [])
+
+
+def render_pieces(messages: list, tools: list | None, kwargs: dict | None = None,
+                  add_generation_prompt: bool = True) -> list[tuple]:
+    """-> [(indice messaggio | None, testo)] la cui concatenazione è il prompt che Strata tokenizza.
+    None = testa (system+tool) o coda (prompt di generazione)."""
+    kw = kwargs or {}
+    msgs = _normalized(messages)
+    tdefs = tool_defs(tools)
+    n_img = [0]
+    # system iniziali fusi
+    sys_text, num_sys = _merged_system(msgs)
+    head = _head_text(sys_text, tdefs, kw)
     pieces = [(None, head)] if head else []
     # ultimo messaggio utente "vero"
     last_q = len(msgs) - 1
