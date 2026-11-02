@@ -28,7 +28,7 @@ from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, 
     norm_lang, outcome_text
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
                      query_terms, typed_receipt)
-from .render import message_piece, render_pieces, template_kwargs
+from .render import image_source, message_piece, redact_images, render_pieces, template_kwargs, volatile_pictures
 from .savedstate import state_available
 from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
@@ -259,7 +259,11 @@ class Config:
     # stima token
     chars_per_token: float = 3.5
     msg_overhead: int = 6
-    image_tokens: int = 1024
+    # One picture's bill, and it has to satisfy the rule the guard enforces: image_tokens >= vision.max_tokens + 2.
+    # piece_tokens charges image_tokens for the WHOLE marker region, so the two special tokens that stay in the
+    # prompt around the expansion (<|vision_start|>, <|vision_end|>) are inside this number. Strata's GPU default
+    # clamp is vision.max_tokens=1024, which therefore needs 1026: the old 1024 under-reserved 2 tokens per picture.
+    image_tokens: int = 1026
     reasoning_last_turn_only: bool = False  # template Strata: preserve_thinking indefinito => tiene tutto
     # salvataggio/ripristino automatico del segmento attivo (AUTOSAVE-RESULT.md)
     autosave: bool = False          # salva lo stato di Strata quando la conversazione che lo occupa resta ferma
@@ -334,7 +338,15 @@ class Config:
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
         names = {f.name for f in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names})
+        cfg = cls(**{k: v for k, v in d.items() if k in names})
+        # Un limite per le immagini che non limita nulla è un errore di battitura, non una scelta: si scoprirebbe
+        # solo con un prompt oltre la finestra. Si rifiuta già all'assemblaggio della configurazione (0 resta lecito,
+        # significa « immagini fuori»: il guard le rifiuta e l'avvio lo scrive dove tutti lo vedono).
+        it = cfg.image_tokens
+        if isinstance(it, bool) or not isinstance(it, int) or it < 0:
+            raise ValueError("image_tokens must be a non-negative integer (tokens charged for one picture: >= the "
+                             "engine's vision.max_tokens + 2), got %r" % (it,))
+        return cfg
 
 
 def H(*parts: str) -> str:
@@ -361,9 +373,9 @@ def content_text(content) -> str:
             if t in ("text", "input_text", "output_text"):
                 out.append(p.get("text") or "")
             elif t in ("image_url", "input_image", "image"):
-                url = p.get("image_url")
-                url = url.get("url") if isinstance(url, dict) else (url or p.get("data") or "")
-                out.append("<immagine:%s>" % H(str(url))[:16])
+                # The same extraction the render side uses (render.image_source): the archive row and a receipt's
+                # <immagine:..> have to name the same picture, one value read in one place.
+                out.append("<immagine:%s>" % H(str(image_source(p)))[:16])
     return "\n".join(out)
 
 
@@ -1151,7 +1163,9 @@ class Manager:
                         per[i] += n
                 total = fixed + sum(per)
                 if self.tc.prompt_template is not None:
-                    total = self.tc.raw(self.tc.prompt_template.render(msgs, tools, self.kw))
+                    # Il template del pack scrive un marcatore visivo per immagine: piece_tokens le assegna il
+                    # tetto cfg.image_tokens (il numero vero di token lo conosce solo il motore, a richiesta inviata).
+                    total = self.piece_tokens(self.tc.prompt_template.render(msgs, tools, self.kw))
                 return total, per
             except ValueError:
                 pass
@@ -1229,8 +1243,14 @@ class Manager:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
                 res = content_text(msgs[i].get("content"))
-                m = {**m, "content": call_note_text(name, path, rid, res, self.rn, self.lang) +
-                     (c0 if isinstance(c0, str) else content_text(c0))}
+                note = call_note_text(name, path, rid, res, self.rn, self.lang)
+                if isinstance(c0, str) or not n_images(c0):
+                    m = {**m, "content": note + (c0 if isinstance(c0, str) else content_text(c0))}
+                else:
+                    # La nota si antepone come parte di testo, le parti restano. Accorciare gli argomenti
+                    # di una chiamata non e' un motivo per togliere un'immagine promessa al motore (content_text
+                    # qui lascerebbe solo il suo segnaposto <immagine:hash>).
+                    m = {**m, "content": [{"type": "text", "text": note}] + list(c0)}
             tk = masks.get(hs[i] + THINK_SUFFIX)
             if tk and m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str):
                 # fix live 4/10: niente segnaposto nel ragionamento (il modello lo imitava al posto di ragionare);
@@ -1251,8 +1271,8 @@ class Manager:
             if strip and m.get("role") == "assistant":
                 m = dict(m)
                 c = content_text(m.get("content"))
-                if strip["strip_content"] and c.startswith(strip["strip_content"]):
-                    m["content"] = c[len(strip["strip_content"]):]
+                if strip["strip_content"] and c.startswith(strip["strip_content"]) and not n_images(m.get("content")):
+                    m["content"] = c[len(strip["strip_content"]):]   # con immagini dentro non si srotola: si paga il prefisso
                 r = m.get("reasoning_content")
                 if strip["strip_reasoning"] and isinstance(r, str) and r.startswith(strip["strip_reasoning"]):
                     m["reasoning_content"] = r[len(strip["strip_reasoning"]):]
@@ -2162,10 +2182,13 @@ class Manager:
                 events.append(self.journal.log("save", conv=conv, file=fn, ms=round((time.time() - t0) * 1000),
                                                result=r))
                 if cfg.data_dir:
-                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso)
+                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso);
+                    # le immagini ci vanno come segnaposto con hash, non come base64. Il payload si costruisce
+                    # prima di aprire il file: un errore non deve mai lasciarli troncato a zero byte.
+                    side = {"conv": conv, "seg": seg, "file": fn, "messages": redact_images(phys),
+                            "tools": tools, "params": params}
                     with open(os.path.join(cfg.data_dir, fn + ".json"), "w", encoding="utf-8") as f:
-                        json.dump({"conv": conv, "seg": seg, "file": fn, "messages": phys, "tools": tools,
-                                   "params": params}, f, ensure_ascii=False)
+                        json.dump(side, f, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001
                 events.append(self.journal.log("save_error", conv=conv, file=fn, error=str(e)[:300]))
         # 3) B = system + tool + [note + indice] + coda
@@ -2635,6 +2658,13 @@ class Manager:
         params = {k: v for k, v in req.items() if k not in ("messages", "tools", "stream", "stream_options",
                                                              "max_tokens", "max_completion_tokens", "n",
                                                              "tool_choice")}
+        if volatile_pictures(phys):
+            # Un'immagine da fuori (url, percorso) può cambiare contenuto sotto lo stesso nome, e il prefisso fisico
+            # la hasherebbe uguale: il KV ripristinato sarebbe l'embedding di un'altra immagine. Meglio rifare il
+            # prompt intero che riattivare uno stato di cui non si può garantire l'identità (i data: URI, che
+            # portano i byte con sé, continuano a essere ancorati).
+            events.append(self.journal.log("anchor_skip", conv=conv, seg=seg, reason="volatile_picture"))
+            return events
         old = self.store.anchor(conv, seg)
         t0 = time.time()
         if old:

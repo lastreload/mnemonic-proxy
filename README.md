@@ -494,8 +494,54 @@ With `--tokenizer`, the final guard and planning total now load an adjacent `cha
 (from the pack directory, or beside a supplied HF tokenizer file). This matters for fine-tunes such as Tiel:
 its Sharp template adds instructions and tool-error warnings that the built-in Qwen renderer does not write.
 Install/update `mnemonic-proxy[exact]` for both the tokenizer and sandboxed Jinja renderer. A discovered template
-that cannot load or render is never silently replaced by the built-in one. Current pack-template counting is
-text-only: image requests are refused locally rather than claiming to know dynamic image patch counts.
+that cannot load or render is never silently replaced by the built-in one. Pictures are forwarded to the engine and
+budgeted, not refused: the template writes one vision marker per picture (never its bytes), and the guard counts each
+marker as `image_tokens` tokens. That number is an **upper bound**, and it has to be: no engine reports the real
+patch count before the request (Strata has no `/tokenize`, and its `/v1/messages/count_tokens` counts the marker
+alone). The rule is **`image_tokens >= vision.max_tokens + 2`**: the reader clamps one picture's expansion to
+`vision.max_tokens` (Strata's `vision.max_tokens`, 1024 on GPU and 300 on CPU by default; without it a picture once
+became 93,700 tokens), while the marker itself is three special tokens of which two - `<|vision_start|>` and
+`<|vision_end|>` - stay in the prompt around the expansion the allowance replaces. So a pack clamped to 300 needs
+**302**, and Strata's GPU default clamp of 1024 needs **1026** - which is the shipped default; a round 1120 is the
+same rule with a little free headroom. An over-reservation costs a little context, an under-reservation would send a
+prompt over the window.
+`image_tokens` has to be a non-negative integer (config load rejects anything else), and a request that carries a
+picture while the bound is `0` is refused with `image_tokens=0` in its message: a picture cannot be priced at
+nothing, and the startup line says the same before the first request.
+
+Everything else about pictures is fail-closed, because a counted prompt that is not the prompt the engine builds is
+a window nobody can guarantee. The markers the template wrote must be exactly the pictures being priced - a template
+without a vision branch (a fine-tune that prints `content` as text) cannot serve pictures and is refused, never
+tolerated. A picture in a `system` message is refused: Strata hands that message its text parts and the pack template
+raises on its images, so its bytes would never reach the model. A picture with no readable source (a `file_id`, an
+empty url) is refused instead of turning into an empty image, and a picture carried under a content type the adapter
+does not read is refused instead of disappearing from the prompt. Video and audio parts stay refused: no supported
+engine reads them, so their marker would have no honest budget. `window_guard` events for a prompt with pictures
+carry `guarantee=image_bounded` with `images` and `image_allowance`, text-only prompts keep `guarantee=exact` and
+their journal lines are byte-identical to before, and a refusal carries the reason in its 400 message. The structural
+part of that holds on the estimated path too: without a tokenizer the count is only `guarantee=estimated`, but a
+picture the adapter would not read is still a lost turn, so it is refused there as well.
+
+A marker **quoted in text** is not a picture. Someone pasting `<|vision_start|><|image_pad|><|vision_end|>` into a
+message - asking about the template, or pasting a log - puts the real spelling of the marker in the prompt, and
+Strata shields such spellings instead of reading a picture (#28). The guard subtracts quoted spellings before it
+checks markers against pictures and before it prices them (their characters stay reserved as literal slack), and the
+saved-state stamp counts only pictures, so a quote cannot steal a picture's identity. The quote still changes the
+prompt's identity: it is part of the prompt.
+
+Picture bytes never reach disk. `live_dump` and the KV sidecar name a picture by hash the way the journal does, and
+they fold a `data:` URI or a long base64 run found inside *text* too - a tool result that prints a screenshot used to
+write megabytes of base64 into `live/last_request.json`. The prompt forwarded to the engine is not folded: the
+picture gets there whole.
+
+Engine state (autosave checkpoints, masking anchors) is keyed by the prompt's hash, so a picture joins that identity
+only where the proxy can name its bytes: a `data:` URI is hashed by content and stamped at the marker the template
+wrote, so the same text with another picture is a different state and can never be restored under the previous
+image's embeddings. A picture referenced from *outside* the prompt - an `http(s)` url or a file path - can hold
+different bytes on the next turn under the same name, so a prompt carrying one records no state, restores none and
+seals no anchor (`anchor_skip reason=volatile_picture`); its tokens are budgeted the same way. Send `data:` URIs
+(OpenCode does) when a conversation should keep its state reuse. The proxy cannot make the *engine's* own prefix
+cache safe for a url whose content changed under the same pad count - a second reason to prefer `data:`.
 Without that file, the historical built-in Qwen rendering remains (`template=builtin-qwen` at startup);
 use it only with a matching server template. Per-message planning costs remain Qwen approximations; the full
 pack-rendered total and final guard are what enforce the window.
@@ -1468,6 +1514,7 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 |---|---|---|---|
 | `window` | 131072 | physical context of the engine (llama-server, ds4, Strata, Ollama, LM Studio: taken from the engine if unset; Ollama / LM Studio: a bigger value refuses the start) | 131072 |
 | `window_margin`, `window_estimate_slack` | 64, 0 (0.15 on generic engines without `--tokenizer`) | window guard: tokens kept free; inflation of the estimated prompt count | default |
+| `image_tokens` | 1026 | tokens charged for **one picture**: the guard budgets each vision marker with this upper bound, because the engine expands it afterwards and reports the real number only in `usage.prompt_tokens`. Must satisfy `image_tokens >= vision.max_tokens + 2` (two of the marker's three special tokens stay in the prompt). A non-negative integer, checked when the configuration is loaded; `0` means "no pictures": a request carrying one is refused, and the startup says so | `vision.max_tokens` + 2 (Strata clamp 300 → **302**; the default 1026 covers the GPU clamp of 1024) |
 | `mask_trigger` / `mask_target` | 80000 / 40000 | start a masking block above trigger, mask oldest-first down to target | default |
 | `min_batch_tokens` | 16000 | a block runs only if it frees at least this much | default |
 | `keep_recent_tokens` / `min_age_turns` | 16000 / 2 | protected tail, never masked | default |
@@ -1601,7 +1648,7 @@ measurements, and changing them is rarely necessary.
 | `auto_recall_hint_k` | 5 | candidates named in a hint (`auto_recall_hint`) |
 | `chars_per_token` | 3.5 | characters per token when there is no tokenizer |
 | `msg_overhead` | 6 | tokens the chat template adds per message |
-| `image_tokens` | 1024 | tokens assumed for one image |
+| `image_tokens` | 1026 | tokens assumed for one image (`vision.max_tokens` + 2) |
 | `reasoning_last_turn_only` | false | Strata template: keep only the last turn's reasoning |
 | `autosave_min_tokens` | 16384 | below this a re-read is cheaper than a state file: no save |
 | `autosave_min_free_gb` | 8.0 | no save when the slot disk has less free space than this |
@@ -1666,8 +1713,8 @@ alone and the proxy uses `history_recall` (or `load_tools`) instead.
   no other network access. The dashboard and the MCP server bind to `127.0.0.1` and are read-only.
 - **The archive is plaintext.** `data/archive.sqlite` holds everything the agent saw — file contents, command
   outputs, reasoning — secrets included. `data/journal.jsonl` holds request metadata and recall queries;
-  `data/live/last_request.json` (with `live_dump`) the whole last prompt. Saved engine state files (`slot_dir`) and
-  `kv-archive/` hold the conversation's tokens.
+  `data/live/last_request.json` (with `live_dump`) the whole last prompt - pictures named by hash, never as base64.
+  Saved engine state files (`slot_dir`) and `kv-archive/` hold the conversation's tokens.
 - The proxy binds to `127.0.0.1` by default and has no authentication; do not expose it (`--host`) on a shared
   network. The MCP server's HTTP mode also binds to `127.0.0.1`.
 - Protect the folders: `chmod 700 ./data /path/to/slots`.

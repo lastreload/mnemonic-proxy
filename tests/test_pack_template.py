@@ -81,10 +81,25 @@ class PackTemplateTests(unittest.TestCase):
         rendered = self.tc.prompt_template.render(body['messages'], None, {})
         self.assertIn('{"x": "hello"}', rendered)
 
-    def test_images_fail_closed_in_pack_template_mode(self):
-        body = {'messages':[{'role':'user','content':[{'type':'image_url','image_url':{'url':'x'}}]}]}
+    def test_a_template_without_a_vision_branch_refuses_pictures(self):
+        # A picture is forwarded and its marker budgeted - but only to a template that writes one.
+        # This fixture has no vision branch: printing m.content would hand the engine the base64 as text and the
+        # guard would price tokens that are not in the prompt, so the contract refuses the request (the templates
+        # that do write a marker are covered by tests/test_vision_real_template.py and test_vision_passthrough.py).
+        body = {'messages': [{'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': 'x'}}]}],
+                'max_tokens': 20}
+        with self.assertRaises(WindowExceeded) as ctx:
+            self.g.enforce(body)
+        self.assertIn('vision marker', str(ctx.exception))
+        self.assertEqual(self.g.count_errors, 1)
+
+    def test_video_still_fails_closed(self):
+        # No engine reads video: its marker would cost tokens nobody budgeted, so the guard still refuses.
+        body = {'messages': [{'role': 'user', 'content': [{'type': 'video_url', 'video_url': {'url': 'x'}}]}],
+                'max_tokens': 20}
         with self.assertRaises(WindowExceeded):
             self.g.enforce(body)
+        self.assertEqual(self.g.count_errors, 1)
 
 
 class LabelTests(unittest.TestCase):
