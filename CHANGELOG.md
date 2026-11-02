@@ -2,6 +2,34 @@
 
 ## 0.3.23 — unreleased
 
+- **The proxy no longer re-delivers a client's out-of-band message (issue #61).** Reported by @akohlsmith with
+  Hermes over Slack: a mid-turn steering message he sent **once** ("there is no vision model running on port
+  8080; the proxy is 8001 …") reached the model **5+ times**, in new positions, sometimes after a segment
+  change, while Hermes' own session database held exactly one copy of it. The model kept acknowledging the
+  rule because every copy still looked like a fresh delivery.
+  - **Why.** Hermes delivers a `/steer` as a standalone `role:"user"` message wrapped in a frame the model is
+    told to trust: `[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this
+    position; …] … [/OUT-OF-BAND USER MESSAGE]` (`agent/prompt_builder.py`, `steer_user_row`). The proxy
+    re-presents archived text at **new** positions — handoff notes (the notes instruction asks the model for
+    the user's constraints "almost verbatim", so a compliant model copies the frame too), `keep_first_user`'s
+    *First user request (verbatim)*, the 📌 pinned-points block, automatic recall pieces, a `recall` result —
+    and the frame came along intact. Three of those blocks are themselves `role:"user"` messages, so the copy
+    was indistinguishable from the real thing. With `auto_recall: true` the same frame appeared **twice in one
+    physical prompt**; with the default configuration it appeared once per prompt but moved to a new position
+    at every segment change, which is the same thing seen one turn at a time.
+  - **Fix** (`core.quote_control_frames`, pure and idempotent): in every copy the proxy itself writes, a
+    client control frame is relabelled — `[OUT-OF-BAND USER MESSAGE …]` becomes
+    `[quoted OUT-OF-BAND USER MESSAGE …]`, `[/OUT-OF-BAND USER MESSAGE]` becomes
+    `[quoted /OUT-OF-BAND USER MESSAGE]`. Same words, whole text, visibly a quotation. This is the convention
+    Hermes itself uses when it republishes model text as `role=user` (`[member-quoted …]`). Also covered:
+    `CONTEXT COMPACTION`, `CONTEXT SUMMARY`, `PRIOR CONTEXT`.
+  - **The real delivery is never touched**: in its own place in the conversation the user's message stays byte
+    for byte what the client sent. Existing conversations keep their prefix: notes, pinned-points blocks and
+    automatic-recall insertions are stored when they are built, and stored text is replayed unchanged — only
+    newly built blocks carry the new label. Masked tool-output placeholders and receipts are deliberately left
+    alone, because recomputing them would change the prefix of every live conversation.
+  - Tests: `tests/test_issue61_steer_echo.py` (notes, verbatim first request, pinned points, automatic recall,
+    `recall` result, and the invariant "at most one intact frame per physical prompt").
 - **The first run of a new user, fixed where it actually broke.** A trial of the README by a fresh user on a
   clean machine (`docs/dev-notes/README-NEWUSER-RESULT.md`) got stuck before the proxy ever ran. Eight frictions,
   all of them now closed; `main` also reports its version as `0.3.23.dev0` instead of claiming to be the last

@@ -235,6 +235,13 @@ Archived content stays verbatim; the model writes handoff notes at segment switc
 3. **Segment — handoff notes.** When even the masked window fills up, the model writes its own notes, the segment is
    sealed and a fresh one starts. Pinned lines (`!!` or `📌`) survive every switch; lines starting with `🗑` (or `~`)
    mark a message as disposable once answered.
+   *A copy is labelled a copy.* Several of these blocks — handoff notes, the verbatim first request, the 📌 block,
+   an automatic-recall insertion — are themselves `role:"user"` messages, so a client's own control frame carried
+   inside them would read as a fresh delivery. Clients mark out-of-band messages with frames the model is told to
+   trust (Hermes: `[OUT-OF-BAND USER MESSAGE … delivered once at this position] … [/OUT-OF-BAND USER MESSAGE]`);
+   in every copy the proxy writes, such a frame is relabelled `[quoted OUT-OF-BAND USER MESSAGE …]` — same words,
+   whole text, visibly a quotation. The message the client actually delivered stays byte for byte as it was, in its
+   own place (issue #61).
 4. **Save — engine state on disk.** On engines that support it (llama-server, Strata with session files) the KV
    state is saved to disk: resuming after a pause, a restart or another client takes 1–3 s instead of a full
    re-read.

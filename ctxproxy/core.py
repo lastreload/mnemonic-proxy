@@ -535,6 +535,34 @@ def is_human_user(m: dict) -> bool:
     return not (t.startswith("<tool_response>") and t.endswith("</tool_response>"))
 
 
+# ---------- control frames of the client in re-presented text (issue #61) ----------
+# A client can wrap a message in a frame the model is instructed to TRUST. Hermes' mid-turn steering is a
+# standalone role:"user" message wrapped in
+#   [OUT-OF-BAND USER MESSAGE - a direct message from the user, delivered once at this position; ...]
+#   ...
+#   [/OUT-OF-BAND USER MESSAGE]
+# (agent/prompt_builder.py: STEER_MARKER_OPEN / steer_user_row). When the proxy RE-PRESENTS that text at a
+# NEW position - automatic recall, pinned points, the verbatim first request, the handoff notes, a recall
+# result - the frame comes along intact, so the model reads the quotation as a FRESH delivery of the same
+# instruction and keeps answering it (issue #61: "delivered once, arrived 5+ times").
+# Fix: relabel the frame in every copy the proxy itself writes. Same words, visibly a quotation; the real
+# delivery, in its own place in the conversation, is never touched. This is the convention Hermes uses when
+# it republishes model text as role=user ("[member-quoted OUT-OF-BAND USER MESSAGE").
+CONTROL_FRAME_NAMES = ("OUT-OF-BAND USER MESSAGE", "CONTEXT COMPACTION", "CONTEXT SUMMARY", "PRIOR CONTEXT")
+QUOTED_PREFIX = "quoted "
+_CONTROL_FRAME_RE = re.compile(r"\[(?!%s)(/?)(%s)" % (re.escape(QUOTED_PREFIX),
+                                                      "|".join(re.escape(n) for n in CONTROL_FRAME_NAMES)))
+
+
+def quote_control_frames(text: str) -> str:
+    """Rietichetta i marcatori di controllo del client in un testo che il proxy RIPRESENTA in una posizione
+    nuova: «[OUT-OF-BAND USER MESSAGE …]» -> «[quoted OUT-OF-BAND USER MESSAGE …]». Pura e idempotente;
+    il testo resta leggibile per intero, cambia solo l'etichetta della cornice."""
+    if not isinstance(text, str) or "[" not in text:
+        return text
+    return _CONTROL_FRAME_RE.sub(lambda m: "[%s%s%s" % (QUOTED_PREFIX, m.group(1), m.group(2)), text)
+
+
 # ---------- 📌 punti fermi / 🗑 usa e getta (NEXT.md 11-12) ----------
 _PIN_LINE = re.compile(r"^[ \t]*(?:\U0001F4CC|!!)[ \t]*(.+)$", re.M)
 _PIN_BLOCK = re.compile(r"\[\[importante\]\](.*?)\[\[/importante\]\]", re.S | re.I)
@@ -1765,6 +1793,7 @@ class Manager:
             low = content.lower()
             p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
             s = content[max(0, p - 300):p + 2400]
+            s = quote_control_frames(s)      # issue #61: la copia non deve sembrare una consegna nuova
             what = whatmap.get(role, role)
             b = "\n--- id=%s · %s %d (%s) · %d token%s%s\n" % (
                 rid, self.L("messaggio", "message"), idx + 1, what, tokens, self.L("", "s"),
@@ -2208,8 +2237,8 @@ class Manager:
                                                "## Archive index (most recent first)",
                                                "The conversation continues below.")
         if cfg.keep_first_user and first_user is not None and msgs.index(first_user) < c:
-            parts += ["", h_first, self._image_note(content_text(first_user.get("content")))]
-        parts += ["", h_notes, notes]
+            parts += ["", h_first, quote_control_frames(self._image_note(content_text(first_user.get("content"))))]
+        parts += ["", h_notes, quote_control_frames(notes)]
         idx = self.archive_index(msgs, c, conv)
         if idx:
             parts += ["", h_index, idx]
@@ -2234,7 +2263,7 @@ class Manager:
             return None, None
         lines, used, dropped = [], 0, 0
         for pid, idx, text, _, _ in reversed(rows):
-            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, text)
+            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, quote_control_frames(text))
             t = self.tc.count(line)
             if used + t > self.cfg.pins_max_tokens:
                 dropped += 1
@@ -2397,6 +2426,10 @@ class Manager:
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
+        return quote_control_frames(self._recall(conv, args, max_idx, meta, max_tokens))
+
+    def _recall(self, conv: str, args: dict, max_idx, meta, max_tokens) -> str:
+        """Scelta del motore di recall (il risultato passa da quote_control_frames in `recall`)."""
         if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
             if getattr(self, "_recall2", None) is None:
                 from .recall2 import Recall2
