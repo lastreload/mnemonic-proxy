@@ -380,32 +380,68 @@ class TestEnginePromptUnchanged(Base):
 
 
 class TestCost(Base):
-    def test_cost_is_negligible(self):
-        """Misura, non promessa: 200 richieste con l'evento acceso contro 200 con l'evento spento."""
+    """Il costo si MISURA, ma non si trasforma in un cancello a tempo: su un esecutore condiviso l'orologio non è
+    una prova (lo stesso codice ha fatto 2,2 s e 3,8 s sulla stessa macchina). I cancelli qui sono due fatti
+    deterministici — quante volte la riga viene COSTRUITA e quanto è grande — e i tempi si stampano, nient'altro.
+    """
+
+    def test_the_line_is_built_once_not_per_request(self):
         reqs = [self.req(n) for n in range(2, 52)] * 4
+        import ctxproxy.core as core_mod
+        calls = []
+        real = core_mod.prompt_head
+
+        def counted(*a, **k):
+            calls.append(1)
+            return real(*a, **k)
+
         on, off = self.mk(), self.mk(journal_tool_heads=False)
+        core_mod.prompt_head = counted
+        try:
+            t0 = time.perf_counter()
+            for r in reqs:
+                on.prepare(copy.deepcopy(r))
+            with_ev = time.perf_counter() - t0
+        finally:
+            core_mod.prompt_head = real
         t0 = time.perf_counter()
         for r in reqs:
             off.prepare(copy.deepcopy(r))
         base = time.perf_counter() - t0
-        t0 = time.perf_counter()
-        for r in reqs:
-            on.prepare(copy.deepcopy(r))
-        with_ev = time.perf_counter() - t0
         n = len(self.heads(on))
         size = len(json.dumps(self.heads(on)[0], ensure_ascii=False))
-        print("\n[tool_heads] %d richieste, %d eventi, %d byte/evento, %.3fs -> %.3fs (%+.1f%%)"
-              % (len(reqs), n, size, base, with_ev, 100 * (with_ev - base) / base))
+        print("\n[tool_heads] %d richieste, %d eventi, %d costruzioni, %d byte/evento, "
+              "%.3fs senza -> %.3fs con (solo informativo)" % (len(reqs), n, len(calls), size, base, with_ev))
         self.assertEqual(n, 1, "un evento su %d richieste" % len(reqs))
+        self.assertEqual(len(calls), 1, "la testa viene letta e contata una volta sola, non a ogni richiesta")
         self.assertLess(size, 600)
-        self.assertLess(with_ev - base, 0.5 * base + 0.2)
+
+    def test_the_fast_path_only_fingerprints(self):
+        """Nel caso normale (elenco invariato) il metodo esce prima di leggere la testa: nessuna lettura, nessun
+        conteggio di token, nessuna riga."""
+        mgr = self.mk()
+        p = mgr.prepare(self.req(2))
+        before = len(mgr.journal.mem)
+        import ctxproxy.core as core_mod
+        real = core_mod.prompt_head
+
+        def boom(*a, **k):
+            raise AssertionError("la scorciatoia non deve leggere la testa")
+
+        core_mod.prompt_head = boom
+        try:
+            for _ in range(50):
+                self.assertIsNone(mgr.tool_heads(p.conv, p.messages, p.tools))
+        finally:
+            core_mod.prompt_head = real
+        self.assertEqual(len(mgr.journal.mem), before)
 
 
 # ----------------------------------------------------------------- perché in produzione il pager è muto
 class TestPagerSilence(Base):
     """Punto 3 della card.
 
-    Una riga: `ToolPager.split` (paging.py:79-87) e il suo punto d'uso (core.py:1408-1414) non scrivono NIENTE nel
+    Una riga: `ToolPager.split` (paging.py:79-87) e il suo punto d'uso (core.py:1448-1457) non scrivono NIENTE nel
     giornale — gli unici eventi del pager, `tools_search` e `tool_not_loaded`, nascono in server.py solo quando il
     MODELLO chiama `tools` o uno strumento non caricato — quindi un giornale senza quegli eventi non distingue
     «pager mai entrato in funzione» da «pager attivo e modello che non ha mai toccato il catalogo».
