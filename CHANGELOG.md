@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.24 — unreleased
+
 ## 0.3.23 — 2026-11-02
 
 - **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
