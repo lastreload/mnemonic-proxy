@@ -354,7 +354,7 @@ class EstimatedPathTests(unittest.TestCase):
         added the reserve to the estimate would still look correct here, and would send a prompt over the window. So
         the test compares two budgets and the room the client is given.
 
-        Measured shape (window 8000, image_tokens 1024): one picture costs the bound **plus the fixed per-message
+        Measured shape (window 8000, the default image_tokens): one picture costs the bound **plus the fixed per-message
         overhead**, and a bigger payload costs nothing more - the estimate prices the picture by the bound, never by
         the size of its base64."""
         plain = self.g.count([{'role': 'user', 'content': parts(text('guarda'))}], None)
@@ -492,7 +492,14 @@ class PictureBudgetConfigTests(unittest.TestCase):
         cfg = Config.from_dict({"window": 8000, "image_tokens": 0})
         self.assertEqual(cfg.image_tokens, 0)                   # legal: it says 'no pictures', the guard enforces it
         self.assertEqual(Config.from_dict({"window": 8000, "image_tokens": 302}).image_tokens, 302)
-        self.assertEqual(Config().image_tokens, 1024)           # the default still bounds the engine's GPU clamp
+        self.assertEqual(Config().image_tokens, 1026)           # the default bounds the engine's GPU clamp (1024 + 2)
+
+    def test_the_default_satisfies_the_rule_it_documents(self):
+        """The default is the bound for Strata's GPU clamp, and the rule is `>= vision.max_tokens + 2`: the marker's
+        two surviving special tokens are inside the number piece_tokens charges, so a default equal to the clamp
+        would under-reserve two tokens per picture - the one direction the guard may never take."""
+        gpu_clamp = 1024                                        # Strata's default vision.max_tokens on GPU
+        self.assertGreaterEqual(Config().image_tokens, gpu_clamp + 2)
 
     def test_the_default_config_bounds_a_picture(self):
         self.assertGreater(Config().image_tokens, 0)

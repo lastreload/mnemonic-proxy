@@ -259,7 +259,11 @@ class Config:
     # stima token
     chars_per_token: float = 3.5
     msg_overhead: int = 6
-    image_tokens: int = 1024
+    # One picture's bill, and it has to satisfy the rule the guard enforces: image_tokens >= vision.max_tokens + 2.
+    # piece_tokens charges image_tokens for the WHOLE marker region, so the two special tokens that stay in the
+    # prompt around the expansion (<|vision_start|>, <|vision_end|>) are inside this number. Strata's GPU default
+    # clamp is vision.max_tokens=1024, which therefore needs 1026: the old 1024 under-reserved 2 tokens per picture.
+    image_tokens: int = 1026
     reasoning_last_turn_only: bool = False  # template Strata: preserve_thinking indefinito => tiene tutto
     # salvataggio/ripristino automatico del segmento attivo (AUTOSAVE-RESULT.md)
     autosave: bool = False          # salva lo stato di Strata quando la conversazione che lo occupa resta ferma
