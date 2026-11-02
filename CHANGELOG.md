@@ -2,6 +2,17 @@
 
 ## 0.3.24 — unreleased
 
+- **A version string is not a protocol: llama-swap gateways are no longer taken for Ollama.** A gateway that
+  exposes `GET /api/version` but answers HTTP 404 to `GET /api/ps` was identified as Ollama, reported "no model
+  loaded" and suggested `ollama run`. Recognition now requires both the version answer and a coherent `/api/ps`
+  models array (an empty array is valid: no model loaded); an unsupported, failed or malformed answer leaves the
+  engine generic instead of empty. `check` now distinguishes an empty runtime list, unavailable runtime metadata
+  and a loaded model whose context is not reported, uses the runtime metadata — never the `/v1/models` catalog —
+  as loaded-state evidence for Ollama and LM Studio, and reports a generic gateway's catalog as model
+  availability with the loaded state unverified. A generic window is labelled unverified whether it comes from
+  the config or from the default: the proxy cannot discover a gateway's per-model contexts. The minimum-window
+  and known-context mismatch guards are unchanged.
+
 ## 0.3.23 — 2026-11-02
 
 - **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
