@@ -538,8 +538,11 @@ def _live(rep, up, eng, cfg):
 
 
 def _reminder(rep):
+    # One line, every client the README documents a switch for. Hermes' key is `compression.enabled`
+    # (`hermes config set compression.enabled false`), not `compaction.*`: see docs/hermes-agent.md.
     rep.add(INFO, "client", "turn off the client's own auto-compaction (pi: \"compaction\": {\"enabled\": false}; "
-            "Claude Code: DISABLE_AUTO_COMPACT=1), otherwise two context managers fight over the same history")
+            "opencode: \"compaction\": {\"auto\": false}; Claude Code: DISABLE_AUTO_COMPACT=1; "
+            "Hermes: compression.enabled false), otherwise two context managers fight over the same history")
 
 
 def render(rep: Report, out=None, explain: bool = False):

@@ -205,6 +205,7 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
 | agent | point it at | turn off | setup |
 |---|---|---|---|
 | pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
+| opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
 | Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](docs/hermes-agent.md) |
 | Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
@@ -951,7 +952,8 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
 | `check`: engine detected as `openai` | llama-server too old, or another engine | saved state needs llama-server with `--slot-save-path`, or Strata ≥ 0.1.40 with `--slot-save-path`; everything else works |
 | Strata has no saved state | Strata older than 0.1.40, or started without `--slot-save-path` | optional: base mode keeps working. For the fast resume, update to Strata ≥ 0.1.40 and start it with `--slot-save-path DIR` |
 | `check`: `slot_dir … does not exist and the proxy could not create it` | the path is not writable by the user running the proxy | run the `mkdir` command the message prints, or point `slot_dir` at a writable folder (the engine's `--slot-save-path`) |
-| answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Codex: [threshold](#codex-openai-responses) |
+| answers get shorter and shorter / summaries appear in the history | the client's own compaction is on as well | turn it off: pi `"compaction": {"enabled": false}`, opencode `"compaction": {"auto": false}`, Claude Code `DISABLE_AUTO_COMPACT=1`, Hermes `compression.enabled: false`, Codex: [threshold](#codex-openai-responses) |
+| Windows: `\u27ea` in the output of `demo` / `check`, or `?` where `·` `—` `«»` should be | before 0.3.24 a non-UTF-8 console got `errors="backslashreplace"` | fixed in 0.3.24: on a console that is not UTF-8 the proxy prints ASCII stand-ins (`<<`, `>>`, `--`). Nothing sent to the engine or written to disk changes; `chcp 65001` (UTF-8) brings the real characters back |
 | Codex: `wire_api = "chat"` rejected | Codex ≥ 0.160 only speaks the Responses API | `wire_api = "responses"` |
 | `kv_archive` refused | needs Python ≥ 3.14 (`compression.zstd`) | Python 3.14, or leave `kv_archive` off (default) |
 
@@ -986,6 +988,12 @@ Start with `mnemonic-proxy check` (add `--live` to exercise the engine): every f
   `kv_archive` round trip.
   Not tested: real agents (pi, Claude Code, Codex) on Windows, GPU builds, the dashboard. `sha256sum` is
   `Get-FileHash -Algorithm SHA256`.
+  **Console**: a PowerShell window whose code page is not UTF-8 cannot carry the characters the proxy prints
+  (`⟪ ⟫ · — «»`). Since 0.3.24 the commands detect it and print ASCII stand-ins instead (`<<ctx-archive id=… -
+  output of bash …>>`, `--`, `"…"`), so the report stays readable and nothing arrives mangled; accents in paths are
+  folded (`Projet par défaut` -> `Projet par defaut`). `chcp 65001` before running the command brings the real
+  characters back. This is the console view only: the text sent to the engine, the archive, the journal and
+  `last_request.json` are byte for byte the same on every platform.
 - **Windows, WSL 2**: follow the Linux commands inside WSL. Keep the engine, the proxy and the `slots` folder all
   inside WSL, so that `slot_dir` and `--slot-save-path` are the same path. Not yet tested.
 - **Android (Termux)** (0.3.8; tested in Waydroid 1.6.2 on Linux — Android 13, x86_64 — with Termux 0.118.3 and its
@@ -1570,7 +1578,7 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 | `recall_leaf_select` | false | on structured outputs (yaml/toml (Python ≥ 3.11)/xml/json, tables, diffs, logs, git log, pytest) `recall` returns only the matching record and the key lines of its ancestors, verbatim, with `⋮` markers and offsets for the gaps; falls back to the normal recall when unsure ([dev note](docs/dev-notes/LEAF-SELECT-RESULT.md)) | default (experimental) |
 | `answer_thinking_after_recall`, `answer_thinking_budget` | false, 512 | turn thinking on only for the answer that follows a recall (fixes answers cut in the middle of a value) | default (experimental) |
 | `truncation_guard` | false | replay once, with thinking, a short answer that ends on a prefix of a recalled token | default (experimental) |
-| `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls | tools on demand: only core tools + `recall` + `tools` in the prompt | **true** (opt-in: it changes the prompt) |
+| `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls + read_file/write_file/patch/search_files/terminal | tools on demand: only core tools + `recall` + `tools` in the prompt. The second group is Hermes' base names (0.3.24): without them the whole Hermes tool list went to the catalog and only `recall` and `tools` stayed in the head. A name the client does not have changes nothing | **true** (opt-in: it changes the prompt) |
 | `typed_receipts`, `receipt_guard` | true, true | typed one-line receipts for hidden outputs; block write/edit/shell calls (pi, Claude Code, Codex names) that copy a receipt or the shortened form of an old argument | default |
 | `pins_max_tokens` | 8192 | cap of the carried-over 📌 block | default |
 | `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb`, `autosave_min_free_gb` | false, 180, 10, 25, 8 | save engine state when the conversation is idle (saved state) | **chosen automatically**, 180, 10, 25, 8 |

@@ -157,7 +157,7 @@ def to_chat_messages(system, messages: list) -> list[dict]:
             else:
                 out.append({"role": "user", "content": "[system]\n" + text})
         else:
-            raise BadRequest("%s: ruolo non supportato: %r" % (where, role))
+            raise BadRequest("%s: unsupported role: %r" % (where, role))
     return out
 
 

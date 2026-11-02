@@ -114,7 +114,7 @@ def _regions_v1(buf):
 
     def part(nbytes, kind, block, ts=1):
         if p[0] + nbytes > n:
-            raise KvaError("parte oltre la fine")
+            raise KvaError("part past the end of the file")
         if p[0] > misc_start[0]:
             out.append((misc_start[0], p[0] - misc_start[0], "misc", BIG, 1))
         if nbytes:
@@ -270,7 +270,7 @@ class KvArchive:
 
     def manifest_path(self, name: str) -> str:
         if compat.bad_name(name):
-            raise KvaError("nome non valido: %r" % name)
+            raise KvaError("invalid name: %r" % name)
         return os.path.join(self.root, "manifests", name + ".kva")
 
     class _Lock:
@@ -309,9 +309,9 @@ class KvArchive:
         except FileNotFoundError:
             raise KvaError("no archive for %r" % name) from None
         except ValueError as e:
-            raise CorruptArchive("manifest illeggibile per %r: %s" % (name, e)) from None
+            raise CorruptArchive("unreadable manifest for %r: %s" % (name, e)) from None
         if m.get("version") != VERSION:
-            raise CorruptArchive("versione manifest %r" % m.get("version"))
+            raise CorruptArchive("manifest version %r" % m.get("version"))
         return m
 
     def refcounts(self) -> dict[str, int]:
@@ -497,7 +497,7 @@ class KvArchive:
             i, (h, ln) = a
             raw = self._read_block(i, h, ln)
             if check_hash and bhash(raw) != h:
-                raise CorruptArchive("blocco %d: contenuto diverso dal suo hash %s" % (i, h))
+                raise CorruptArchive("block %d: content does not match its hash %s" % (i, h))
             return raw
         with self._pool() as ex:
             W = self.threads * 4
@@ -824,7 +824,7 @@ def _main(argv=None):
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--level", type=int, default=3)
     ap.add_argument("--codecs", choices=sorted(CODEC_SETS), default="mixed",
-                    help="mixed (di serie) / full (riordino anche K/V) / plain (zstd semplice)")
+                    help="mixed (default) / full (also reorders K/V) / plain (plain zstd)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     a1 = sub.add_parser("archive")
     a1.add_argument("files", nargs="+")

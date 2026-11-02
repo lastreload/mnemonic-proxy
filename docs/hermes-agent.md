@@ -38,7 +38,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 \
   --tokenizer /path/to/model/tokenizer.json
 ```
 
-The startup log should contain `tokens=esatto` rather than an estimated counter.
+The startup log should contain `tokens=exact:` rather than an estimated counter.
 The default proxy window is 131072; set `window` and appropriately scaled
 thresholds in a JSON config if your engine has a smaller window. The proxy's
 window must never be larger than the engine's actual context capacity.
@@ -75,6 +75,15 @@ the engine-facing request and executes those calls internally. Do not register
 a second Hermes tool with that name. A successful proxy recall should not show
 up as an unknown tool in Hermes; a final response containing literal
 `<tool_call>` markup is not a successful final answer.
+
+If you turn the tool pager on (`"tools_paging": true`), check that `tools_core`
+contains Hermes' base names. Since 0.3.24 the defaults do
+(`read_file`, `write_file`, `patch`, `search_files`, `terminal`), so those five
+definitions stay in the prompt head and the rest of Hermes' toolset is loaded on
+demand through the proxy's own `tools` call. With the 0.3.23 defaults
+(`read bash edit write grep find ls`) no Hermes name matched, the whole toolset
+went to the catalog, and every definition the model needed was re-appended at
+the end of the history on each load.
 
 Inspect `GET /v1/strata/journal` or the proxy's `journal.jsonl`. For each
 `request`, compare `reused` with `prompt_tokens`; check masking and recall
