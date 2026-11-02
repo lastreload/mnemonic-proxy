@@ -48,7 +48,7 @@ class TestLock(unittest.TestCase):
 class TestConsole(unittest.TestCase):
     def test_cp1252_stream_gets_ascii_stand_ins(self):
         raw = io.BytesIO()
-        s = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
+        s = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n")
         w = compat.console_safe(s)
         w.write("pin \U0001F4CC drop \U0001F5D1 receipt \u27ea x \u27eb caff\u00e8\n")
         w.flush()
