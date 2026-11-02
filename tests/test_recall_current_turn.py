@@ -229,5 +229,59 @@ class TestSiblingBranchOnTheStructuredPath(Base):
                                                    max_idx=lu2, max_tokens=4000))
 
 
+class TestThroughTheServer(Base):
+    """The whole round trip: the model calls recall on a receipt id in the MIDDLE of its own turn
+    (the last message of the request is a tool result, no new human message), and the proxy must
+    answer with the archived text. This is the path that passes max_idx=last_user in server.py."""
+
+    def setUp(self):
+        super().setUp()
+        from ctxproxy.fake_engine import FakeEngine
+        from ctxproxy.server import Proxy
+        from ctxproxy.upstream import Upstream
+        self.asked: list[str] = []
+        self.eng = FakeEngine(self.policy)
+        url = self.eng.start()
+        cfg = Config.from_dict({"window": 131072, "mask_trigger": 12000, "mask_target": 6000,
+                                "keep_recent_tokens": 3000, "min_mask_tokens": 200, "prompt_language": "en"})
+        self.jpath = os.path.join(self.tmp.name, "j.jsonl")
+        self.proxy = Proxy(cfg, Upstream(url), self.store, Journal(self.jpath), TokenCounter(3.5))
+
+    def tearDown(self):
+        self.eng.stop()
+        super().tearDown()
+
+    def policy(self, body):
+        """First the archive id of a masked output, taken from the prompt the proxy just built; then the answer."""
+        msgs = body["messages"]
+        last = msgs[-1]
+        txt = content_text(last.get("content"))
+        if last.get("role") == "tool" and txt.startswith("[recall"):
+            return {"role": "assistant", "content": "recalled: " + txt.split("\n", 1)[-1][:40]}
+        for m in msgs:
+            for tok in content_text(m.get("content")).replace("=", " ").split():
+                if len(tok) == 13 and tok[0] == "r" and all(c in "0123456789abcdef" for c in tok[1:]):
+                    self.asked.append(tok)
+                    return {"role": "assistant", "content": "",
+                            "tool_calls": [{"id": "rc1", "type": "function",
+                                            "function": {"name": "recall",
+                                                         "arguments": json.dumps({"id": tok})}}]}
+        return {"role": "assistant", "content": "no id in the prompt"}
+
+    def test_recall_in_the_middle_of_the_turn_returns_the_text(self):
+        msgs = single_turn(35)
+        st, r, _ = self.proxy.chat({"model": "m", "messages": msgs, "tools": TOOLS, "max_tokens": 1024})
+        self.assertEqual(st, 200, r)
+        self.assertTrue(self.asked, "the fake model found no archive id in the prompt")
+        with open(self.jpath, encoding="utf-8") as f:
+            ev = [json.loads(x) for x in f]
+        self.assertTrue([e for e in ev if e["event"] == "mask"], "the fixture must mask")
+        rec = [e for e in ev if e["event"] == "recall"]
+        self.assertEqual(len(rec), 1, rec)
+        self.assertTrue(rec[0]["results"], "the recall of the current turn came back empty: %s" % rec[0])
+        answer = r["choices"][0]["message"]["content"]
+        self.assertTrue(answer.startswith("recalled: line "), answer)
+
+
 if __name__ == "__main__":
     unittest.main()

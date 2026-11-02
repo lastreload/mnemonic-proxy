@@ -22,24 +22,32 @@ result, not a human turn), so the reconstruction uses the same definition as the
 
 ## Sources
 
-32 journals: the 0.3.23 production journal (PC4070TI, `/mnt/mneme-nvme/mnemonic-proxy-039/data`) and 31 syntaxis
-measurement sessions. 22 of them contain `recall` or `mask` events.
+136 journals: the 0.3.23 production journal (PC4070TI, `/mnt/mneme-nvme/mnemonic-proxy-039/data`, copied with
+`scp`), 31 syntaxis measurement sessions and the 104 journals of the AgentLongBench bench run
+(`main-run-0319`). `receipts-ab/raw/` holds no proxy journal (320 `.jsonl` files, all driver-side `calls.jsonl` /
+`engine_calls.jsonl`), so it is not measurable.
 
 ## Result
 
-| | all 32 sources | production 0.3.23 |
-|---|---|---|
-| `recall` calls | 213 | 48 |
-| by id | 65 | 32 |
-| **by id, refused by the filter** (`idx >= last_user`) | **32** | **32** |
-| by id, unknown id (invented by the model) | 1 | 0 |
-| by `query` | 140 | 12 |
-| by `query`, empty *only* because the matches were past `last_user` | 1 | 0 |
-| by `path` | 8 | 4 |
-| **by `path`, empty *only* because the operations were past `last_user`** | **4** | **4** |
-| `mask` events | 188 | 51 |
-| of which `emergency=current_tool` | 10 | 10 |
-| masked blocks | 4 356 | 643 |
+| | all 136 sources | production 0.3.23 | AgentLongBench (104) |
+|---|---|---|---|
+| `recall` calls | 490 | 48 | 277 |
+| by id | 205 | 32 | 140 |
+| **by id, refused by the filter** (`idx >= last_user`) | **32** | **32** | **0** |
+| by id, unknown id (invented by the model) | 1 | 0 | 0 |
+| by `query` | 256 | 12 | 116 |
+| by `query`, empty *only* because the matches were past `last_user` | 1 | 0 | 0 |
+| by `path` | 9 | 4 | 1 |
+| **by `path`, empty *only* because the operations were past `last_user`** | **4** | **4** | **0** |
+| `mask` events | 1 440 | 51 | 1 252 |
+| of which `emergency=current_tool` | 122 | 10 | 112 |
+| masked blocks | 7 459 | 643 | 3 103 |
+
+The contrast is the most informative number here. The AgentLongBench driver sends **every round as a new user
+message**, so `last_user` always sits at the end and masked blocks stay below the cut: 140 id calls, 0 refused —
+even though that run has 112 `emergency=current_tool` masks whose receipts were unreachable by construction and
+simply never asked for. The defect belongs to the **single-prompt** shape, which is why it surfaced in production
+and in the Windows user's report and not on the bench.
 
 Every one of the 32 refused id calls comes from the single opencode session the README quotes
 (`cf88233028d5d`, 1 h 32 min, 554 requests). The three turns involved had `last_user` at index 1, 503 and 592; the
@@ -80,6 +88,24 @@ that plain `recall(id=…)` could not resolve for the rest of the turn.
 The filter becomes `(idx < ? OR rid IN cur_chain)` (`core.chain_ok`), `cur_chain` being the archive ids of the
 prefix sent in the current request minus the current question. Re-running the same script against the same
 journals is meaningless — the calls are already recorded — so the fix is held by
-`tests/test_recall_current_turn.py`: 10 tests on a single-prompt agent session, covering ids, the emergency mask,
-`query`, `path`, the structured engine, output/arguments symmetry, the exclusion of the current question and the
-exclusion of an abandoned sibling branch.
+`tests/test_recall_current_turn.py`: 12 tests on a single-prompt agent session, covering ids, the emergency mask,
+`query`, `path`, the structured engine, output/arguments symmetry, the exclusion of the current question, the
+exclusion of an abandoned sibling branch on both paths, and one end-to-end request through `Proxy.chat` where the
+model calls recall in the middle of its own turn. 10 of the 12 fail on `main`.
+
+## Adjacent defects found and NOT fixed here
+
+Listed for separate cards; none of them is the filter this change is about.
+
+- `Recall2._row` and the leaf selector fall back to `store.get(rid)` **without the conversation**, so an id that
+  exists in another conversation of the same archive can resolve. The chain filter does not close this: a foreign
+  row with `idx < max_idx` still passes.
+- The index cut never isolated sibling branches *below* `max_idx` either: an abandoned branch whose blocks sit at
+  low indices was already reachable before this change, and still is. Only the newly admitted region
+  (`idx >= max_idx`) is chain-checked.
+- `mode=output` on an output id answers with a pointer to the arguments id instead of the text, and the arguments
+  path then shortens every linked output to 700 characters (`_short(..., 700)`). Reachability is now correct, but
+  the model still cannot get the verbatim text through `mode=output`; plain `recall(id=…)` is the path that pages
+  the full text.
+- `tests/test_current_tool_emergency.py` calls `mgr.recall` without `max_idx`, so it never exercised the real
+  server call. The new file covers that case; the old test was left as it is.

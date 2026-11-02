@@ -10,12 +10,15 @@
   valid, its text was in the archive, and `recall(id=…)` answered `not found`. It became reachable only when a new
   user message arrived — i.e. once the turn it belonged to was over. The same filter also hid the turn's own
   `query` hits and the turn's `path` timeline.
-  - **Measured on our own journals, after the fact** (31 syntaxis sessions + the 0.3.23 production journal, read
-    only, indices compared against the human message recorded in each `recall` event): of 65 id calls, **32 asked
-    for a block past the last human message and all 32 came from one opencode session** — the one the README
+  - **Measured on our own journals, after the fact** (136 journals: 31 syntaxis sessions, the 104 journals of the
+    AgentLongBench bench run and the 0.3.23 production journal, read only, indices compared against the human
+    message recorded in each `recall` event): of 205 id calls, **32 asked for a block past the last human message
+    and all 32 came from one opencode session** — the one the README
     quotes as "44 recall calls all used". 21 of them (output ids, `r…`) returned no text at all; 4 `path` calls
     came back empty although the file had been read in that very turn. The 10 `emergency=current_tool` masks of
-    that session are unreachable by construction: that mask archives the LAST message of the request.
+    that session are unreachable by construction: that mask archives the LAST message of the request. The bench
+    run refuses nothing (140 id calls, 0 refused) because its driver sends every round as a new user message, so
+    `last_user` always sits at the end: this is a defect of the single-prompt shape, not of long sessions as such.
   - **Why the arguments id seemed to work.** Two code paths, two different rules. `Recall2.around`
     (`mode=output/call/neighbors`) resolved the id with **no chain filter at all**, so an arguments id (`a…`)
     answered; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`, so the output id (`r…`)
@@ -29,9 +32,13 @@
     every query keeps its signature. A sibling branch has different ids (`rid` = hash of index + content), so it
     stays out; a test regenerates a turn and proves the abandoned text is still unreachable.
   - **No change to the prompt.** The filter only decides what a recall answer may contain; masking, segments,
-    anchors and the prompt sent to the engine are untouched. `tests/test_recall_current_turn.py` (10 tests) covers
-    ids, `emergency=current_tool`, `query`, `path`, the structured engine, the arguments/output symmetry, the
-    exclusion of the current question and the exclusion of sibling branches.
+    anchors and the prompt sent to the engine are untouched — checked hash by hash on a 40-request masking run with
+    no recall. `tests/test_recall_current_turn.py` (12 tests, 10 of them failing on the previous code) covers ids,
+    `emergency=current_tool`, `query`, `path`, the structured engine, the arguments/output symmetry, the exclusion
+    of the current question, the exclusion of sibling branches on both paths and one end-to-end request through
+    `Proxy.chat` with the recall issued in the middle of the turn. Adjacent defects found while measuring and left
+    for separate cards (ids resolved without a conversation, sibling branches below `max_idx`, `mode=output`
+    returning a pointer instead of text) are listed in the report.
 
 - **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
   head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an
