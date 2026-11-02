@@ -28,7 +28,7 @@ from . import answerfix, compat
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
 from .paging import guard_msg, is_guarded, receipt_contaminated
-from .render import template_kwargs
+from .render import count_images, redact_images, redact_text, template_kwargs
 from .savedstate import select_model
 from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
@@ -1155,12 +1155,14 @@ class Proxy:
             if resp is not None:
                 ch = (resp.get("choices") or [{}])[0]
                 m, u = ch.get("message") or {}, resp.get("usage") or {}
-                r = {"done": True, "finish_reason": ch.get("finish_reason"), "content": m.get("content"),
-                     "reasoning_content": m.get("reasoning_content"), "tool_calls": m.get("tool_calls"),
+                r = {"done": True, "finish_reason": ch.get("finish_reason"), "content": redact_text(m.get("content")),
+                     "reasoning_content": redact_text(m.get("reasoning_content")),
+                     "tool_calls": redact_text(m.get("tool_calls")),
                      "completion_tokens": u.get("completion_tokens"), "prompt_tokens": u.get("prompt_tokens"),
                      "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens"),
                      "prompt_read": (resp.get("timings") or {}).get("prompt_n")}
-            rec = {"ts": round(time.time(), 3), "conv": p.conv, "seg": p.seg, "round": rnd, "messages": phys,
+            rec = {"ts": round(time.time(), 3), "conv": p.conv, "seg": p.seg, "round": rnd,
+               "messages": redact_images(phys),
                    "n_messages": len(phys), "tools": [(t.get("function") or {}).get("name") for t in p.tools or []],
                    "est_tokens": p.est_tokens, "virtual_tokens": p.virtual_tokens, "masked": p.masked,
                    "masked_tokens": p.masked_tokens, "events": [e.get("event") for e in p.events],
@@ -1179,8 +1181,13 @@ class Proxy:
         est = p.est_tokens if p else None
         real = u.get("prompt_tokens")
         tw = getattr(self.up, "truncwatch", None)
-        if p and rnd == 0 and real and not (tw is not None and tw.cut(est, real)):
+        # How many pictures this request's physical prompt carried (never journalled when zero, so
+        # text-only traffic keeps byte-identical journal lines).
+        pics = count_images(p.messages) if (p and rnd == 0) else 0
+        if p and rnd == 0 and real and not pics and not (tw is not None and tw.cut(est, real)):
             # 0.3.8: a prompt cut by the engine is not a calibration sample (it would teach a ratio of 0.2-0.5)
+            # neither is a prompt with pictures: its engine count holds the vision tokens the estimate
+            # replaced with cfg.image_tokens, so the ratio would teach the wrong scale to every later text request.
             self.tc.calibrate(p.est_tokens, real)
         inv = (p.invalidated or {}) if p and rnd == 0 else {}
         self.journal.log("request", mode=kind, conv=p.conv if p else None, round=rnd, messages=nmsg,
@@ -1191,7 +1198,8 @@ class Proxy:
                          completion_tokens=u.get("completion_tokens"), ms=round((time.time() - t0) * 1000),
                          finish=resp["choices"][0].get("finish_reason"),
                          invalidated_suffix_tokens=inv.get("tokens", 0) if p else None,
-                         invalidated_cause=inv.get("cause") if p else None)
+                         invalidated_cause=inv.get("cause") if p else None,
+                         **({"images": pics} if pics else {}))
         if p and rnd == 0 and any(e.get("event") == "mask" for e in p.events or []):
             # 0.3.3, measure only: after a mask, prefix the proxy expected the engine to reuse vs what it reused
             # (hybrid engines restart from the live session or the longest checkpoint that is a prefix)
@@ -1471,6 +1479,56 @@ def load_config(a) -> tuple[dict, Config]:
     return raw_cfg, cfg
 
 
+def config_error_line(name, exc) -> str:
+    """One line about a `--config` that cannot be read: what is wrong and the three real options.
+
+    0.3.23 (friction A1): the Install block of the README used to pass `--config config.json` without ever
+    telling anybody to create it, and the proxy answered with a raw FileNotFoundError traceback. The file is
+    optional, so the message has to say so.
+    """
+    from . import initconfig as examples
+    if isinstance(exc, FileNotFoundError):
+        return "%s does not exist. %s" % (name, examples.missing_config_fix(name))
+    return "%s cannot be read: %s -> fix the JSON file, or drop --config: the proxy works with the defaults" \
+        % (name, exc)
+
+
+def build_init_config_parser():
+    """The `init-config` parser: write one of the shipped example configurations next to the user."""
+    from . import initconfig as examples
+    ap = argparse.ArgumentParser(
+        prog="mnemonic-proxy init-config",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Write the example configuration of one engine as config.json, from the copy inside the "
+                    "package (no network). Engines:\n" + "\n".join(examples.list_lines()))
+    ap.add_argument("--engine", required=True, choices=list(examples.ENGINES),
+                    help="which engine the configuration is for")
+    ap.add_argument("--dir", default=".", help="folder to write config.json in (created if missing, default .)")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing config.json")
+    ap.add_argument("--name", default="config.json", help="file name to write (default config.json)")
+    return ap
+
+
+def init_config_main(argv=None) -> int:
+    """`mnemonic-proxy init-config --engine ...`: the config file the README asks for, written for real."""
+    from . import initconfig as examples
+    a = build_init_config_parser().parse_args(argv)
+    try:
+        target = examples.write_config(a.engine, a.dir, force=a.force, filename=a.name)
+    except FileExistsError as e:
+        print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)" % e,
+              file=sys.stderr, flush=True)
+        return 1
+    except (OSError, KeyError, ValueError) as e:
+        print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
+        return 1
+    name, why = examples.ENGINES[a.engine]
+    print("wrote %s (%s, for %s)" % (target, name, why))
+    print("check it with: mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data "
+          "--config %s" % target)
+    return 0
+
+
 def main(argv=None):
     from . import __version__
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1484,8 +1542,15 @@ def main(argv=None):
     if argv and argv[0] == "forget":
         from .forget import main as forget_main
         raise SystemExit(forget_main(argv[1:]))
+    if argv and argv[0] == "init-config":
+        raise SystemExit(init_config_main(argv[1:]))
     a = build_parser().parse_args(argv)
-    raw_cfg, cfg = load_config(a)
+    try:
+        raw_cfg, cfg = load_config(a)
+    except (OSError, ValueError) as e:
+        # 0.3.23: a --config that is not there is a one-line message with the three real options, never a
+        # FileNotFoundError traceback (friction A1 of the "new user" trial).
+        raise SystemExit("mnemonic-proxy: %s" % config_error_line(a.config, e)) from None
     os.makedirs(a.data, exist_ok=True)
     from .datalock import DataLock
     try:
@@ -1583,7 +1648,13 @@ def serve(a, raw_cfg, cfg):
                   file=sys.stderr, flush=True)
     from . import __version__
     journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
-                guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen")
+                guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen",
+                image_tokens=cfg.image_tokens)
+    if cfg.image_tokens <= 0:
+        # A picture cannot be priced at zero: the guard will refuse those requests. Said at startup, so it is not
+        # discovered in the middle of a turn (the bound is the operator's, the engine does not publish its clamp).
+        print("[mnemonic-proxy] image_tokens=%d: requests carrying a picture will be refused; set image_tokens to "
+              "an upper bound >= the engine's vision.max_tokens + 2" % cfg.image_tokens, file=sys.stderr, flush=True)
     print("[mnemonic-proxy] events: stderr + %s; recent events: /v1/strata/journal" % journal.path,
           file=sys.stderr, flush=True)
     try:

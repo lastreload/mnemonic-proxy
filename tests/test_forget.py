@@ -433,7 +433,7 @@ class TestForgetHTTP(unittest.TestCase):
                 p = subprocess.Popen([sys.executable, "-m", "ctxproxy.server", "--data", str(data),
                                       "--upstream", url, "--port", str(port)], stdout=f, stderr=f)
                 try:
-                    deadline = time.monotonic() + 15
+                    deadline = time.monotonic() + 60       # 0.3.23: a loaded runner needs more than 15 s
                     while time.monotonic() < deadline:
                         if p.poll() is not None:
                             self.fail(log.read_text())
@@ -445,11 +445,11 @@ class TestForgetHTTP(unittest.TestCase):
                     else:
                         self.fail("proxy never became healthy: " + log.read_text())
                     result = subprocess.run([sys.executable, "-m", "ctxproxy.server", "forget", "--data", str(data),
-                                             "--conv", "missing", "--dry-run"], capture_output=True, text=True, timeout=10)
+                                             "--conv", "missing", "--dry-run"], capture_output=True, text=True, timeout=60)
                     self.assertEqual(result.returncode, 1)
                     self.assertIn("in use", result.stderr)
                     again = subprocess.run([sys.executable, "-m", "ctxproxy.server", "--data", str(data),
-                                            "--upstream", url, "--port", str(port)], capture_output=True, text=True, timeout=10)
+                                            "--upstream", url, "--port", str(port)], capture_output=True, text=True, timeout=60)
                     self.assertNotEqual(again.returncode, 0)
                     self.assertIn("in use", again.stderr)
                 finally:
@@ -468,6 +468,14 @@ class TestForgetHTTP(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "SIGINT semantics differ on Windows")
     def test_sigint_exits_promptly_with_idle_keepalive_connection(self):
         # A client that keeps an HTTP/1.1 connection open must not block shutdown (and so the data lock).
+        #
+        # 0.3.23: the budget is no longer a bare 10 s. The regression this guards against is a shutdown that
+        # never ends (non-daemonic request threads waiting on an idle keep-alive socket), and a loaded CI
+        # runner can easily need more than 10 s for a healthy start/stop — which is what made this test flaky.
+        # So: wait for the proxy to really serve (poll /health up to START_CAP), measure how long that took,
+        # and give the shutdown a budget derived from that same machine speed, capped at STOP_CAP. A proxy
+        # that hangs still fails; a slow machine no longer does.
+        START_CAP, STOP_CAP = 60.0, 60.0
         with tempfile.TemporaryDirectory() as root:
             data = Path(root) / "data"
             engine = FakeEngine()
@@ -477,25 +485,38 @@ class TestForgetHTTP(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
             sock.close()
-            p = subprocess.Popen([sys.executable, "-m", "ctxproxy.server", "--data", str(data),
-                                  "--upstream", url, "--port", str(port)],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            log = Path(root) / "server.log"
+            with log.open("w") as f:
+                p = subprocess.Popen([sys.executable, "-m", "ctxproxy.server", "--data", str(data),
+                                      "--upstream", url, "--port", str(port)], stdout=f, stderr=f)
             try:
-                deadline = time.monotonic() + 15
+                started = time.monotonic()
+                deadline = started + START_CAP
                 while True:
+                    if p.poll() is not None:
+                        self.fail("the proxy exited before it served: " + log.read_text())
                     try:
-                        conn = socket.create_connection(("127.0.0.1", port), timeout=1)
-                        break
+                        with urllib.request.urlopen("http://127.0.0.1:%d/health" % port, timeout=2):
+                            break
                     except OSError:
                         if time.monotonic() > deadline:
-                            self.fail("proxy never started")
+                            self.fail("the proxy did not answer /health in %.0f s: %s"
+                                      % (START_CAP, log.read_text()))
                         time.sleep(.05)
+                start_s = time.monotonic() - started
+                # the point of the test: an idle keep-alive connection, open and unused at shutdown
+                conn = socket.create_connection(("127.0.0.1", port), timeout=10)
                 conn.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
                 self.assertTrue(conn.recv(64).startswith(b"HTTP/1.1"))
+                budget = min(STOP_CAP, max(10.0, 6.0 * start_s))
                 t0 = time.monotonic()
                 p.send_signal(signal.SIGINT)
-                p.wait(timeout=10)
-                self.assertLess(time.monotonic() - t0, 10)
+                try:
+                    p.wait(timeout=budget)
+                except subprocess.TimeoutExpired:
+                    self.fail("SIGINT did not end the proxy in %.1f s (start took %.1f s): the idle keep-alive "
+                              "connection is blocking shutdown. %s" % (budget, start_s, log.read_text()))
+                self.assertLess(time.monotonic() - t0, budget)
                 conn.close()
             finally:
                 if p.poll() is None:

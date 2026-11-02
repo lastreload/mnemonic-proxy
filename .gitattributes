@@ -1,1 +1,3 @@
 *.bat text eol=crlf
+# the tested chat template must stay byte-identical to the pack's file (tests/test_vision_real_template.py)
+tests/fixtures/pack_chat_template.jinja -text

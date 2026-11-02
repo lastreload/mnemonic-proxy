@@ -49,7 +49,8 @@ import json
 import math
 import re
 
-from .render import render_pieces, template_kwargs
+from .render import (IMAGE_KEYS, VISION, UnsupportedPicture, image_markers, literal_marker_count, picture_contract,
+                     render_pieces, template_kwargs)
 from .upstream import UpstreamError
 
 IDENT_RAW = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./:\-]{2,}[A-Za-z0-9]")
@@ -156,6 +157,9 @@ class WindowGuard:
         self.where = ""              # label of the call in progress (journal)
         self.last_count: int | None = None   # 0.3.8: prompt count of the last request sent (without slack)
         self.literal_tokens = 0             # conservative reserve for content special-token spellings
+        self.images = 0                     # pictures the engine will read in the prompt just counted
+        self.image_allowance = 0            # tokens reserved for them: images * cfg.image_tokens
+        self.count_error = ""               # why the last exact count failed, for the 400 the client gets
 
     @property
     def exact(self) -> bool:
@@ -167,24 +171,88 @@ class WindowGuard:
 
     def count(self, messages: list, tools, kw: dict | None = None) -> int:
         """Prompt budget: supported Qwen rendering + tokenizer + literal reserve,
-        or calibrated estimate + configured slack when no tokenizer is loaded."""
+        or calibrated estimate + configured slack when no tokenizer is loaded.
+
+        Images: the engine expands one vision marker into as many tokens as its vision tower produced,
+        and no engine endpoint reports that number before the request (Strata has no /tokenize, and its
+        /v1/messages/count_tokens counts the marker alone). The marker is therefore budgeted with the configured
+        upper bound cfg.image_tokens, which must be >= the engine's own per-image clamp: an over-reservation costs
+        a little context, an under-reservation would send a prompt over the window. The guarantee is recorded as
+        image_bounded so the journal never claims an exact count for a prompt carrying pictures.
+
+        Two things hold that budget together, and both fail closed rather than guessing:
+
+          - `picture_contract` decides first which pictures the engine will read, and refuses the ones it would
+            not read (a system message's, a part with no source, a picture under a type the adapter drops);
+          - the markers the renderer wrote must be exactly that many. A template that wrote fewer priced pictures
+            we never send, more priced tokens that are not there: in both cases the count is not the prompt.
+        """
         msgs = [{k: v for k, v in m.items() if k != "extra"} for m in messages or []]
         self.literal_tokens = 0
+        self.images = 0
+        self.image_allowance = 0
+        self.count_error = ""
         if self.exact:
             try:
+                expected = picture_contract(msgs)
                 template = getattr(self.mgr.tc, "prompt_template", None)
                 if template is not None:
-                    base = self.mgr.tc.raw(template.render(msgs, tools, kw or {}))
+                    rendered, markers = template.render(msgs, tools, kw or {}, with_counts=True)
+                    base = self.mgr.piece_tokens(rendered)   # already adds markers * cfg.image_tokens
                 else:
-                    base = sum(self.mgr.piece_tokens(t) for _, t in render_pieces(msgs, tools, kw or {}))
+                    pieces = list(render_pieces(msgs, tools, kw or {}))
+                    base = sum(self.mgr.piece_tokens(t) for _, t in pieces)
+                    markers = sum(t.count(VISION) for _, t in pieces)
+                # A marker can also be *text*: someone quoting `<|image_pad|>` in a message (a template question, a
+                # log paste) puts a real spelling of it in the prompt, and Strata shields such spellings instead of
+                # reading a picture (#28). It is neither a picture to price nor a picture to require a marker for.
+                quoted = literal_marker_count(msgs, tools)
+                if markers - quoted != expected:
+                    raise UnsupportedPicture(
+                        "the prompt renderer wrote %d vision marker(s) for the %d picture(s) this prompt carries%s: "
+                        "the pictures the engine would read are not the ones being priced"
+                        % (markers - quoted, expected,
+                           "" if not quoted else " (besides %d marker(s) quoted as text)" % quoted))
+                if quoted and self.cfg.image_tokens > 0:
+                    base -= quoted * (self.cfg.image_tokens - 1)   # the quotation costs text, literal_slack reserves it
+                self.images = expected
+                self.image_allowance = self.images * self._image_allowance()
                 self.literal_tokens = self.literal_slack(msgs, tools)
                 return base + self.literal_tokens
             except ValueError as e:
                 # 0.3.5: never a silent fallback in exact mode - counted and journaled (the sweep fails on it)
                 self.count_errors += 1
+                self.count_error = str(e)
+                self._log(action="count_error", where=self.where or "count", error=str(e)[:200])
+        else:
+            # Without a tokenizer the count is an estimate, but what the engine will read is not a matter of
+            # estimation: a picture it would not read is refused on this path too, and a picture carried under a
+            # zero bound is a prompt counted smaller than the engine will read it. Text-only prompts are untouched:
+            # the contract returns 0 and the estimate below is the one that always ran.
+            try:
+                self.images = picture_contract(msgs)
+                self.image_allowance = self.images * self._image_allowance()
+            except ValueError as e:
+                self.count_errors += 1
+                self.count_error = str(e)
                 self._log(action="count_error", where=self.where or "count", error=str(e)[:200])
         est, _ = self.mgr.estimate(msgs, tools)
         return int(math.ceil(est * (1.0 + float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0))))
+
+    def _image_allowance(self) -> int:
+        """What one picture costs: cfg.image_tokens, an upper bound on the engine's own expansion of the marker.
+
+        A picture cannot be priced at nothing: `image_tokens <= 0` would pay the marker zero tokens (and a negative
+        value would hand tokens back), so the prompt would be counted smaller than the engine will read it and sent
+        over the window. The engine's clamp is not readable over HTTP, so the coupling is the operator's - see the
+        README - and a request that carries a picture is refused until the bound is a number that bounds."""
+        n = int(getattr(self.cfg, "image_tokens", 0) or 0)
+        if self.images and n <= 0:
+            raise UnsupportedPicture(
+                "%d picture(s) in the prompt but image_tokens=%d: a picture needs a positive upper bound "
+                "(image_tokens >= the engine's vision.max_tokens + 2, the vision_start/vision_end the marker keeps)"
+                % (self.images, n))
+        return n
 
     def literal_slack(self, messages, tools) -> int:
         """Conservative bound for Strata's literal-special-token shielding (#28).
@@ -208,13 +276,19 @@ class WindowGuard:
         if pattern is None:
             return 0
 
-        def cost(value):
+        def cost(value, picture=False):
             if isinstance(value, str):
-                return sum(len(m.group().encode("utf-8")) for m in pattern.finditer(value))
+                # A picture's bytes are not prompt text: the template renders a marker for them and piece_tokens
+                # budgets the marker. Scanning megabytes of base64 for special-token spellings is pure cost, and
+                # count() runs several times per request.
+                return 0 if picture else sum(len(m.group().encode("utf-8")) for m in pattern.finditer(value))
             if isinstance(value, dict):
-                return sum(cost(k) + cost(v) for k, v in value.items())
+                # Once inside a picture, everything below it is the picture: {"image_url": {"url": "data:..."}} hides
+                # the bytes one level deeper than the key that names them, and losing that here meant scanning (and
+                # pricing) a megabyte of base64 as if it were prompt text.
+                return sum(cost(k) + cost(v, picture or k in IMAGE_KEYS) for k, v in value.items())
             if isinstance(value, list):
-                return sum(map(cost, value))
+                return sum(cost(v, picture) for v in value)
             return 0
 
         total = cost(messages) + cost(tools)
@@ -236,9 +310,13 @@ class WindowGuard:
 
     def _log(self, **kw):
         if self.journal is not None:
-            return self.journal.log("window_guard", guarantee=("tokenizer_bound" if self.literal_tokens else "exact")
-                                    if self.exact else "estimated", literal_slack=self.literal_tokens,
-                                    window=self.cfg.window, margin=self.margin, **kw)
+            guarantee = ("estimated" if not self.exact else
+                         "image_bounded" if self.images else          # per-image cost is an upper bound, not a count
+                         "tokenizer_bound" if self.literal_tokens else "exact")
+            # Text-only prompts journal exactly what they journaled before: the image fields appear only with images.
+            extra = {"images": self.images, "image_allowance": self.image_allowance} if self.images else {}
+            return self.journal.log("window_guard", guarantee=guarantee, literal_slack=self.literal_tokens,
+                                    window=self.cfg.window, margin=self.margin, **extra, **kw)
         return None
 
     def enforce(self, body: dict, dry: bool = False) -> dict:
@@ -254,7 +332,10 @@ class WindowGuard:
             if not dry:
                 self.refused += 1
                 self._log(action="refused", where=self.where or "call", reason="count_error")
-            raise WindowExceeded(self.cfg.window, self.cfg.window, self.margin, "prompt count failed")
+            # The reason the count failed is what the operator needs (a picture the template did not write is not
+            # a window arithmetic problem), and the client deserves the same sentence the journal got.
+            detail = "prompt count failed" + (": %s" % self.count_error[:180] if self.count_error else "")
+            raise WindowExceeded(self.cfg.window, self.cfg.window, self.margin, detail)
         if not dry:
             # 0.3.8: the count without the slack, for the engine-truncation watch (Upstream.truncwatch)
             sl = 0.0 if self.exact else float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0)
@@ -524,6 +605,11 @@ def remove_piece(loop: list, pc: dict, rn: str, lang: str, ntok, keep_line: bool
     else:
         n = ntok(pc["text"])
         rec = (RECEIPT_IT if lang == "it" else RECEIPT_EN).format(rn=rn, args=call_args(loop, pc["i"]), n=n)
+        marks = image_markers(m.get("content"))
+        if marks:
+            # A picture removed for space is named by its hash. A receipt that hid the loss would let the model keep
+            # answering as if it still saw the image: never a silent drop, never a false confirmation.
+            rec += " " + marks
         note = m.get("_final_note")
         if isinstance(note, str) and note:
             rec += note

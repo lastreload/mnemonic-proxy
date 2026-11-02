@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 
 from . import engines
+from . import initconfig
 from .core import Config
 from .enginectx import NAME
 from .savedstate import state_available
@@ -44,7 +45,9 @@ class Report:
         self.auto: dict | None = None      # 0.3.23: automatic configuration (machine, decisions, report lines)
 
     def add(self, status, name, evidence, fix=""):
-        self.items.append({"status": status, "check": name, "evidence": evidence, "fix": fix})
+        item = {"status": status, "check": name, "evidence": evidence, "fix": fix}
+        self.items.append(item)
+        return item          # the caller may amend it later (the config hint waits for the detected engine)
 
     @property
     def exit_code(self) -> int:
@@ -95,11 +98,32 @@ def _writable(d):
         return False, str(e)
 
 
-def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
+def config_error_evidence(name, exc) -> str:
+    """The `config` line's evidence when the file could not be read (friction A1)."""
+    if isinstance(exc, FileNotFoundError):
+        return "%s does not exist (the proxy does not create it)" % name
+    return "%s cannot be read: %s" % (name, exc)
+
+
+def config_error_fix(name, exc) -> str:
+    """...and its fix: what the user can really do, never \"fix the JSON file\" about a file that is absent."""
+    if isinstance(exc, FileNotFoundError):
+        return initconfig.missing_config_fix(name)
+    return "fix the JSON file, or drop --config: the proxy works with the defaults (saved-state features off)"
+
+
+def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False, config_error=None) -> Report:
     rep = Report()
     explicit = set(raw_cfg)
     # --- config file
-    if a.config:
+    # 0.3.23 (friction A1): a --config that cannot be read is one line with the three real options, and the
+    # report goes on: the engine is what the user came here to check. `config_hint` is amended once the engine
+    # is known (friction A9: no llama-server advice in front of Strata).
+    if config_error is not None:
+        rep.add(FAIL, "config", "%s" % config_error_evidence(a.config, config_error),
+                config_error_fix(a.config, config_error))
+        config_hint = None
+    elif a.config:
         names = {f.name for f in dataclasses.fields(Config)}
         unknown = sorted(k for k in raw_cfg if k not in names)
         if unknown:
@@ -107,9 +131,10 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     "check the spelling against the Configuration table in the README")
         else:
             rep.add(OK, "config", "%s: %d fields, all known" % (a.config, len(raw_cfg)))
+        config_hint = None
     else:
-        rep.add(INFO, "config", "no --config: defaults (saved-state features off)",
-                "for llama-server use examples/config.llama-server.json")
+        config_hint = rep.add(INFO, "config", "no --config: defaults (saved-state features off)",
+                              initconfig.engine_hint(None))
     # --- python
     if cfg.kv_archive and sys.version_info < (3, 14):
         rep.add(FAIL, "python", "kv_archive needs Python >= 3.14, this is %d.%d" % sys.version_info[:2],
@@ -147,6 +172,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp", "ds4" or "openai"')
         return rep
     how = "detected" if eng.detected else "forced by config/--engine"
+    if config_hint is not None:
+        # friction A9: now that the engine is known, the configuration advice is about THIS engine
+        config_hint["fix"] = initconfig.engine_hint(eng.kind)
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
             "" if eng.kind != "openai" or cfg.engine != "auto" else
@@ -261,6 +289,7 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     rep.auto = {"machine": machine.summary(), "decisions": [d.summary() for d in decisions],
                 "lines": autoconfig.explain(auto_probe, eng, machine, decisions, full=True)}
     picked = [d for d in decisions if d.changed]
+    kept_existing = [d for d in decisions if d.kept_existing]
     if not cfg.auto_config:
         rep.add(INFO, "auto config", "off (\"auto_config\": false): every default is used as written",
                 "remove \"auto_config\" from the config to let the proxy choose the engine/machine-dependent "
@@ -270,6 +299,12 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 % (", ".join("%s=%s" % (d.field, autoconfig.fmt(d.value)) for d in picked), machine.line()),
                 "`mnemonic-proxy check --explain-config ...` prints every reason; a field written in the config "
                 "always wins")
+    elif kept_existing:
+        # 0.3.23 (friction A8): one line here, the four identical reasons in the extended block only
+        rep.add(INFO, "auto config", "%d choice%s not applied: this data folder already has conversations, so "
+                "an upgrade keeps how they ran" % (len(kept_existing), "" if len(kept_existing) == 1 else "s"),
+                "`mnemonic-proxy check --explain-config ...` prints each choice, its value and its reason; "
+                "write \"auto_config\": true in the config to apply them")
     else:
         why = list(dict.fromkeys(d.why for d in decisions))
         rep.add(INFO, "auto config", "nothing to choose: %s (%s)"
@@ -491,7 +526,8 @@ def _reminder(rep):
             "Claude Code: DISABLE_AUTO_COMPACT=1), otherwise two context managers fight over the same history")
 
 
-def render(rep: Report, out=sys.stdout, explain: bool = False):
+def render(rep: Report, out=None, explain: bool = False):
+    out = sys.stdout if out is None else out       # resolved at call time: `check` is testable under redirect
     enc = (getattr(out, "encoding", None) or "ascii").lower()
     try:
         "\u2705\u26a0\ufe0f\u274c\u2139\ufe0f".encode(enc)
@@ -531,13 +567,16 @@ def main(argv=None):
     from .server import load_config
     ap = build_check_parser()
     a = ap.parse_args(argv)
+    config_error = None
     try:
         raw_cfg, cfg = load_config(a)
     except (OSError, ValueError) as e:
-        rep = Report()
-        rep.add(FAIL, "config", "%s: %s" % (a.config, e), "fix the JSON file")
-    else:
-        rep = run_checks(a, raw_cfg, cfg, live=a.live)
+        # 0.3.23 (friction A1): the report does not stop at a config file that is missing or broken. The
+        # remaining checks run against the defaults — exactly the configuration the user is told to fall back
+        # to — so one `check` still says everything there is to say about this machine and this engine.
+        config_error = e
+        raw_cfg, cfg = {}, Config.from_dict({})
+    rep = run_checks(a, raw_cfg, cfg, live=a.live, config_error=config_error)
     if a.json:
         out = {"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items}
         if rep.auto is not None:
