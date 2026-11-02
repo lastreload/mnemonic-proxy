@@ -470,8 +470,9 @@ alone). The rule is **`image_tokens >= vision.max_tokens + 2`**: the reader clam
 `vision.max_tokens` (Strata's `vision.max_tokens`, 1024 on GPU and 300 on CPU by default; without it a picture once
 became 93,700 tokens), while the marker itself is three special tokens of which two - `<|vision_start|>` and
 `<|vision_end|>` - stay in the prompt around the expansion the allowance replaces. So a pack clamped to 300 needs
-**302**, and the default 1024 already covers Strata's GPU default; a round 320 is the same rule with a little free
-headroom. An over-reservation costs a little context, an under-reservation would send a prompt over the window.
+**302**, and Strata's GPU default clamp of 1024 needs **1026** - which is the shipped default; a round 1120 is the
+same rule with a little free headroom. An over-reservation costs a little context, an under-reservation would send a
+prompt over the window.
 `image_tokens` has to be a non-negative integer (config load rejects anything else), and a request that carries a
 picture while the bound is `0` is refused with `image_tokens=0` in its message: a picture cannot be priced at
 nothing, and the startup line says the same before the first request.
@@ -1480,7 +1481,7 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 |---|---|---|---|
 | `window` | 131072 | physical context of the engine (llama-server, ds4, Strata, Ollama, LM Studio: taken from the engine if unset; Ollama / LM Studio: a bigger value refuses the start) | 131072 |
 | `window_margin`, `window_estimate_slack` | 64, 0 (0.15 on generic engines without `--tokenizer`) | window guard: tokens kept free; inflation of the estimated prompt count | default |
-| `image_tokens` | 1024 | tokens charged for **one picture**: the guard budgets each vision marker with this upper bound, because the engine expands it afterwards and reports the real number only in `usage.prompt_tokens`. Must satisfy `image_tokens >= vision.max_tokens + 2` (two of the marker's three special tokens stay in the prompt). A non-negative integer, checked when the configuration is loaded; `0` means "no pictures": a request carrying one is refused, and the startup says so | `vision.max_tokens` + 2 (Strata clamp 300 → **302**; 1024 covers the GPU default) |
+| `image_tokens` | 1026 | tokens charged for **one picture**: the guard budgets each vision marker with this upper bound, because the engine expands it afterwards and reports the real number only in `usage.prompt_tokens`. Must satisfy `image_tokens >= vision.max_tokens + 2` (two of the marker's three special tokens stay in the prompt). A non-negative integer, checked when the configuration is loaded; `0` means "no pictures": a request carrying one is refused, and the startup says so | `vision.max_tokens` + 2 (Strata clamp 300 → **302**; the default 1026 covers the GPU clamp of 1024) |
 | `mask_trigger` / `mask_target` | 80000 / 40000 | start a masking block above trigger, mask oldest-first down to target | default |
 | `min_batch_tokens` | 16000 | a block runs only if it frees at least this much | default |
 | `keep_recent_tokens` / `min_age_turns` | 16000 / 2 | protected tail, never masked | default |
@@ -1610,7 +1611,7 @@ measurements, and changing them is rarely necessary.
 | `auto_recall_hint_k` | 5 | candidates named in a hint (`auto_recall_hint`) |
 | `chars_per_token` | 3.5 | characters per token when there is no tokenizer |
 | `msg_overhead` | 6 | tokens the chat template adds per message |
-| `image_tokens` | 1024 | tokens assumed for one image |
+| `image_tokens` | 1026 | tokens assumed for one image (`vision.max_tokens` + 2) |
 | `reasoning_last_turn_only` | false | Strata template: keep only the last turn's reasoning |
 | `autosave_min_tokens` | 16384 | below this a re-read is cheaper than a state file: no save |
 | `autosave_min_free_gb` | 8.0 | no save when the slot disk has less free space than this |
