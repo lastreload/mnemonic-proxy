@@ -14,16 +14,20 @@
     AgentLongBench bench run and the 0.3.23 production journal, read only, indices compared against the human
     message recorded in each `recall` event): of 205 id calls, **32 asked for a block past the last human message
     and all 32 came from one opencode session** — the one the README
-    quotes as "44 recall calls all used". 21 of them (output ids, `r…`) returned no text at all; 4 `path` calls
-    came back empty although the file had been read in that very turn. The 10 `emergency=current_tool` masks of
+    quotes as "44 recall calls all used". In that session the filter itself refused none of the 32: they all used
+    `mode=output`, whose path (`Recall2.around`) applied no filter at all, so the 21 output ids (`r…`) got only
+    the pointer to their arguments id (that is what `mode=output` does for an output) and the 11 arguments ids got
+    700-char excerpts. A plain `recall(id=…)` of any of those blocks would have answered `not found`, which is
+    what a Windows user hit. The filter did empty the session's 4 `path` calls, although the file had been read
+    in that very turn. The 10 `emergency=current_tool` masks of
     that session are unreachable by construction: that mask archives the LAST message of the request. The bench
     run refuses nothing (140 id calls, 0 refused) because its driver sends every round as a new user message, so
     `last_user` always sits at the end: this is a defect of the single-prompt shape, not of long sessions as such.
-  - **Why the arguments id seemed to work.** Two code paths, two different rules. `Recall2.around`
-    (`mode=output/call/neighbors`) resolved the id with **no chain filter at all**, so an arguments id (`a…`)
-    answered; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`, so the output id (`r…`)
-    of the same message did not. The model felt the asymmetry and groped for the working id — and the one that
-    worked gave 700-char excerpts, never the verbatim text. Both paths now apply the same rule.
+  - **Two code paths, two different rules.** `Recall2.around` (`mode=output/call/neighbors`) resolved ids with
+    **no chain filter at all**; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`. So the
+    same block answered or not depending on the mode. Both paths now apply the same rule. (In the opencode session
+    the "no text" answers were not this filter: `mode=output` on an output id returns a pointer by design, and the
+    arguments id returns 700-char excerpts. That behaviour is a separate defect, listed below.)
   - **The fix is a chain filter, not a wider window.** `idx < max_idx` was doing two jobs with one line: keeping
     out sibling branches (edits, regenerations) and the current question, which is right, and keeping out the
     current agentic turn, which is not. New `chain_ok()` (`core.py`) turns the filter into
@@ -38,7 +42,7 @@
     of the current question, the exclusion of sibling branches on both paths and one end-to-end request through
     `Proxy.chat` with the recall issued in the middle of the turn. Adjacent defects found while measuring and left
     for separate cards (ids resolved without a conversation, sibling branches below `max_idx`, `mode=output`
-    returning a pointer instead of text) are listed in the report.
+    returning a pointer instead of text, arguments-id excerpts cut at 700 characters) are listed in the report.
 
 - **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
   head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an

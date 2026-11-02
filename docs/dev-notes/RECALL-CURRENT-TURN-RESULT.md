@@ -33,7 +33,7 @@ result, not a human turn), so the reconstruction uses the same definition as the
 |---|---|---|---|
 | `recall` calls | 490 | 48 | 277 |
 | by id | 205 | 32 | 140 |
-| **by id, refused by the filter** (`idx >= last_user`) | **32** | **32** | **0** |
+| **by id, for a block past `last_user`** (a plain `recall(id=…)` refuses it) | **32** | **32** | **0** |
 | by id, unknown id (invented by the model) | 1 | 0 | 0 |
 | by `query` | 256 | 12 | 116 |
 | by `query`, empty *only* because the matches were past `last_user` | 1 | 0 | 0 |
@@ -49,25 +49,27 @@ even though that run has 112 `emergency=current_tool` masks whose receipts were 
 simply never asked for. The defect belongs to the **single-prompt** shape, which is why it surfaced in production
 and in the Windows user's report and not on the bench.
 
-Every one of the 32 refused id calls comes from the single opencode session the README quotes
+Every one of the 32 id calls past `last_user` comes from the single opencode session the README quotes
 (`cf88233028d5d`, 1 h 32 min, 554 requests). The three turns involved had `last_user` at index 1, 503 and 592; the
 requested blocks sat at indices 4 to 690 — always inside the turn that was running.
 
-## The asymmetry the model felt
+## What those 32 calls actually got
 
-Of those 32 calls:
+All 32 used `mode=output`, which goes through `Recall2.around`, and in 0.3.23 `around` applied **no chain filter
+at all**. So in this session the filter refused none of them; the defect shows up as what a *plain*
+`recall(id=…)` would have answered. Of those 32 calls:
 
-- **21 asked for an output id (`r…`) and got no text.** They all carried `mode=output`, which goes through
-  `Recall2.around`; for a `tool` row that path returns only the pointer *"output id=… comes from call id=…"*
+- **21 asked for an output id (`r…`) and got no text.** For a `tool` row `mode=output` returns, by design, only
+  the pointer *"output id=… comes from call id=…"*
   (134-136 characters). A plain `recall(id=r…)` would have gone through `_recall_page` and answered
   `recall: id … not found`.
-- **11 asked for the arguments id (`a…`) and got text** — 700-character excerpts of the linked outputs. They
-  worked for a reason that had nothing to do with being arguments: `around` applied **no chain filter at all**, so
-  any id in the archive resolved there.
+- **11 asked for the arguments id (`a…`) and got text** — 700-character excerpts of the linked outputs, which is
+  what `mode=output` returns for an arguments id.
 
-So the model's visible strategy — ask for the output id, be refused, ask for the arguments id of the same message —
-was it groping around a filter applied on one path and not the other. The text it never reached in those 21 calls
-totals **195 636 characters** of archived tool output.
+So the model's visible strategy — ask for the output id, get a pointer, follow it to the arguments id — was the
+`mode=output` design at work, not the filter. The text it never reached verbatim in those 21 calls totals
+**195 636 characters** of archived tool output; a plain `recall(id=…)` would have paged it, had the filter let it
+through. The filter did empty the 4 `path` calls.
 
 `emergency=current_tool` is the worst case and needs no reconstruction: that mask archives the **last** message of
 the request, so its index is always `>= last_user`. All 10 occurrences in production handed the model a receipt id
@@ -76,7 +78,7 @@ that plain `recall(id=…)` could not resolve for the rest of the turn.
 ## What the journals do NOT show
 
 - No `recall: id … not found` string appears in these journals: in this session the model always used
-  `mode=output`, which answers with the pointer instead. The refusal is visible as *no text*, not as the message.
+  `mode=output`, which bypassed the filter. The no-text answers are pointers, not refusals.
 - The journal records no `max_idx`, so the reconstruction depends on matching the `last_user` text. 0 events failed
   to match in these 32 sources.
 - `recall_use` marks 35 of the 44 calls of that session as "used": it compares words of the model's next answer
