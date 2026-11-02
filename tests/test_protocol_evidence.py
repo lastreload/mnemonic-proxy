@@ -206,5 +206,91 @@ class TestGatewayCheck(unittest.TestCase):
                 self.assertTrue(all(method == "GET" for method, _ in requests), requests)
 
 
+@contextmanager
+def lmstudio(models):
+    """An LM Studio gateway: /api/v0/models with `state`, no /api/ps, no /api/version."""
+    requests = []
+    routes = {"/health": (200, {"status": "ok"}), "/v1/models": (200, CATALOG),
+              "/api/v0/models": (200, {"data": models})}
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            requests.append((self.command, self.path))
+            status, body = routes.get(self.path, (404, b"404 page not found"))
+            body = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            requests.append((self.command, self.path))
+            self.send_error(405)
+
+        def log_message(self, format, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield "http://127.0.0.1:%d" % server.server_port, requests
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+
+
+class TestRecognisedEngineEvidence(unittest.TestCase):
+    """The same evidence rule for the other recognised flavour, and the guards it must not weaken."""
+
+    cli = TestGatewayCheck.cli
+
+    def test_lmstudio_runtime_is_the_loaded_state_evidence(self):
+        for models, status, text in (
+                ([{"id": "qwen", "state": "not-loaded"}], "warn", "no model loaded"),
+                ([{"id": "qwen", "state": "loaded", "loaded_context_length": 32768}], "ok", "qwen")):
+            with self.subTest(models=models), lmstudio(models) as (url, requests), \
+                    tempfile.TemporaryDirectory() as folder:
+                report = self.cli(url, folder)
+                loaded = next(i for i in report["checks"] if i["check"] == "model loaded")
+                self.assertEqual(loaded["status"], status)
+                self.assertIn(text, loaded["evidence"])
+                self.assertIn("/api/v0/models", loaded["evidence"])
+                # LM Studio's own endpoint and commands; never Ollama's, and never the catalog as proof
+                blob = json.dumps(report)
+                for ollama_only in ("ollama run", "ollama ps", "/api/ps", "OLLAMA_CONTEXT_LENGTH"):
+                    self.assertNotIn(ollama_only, blob)
+                self.assertTrue(all(method == "GET" for method, _ in requests), requests)
+
+    def test_a_configured_window_alone_is_never_called_verified(self):
+        """Flavour recognised, nothing loaded: the configured window stays unverified (config is not evidence)."""
+        with gateway((200, {"models": []})) as (url, _), tempfile.TemporaryDirectory() as folder:
+            report = self.cli(url, folder, {"window": 32768})
+            window = next(i for i in report["checks"] if i["check"] == "context window")
+            self.assertEqual(window["status"], "warn")
+            self.assertIn("not a verified runtime context", window["evidence"])
+            self.assertEqual(report["exit_code"], 2, report)
+
+    def test_the_known_context_mismatch_guard_still_fails(self):
+        """A config window above the runtime context the engine reports is still a failure, not a warning."""
+        with gateway((200, {"models": [{"name": "qwen", "context_length": 32768}]})) as (url, _), \
+                tempfile.TemporaryDirectory() as folder:
+            report = self.cli(url, folder, {"window": 65536})
+            self.assertEqual(report["exit_code"], 1, report)
+            self.assertTrue(any(i["check"] == "context window" and i["status"] == "fail"
+                                for i in report["checks"]), report)
+
+    def test_a_matching_runtime_context_is_still_verified(self):
+        """The fix must not call a correct Ollama setup unverified: a measured context is still OK, never a failure."""
+        with gateway((200, {"models": [{"name": "qwen", "context_length": 32768}]})) as (url, _), \
+                tempfile.TemporaryDirectory() as folder:
+            report = self.cli(url, folder, {"window": 32768})
+            windows = [i for i in report["checks"] if i["check"] == "context window"]
+            self.assertTrue(windows, report)
+            self.assertTrue(all(i["status"] == "ok" for i in windows), report)
+            self.assertIn("Ollama context=32768", windows[0]["evidence"])
+            self.assertFalse([i for i in report["checks"] if i["status"] == "fail"], report)
+
+
 if __name__ == "__main__":
     unittest.main()
