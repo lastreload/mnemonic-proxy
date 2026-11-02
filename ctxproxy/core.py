@@ -447,6 +447,19 @@ def aid_for(idx: int, m: dict) -> str:
     return "a" + H("args", str(idx), canon(m))[:12]
 
 
+def chain_ok(idx: str = "idx", rid: str = "rid") -> str:
+    """Filtro di catena del recall, come frammento SQL (stessi parametri di prima: un solo `?`).
+
+    `idx < ?` da solo escludeva due cose diverse con la stessa riga: i RAMI FRATELLI (modifiche,
+    rigenerazioni) e la domanda in corso -- che è giusto escludere -- ma anche tutto ciò che il
+    turno AGENTICO IN CORSO ha prodotto dopo l'ultimo messaggio dell'utente, cioè esattamente i
+    blocchi che il proxy ha appena mascherato e di cui ha dato l'id al modello. `cur_chain` tiene
+    gli id d'archivio del prefisso inviato ORA (meno la domanda in corso, visibile per intero):
+    un ramo fratello ha altri id (rid = hash di indice + contenuto) e resta fuori.
+    """
+    return "(%s < ? OR %s IN (SELECT rid FROM cur_chain))" % (idx, rid)
+
+
 def args_text(m: dict) -> str:
     out = []
     for c in m.get("tool_calls") or []:
@@ -834,6 +847,9 @@ class Store:
                 self.db.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
         except sqlite3.OperationalError:
             self.fts = False              # SQLite senza FTS5: resta la ricerca per sottostringa
+        # 0.3.24: id d'archivio del prefisso della richiesta in corso (vedi chain_ok). Tabella TEMP: vive
+        # nella connessione, non tocca il file e non sopravvive al riavvio (è stato di una richiesta).
+        self.db.execute("CREATE TEMP TABLE IF NOT EXISTS cur_chain(rid TEXT PRIMARY KEY)")
         self.lock = threading.RLock()
 
     def _in(self, sql: str, keys: list, extra: tuple = ()):
@@ -866,6 +882,18 @@ class Store:
         with self.lock:
             self.db.executemany("INSERT OR IGNORE INTO archive VALUES(?,?,?,?,?,?,?,?)", rows)
 
+    def set_chain(self, rids) -> None:
+        """Gli id d'archivio raggiungibili come «richiesta in corso» (vedi chain_ok): sostituiti a ogni richiesta."""
+        with self.lock:
+            self.db.execute("DELETE FROM cur_chain")
+            self.db.executemany("INSERT OR IGNORE INTO cur_chain VALUES(?)", [(r,) for r in rids])
+
+    def in_chain(self, rid: str) -> bool:
+        if not rid:
+            return False
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM cur_chain WHERE rid=? LIMIT 1", (rid,)).fetchone() is not None
+
     def get(self, rid: str, conv: str | None = None):
         with self.lock:
             if conv:
@@ -880,7 +908,7 @@ class Store:
         with self.lock:
             return self.db.execute(
                 "SELECT rid, idx, role, name, content, tokens FROM archive WHERE conv=? AND instr(lower(content), "
-                "lower(?)) > 0 AND idx < ? ORDER BY idx DESC LIMIT ?",
+                "lower(?)) > 0 AND " + chain_ok() + " ORDER BY idx DESC LIMIT ?",
                 (conv, query, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
 
     def search_fts(self, conv: str, query: str, limit: int = 20, max_idx: int | None = None):
@@ -895,7 +923,8 @@ class Store:
             try:
                 return self.db.execute(
                     "SELECT a.rid, a.idx, a.role, a.name, a.content, a.tokens FROM archive_fts f "
-                    "JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? AND a.idx < ? "
+                    "JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? AND "
+                    + chain_ok("a.idx", "a.rid") + " "
                     "ORDER BY bm25(archive_fts) LIMIT ?",
                     (q, conv, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
             except sqlite3.OperationalError:
@@ -912,7 +941,7 @@ class Store:
                 rows = self.db.execute(
                     "SELECT a.rid, a.idx, a.role, a.name, a.content, a.tokens, -bm25(archive_fts) AS s "
                     "FROM archive_fts f JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? "
-                    "AND a.idx < ? ORDER BY s DESC, a.idx DESC LIMIT ?",
+                    "AND " + chain_ok("a.idx", "a.rid") + " ORDER BY s DESC, a.idx DESC LIMIT ?",
                     (q, conv, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -983,7 +1012,8 @@ class Store:
         p = (path or "").strip()
         with self.lock:
             return self.db.execute(
-                "SELECT idx, op, path, outcome, rid_args, rid_out, head FROM fileops WHERE conv=? AND idx < ? AND "
+                "SELECT idx, op, path, outcome, rid_args, rid_out, head FROM fileops WHERE conv=? AND "
+                + chain_ok("idx", "rid_out") + " AND "
                 "(path=? OR path LIKE ? OR ? LIKE '%' || path) ORDER BY idx",
                 (conv, 10 ** 9 if max_idx is None else max_idx, p, "%" + p, p)).fetchall()
 
@@ -1440,6 +1470,11 @@ class Manager:
         rows += [(aid_for(i, m), conv, i, "assistant-tool-args", None, args_text(m), self.tc.count(args_text(m)), now)
                  for i, m in enumerate(msgs) if m.get("role") == "assistant" and m.get("tool_calls")]
         self.store.archive_many(rows)
+        # 0.3.24: la catena della richiesta IN CORSO (vedi chain_ok). Esclusa la domanda corrente, che il modello
+        # vede per intero: tutto il resto del prefisso resta richiamabile anche dopo l'ultimo messaggio dell'utente,
+        # perché è il turno agentico in corso che lo ha appena fatto mascherare.
+        cur_user = max((i for i, m in enumerate(msgs) if is_human_user(m)), default=None)
+        self.store.set_chain([r[0] for r in rows if not (r[2] == cur_user and r[3] == "user")])
         self.kw = template_kwargs(req)
         events.extend(self._scan_marks(conv, msgs, hs))
         events.extend(self._scan_fileops(conv, msgs))
@@ -2371,7 +2406,7 @@ class Manager:
         if not rid:
             return None
         r = self.store.get(rid, conv)
-        if r is None or (max_idx is not None and r[2] >= max_idx):
+        if r is None or (max_idx is not None and r[2] >= max_idx and not self.store.in_chain(rid)):
             return self.L("recall: id %s non trovato", "recall: id %s not found") % rid
         text = r[5] or ""
         try:
@@ -2519,7 +2554,8 @@ class Manager:
             # l'uscita di strumento più recente, prima della domanda, in cui la domanda sceglie dei blocchi
             with self.store.lock:
                 cand = self.store.db.execute(
-                    "SELECT rid FROM archive WHERE conv=? AND role='tool' AND idx < ? ORDER BY idx DESC LIMIT 8",
+                    "SELECT rid FROM archive WHERE conv=? AND role='tool' AND " + chain_ok()
+                    + " ORDER BY idx DESC LIMIT 8",
                     (conv, 10 ** 9 if max_idx is None else max_idx)).fetchall()
             for (c,) in cand:
                 rc = self.store.get(c, conv)
