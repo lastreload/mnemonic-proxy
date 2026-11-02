@@ -19,12 +19,21 @@
     **created with the automatic configuration** (the mark is there) → the choices keep being applied at every
     start, conversations or not; **from an earlier setup** (files but no mark) → the choices are reported, marked
     `kept`, and nothing changes, exactly as in 0.3.23.
+  - **Folders created by 0.3.23 get their choices back.** 0.3.23 applied the choices to new folders but wrote no
+    mark, so those folders (the reporter's among them) would have stayed "earlier" for good. Their journal is the
+    record: `journal.jsonl` is append-only and the server logs `auto_config` before `startup`, so the **first**
+    start in the journal tells which version created the folder. A folder whose first start is a 0.3.23 start
+    whose `auto_config` event applied at least one choice counts as created with the automatic configuration, and
+    the next start writes the mark (`autoconfig.born_with_0323`). Anything else stays earlier: an older first
+    start, a first 0.3.23 start that applied nothing (an old folder whose journal was deleted), an unreadable line
+    before the first start, no journal.
   - **The answer is taken before the start can spoil it.** `server.main` reads the provenance *before*
     `os.makedirs` and before the journal is opened (both are created by the very process that is deciding), and
     passes it to `engines.setup`, which writes the mark only for a folder recognised as new.
   - **Conservative on every doubt, which 0.3.23 could not be.** An old folder whose archive happens to be empty
     now counts as an earlier folder instead of a new one; so do a folder that cannot be listed and an
-    `autoconfig.json` that cannot be read. An `auto_config` event in an old `journal.jsonl` is not a consent.
+    `autoconfig.json` that cannot be read. An `auto_config` event alone in an old `journal.jsonl` is not a consent
+    (only the first-start rule above is).
     `check` reads the provenance and **never** writes the mark, so a `check` run before the first start cannot
     make an earlier folder look automatic. Saved state is still never switched on by itself on a folder that
     predates the automatic configuration (PolyStrata guarantee, `tests/test_autoconfig.py`).

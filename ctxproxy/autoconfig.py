@@ -445,9 +445,55 @@ def origin(data_dir) -> tuple[str, str]:
         return ORIGIN_EARLIER, "the data folder cannot be listed (%s): treated as an earlier setup" % e
     if not names:
         return ORIGIN_FRESH, "the data folder is empty"
+    born = born_with_0323(data_dir)
+    if born:
+        return ORIGIN_AUTO, born
     shown = ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
     return ORIGIN_EARLIER, ("the data folder already holds %s and carries no %s: an earlier setup, kept as it "
                             "ran" % (shown, MARK_FILE))
+
+
+AUTO_FIRST_VERSION = "0.3.23"   # the version that introduced the automatic configuration, without the mark
+
+
+def born_with_0323(data_dir, max_lines: int = 2000) -> str:
+    """A folder created by 0.3.23 with the choices applied -> the reason in one line, otherwise "".
+
+    0.3.23 applied the automatic choices to a new folder but wrote no mark, so after its first conversation the
+    folder looked like an earlier setup (the reported bug). Its journal is the record: journal.jsonl is
+    append-only and never rotated, and the server logs `auto_config` (during the engine setup) before `startup`.
+    So the FIRST start in the journal tells which version created the folder. The folder counts as automatic only
+    when that first start is a 0.3.23 start AND its `auto_config` event applied at least one choice. Everything
+    else stays an earlier setup: an older first start, a first 0.3.23 start that applied nothing (an old folder
+    whose journal was deleted: 0.3.23 saw its conversations), an unreadable line before the first start, no
+    journal, no `startup` within `max_lines`. Read-only, never raises.
+    """
+    path = os.path.join(str(data_dir), "journal.jsonl")
+    last_auto = None
+    try:
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f):
+                if n >= max_lines:
+                    return ""
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    return ""
+                if not isinstance(rec, dict):
+                    return ""
+                if rec.get("event") == "auto_config":
+                    last_auto = rec
+                elif rec.get("event") == "startup":
+                    if (str(rec.get("version")) == AUTO_FIRST_VERSION and isinstance(last_auto, dict)
+                            and last_auto.get("decisions")):
+                        return ("journal.jsonl shows that %s created this folder with the automatic choices "
+                                "applied (its first start)" % AUTO_FIRST_VERSION)
+                    return ""
+    except (OSError, UnicodeDecodeError):
+        return ""
+    return ""
 
 
 def origin_line(where: str, why: str) -> str:

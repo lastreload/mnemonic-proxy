@@ -73,6 +73,19 @@ def folder_line(report):
     return [i for i in report["checks"] if i["check"] == "data folder origin"][0]
 
 
+def write_journal(data_dir, *records):
+    """A journal.jsonl as an earlier version left it (append-only, oldest first)."""
+    os.makedirs(data_dir, exist_ok=True)
+    with open(os.path.join(data_dir, "journal.jsonl"), "w", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+
+
+APPLIED_0323 = {"event": "auto_config", "machine": {}, "decisions": [{"field": "response_floor", "value": FLOOR,
+                                                                      "changed": True}]}
+START_0323 = {"event": "startup", "version": "0.3.23", "window": WINDOW}
+
+
 class TestOrigin(unittest.TestCase):
     """`autoconfig.origin`: where this data folder comes from, read-only."""
 
@@ -118,6 +131,34 @@ class TestOrigin(unittest.TestCase):
         os.makedirs(self.data)
         with open(os.path.join(self.data, "journal.jsonl"), "w", encoding="utf-8") as f:
             f.write(json.dumps({"event": "auto_config", "decisions": [{"field": "slot_save"}]}) + "\n")
+        self.assertEqual(autoconfig.origin(self.data)[0], autoconfig.ORIGIN_EARLIER)
+
+    def test_a_folder_created_by_0_3_23_with_the_choices_applied_is_automatic(self):
+        """0.3.23 applied the choices to new folders but wrote no mark: its journal is the record. The first start
+        in the (append-only) journal is a 0.3.23 start whose auto_config event applied a choice."""
+        make_archive(self.data, rows=2)
+        write_journal(self.data, APPLIED_0323, START_0323, {"event": "request"},
+                      {"event": "auto_config", "decisions": []}, START_0323)
+        where, why = autoconfig.origin(self.data)
+        self.assertEqual(where, autoconfig.ORIGIN_AUTO)
+        self.assertIn("0.3.23", why)
+
+    def test_a_folder_whose_first_start_predates_0_3_23_stays_earlier(self):
+        make_archive(self.data, rows=2)
+        write_journal(self.data, {"event": "startup", "version": "0.3.22"}, APPLIED_0323, START_0323)
+        self.assertEqual(autoconfig.origin(self.data)[0], autoconfig.ORIGIN_EARLIER)
+
+    def test_a_first_0_3_23_start_that_applied_nothing_stays_earlier(self):
+        """A pre-0.3.23 folder whose journal was deleted: 0.3.23 saw conversations and applied nothing."""
+        make_archive(self.data, rows=2)
+        write_journal(self.data, {"event": "auto_config", "decisions": []}, START_0323)
+        self.assertEqual(autoconfig.origin(self.data)[0], autoconfig.ORIGIN_EARLIER)
+
+    def test_an_unreadable_journal_line_before_the_first_start_stays_earlier(self):
+        make_archive(self.data, rows=2)
+        write_journal(self.data, APPLIED_0323)
+        with open(os.path.join(self.data, "journal.jsonl"), "a", encoding="utf-8") as f:
+            f.write("{ not json\n" + json.dumps(START_0323) + "\n")
         self.assertEqual(autoconfig.origin(self.data)[0], autoconfig.ORIGIN_EARLIER)
 
     def test_the_mark_records_the_version_and_the_applied_choices(self):
@@ -250,6 +291,18 @@ class TestTheReportedSequence(unittest.TestCase):
         self.assertEqual(chosen.get("notes_max_tokens"), NOTES, rep["auto_config"]["lines"])
         self.assertFalse([d for d in rep["auto_config"]["decisions"] if d.get("kept_existing")],
                          "nothing is 'kept' on a folder this version created")
+
+    def test_a_folder_created_by_0_3_23_gets_its_choices_back_and_the_mark(self):
+        """The reporter's own folder: created by 0.3.23 with the choices applied, then conversations. After the
+        upgrade the first start applies the choices again and records the mark, so it never depends on the journal
+        again."""
+        make_archive(self.data, rows=4)
+        write_journal(self.data, APPLIED_0323, START_0323)
+        log = self.start_proxy()
+        self.assertIn("auto config: response_floor = %d" % FLOOR, log, log)
+        self.assertIn("auto config: notes_max_tokens = %d" % NOTES, log, log)
+        self.assertIn("0.3.23", log, log)
+        self.assertTrue(os.path.exists(os.path.join(self.data, autoconfig.MARK_FILE)), log)
 
 
 if __name__ == "__main__":

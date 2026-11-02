@@ -1530,7 +1530,7 @@ name the case in one line (`data folder origin`):
 | the data folder | what happens | the line |
 |---|---|---|
 | **new** — not there yet, or empty | the choices are applied, and `autoconfig.json` records this version, the window and the values applied | `new data folder: the automatic choices are applied and recorded in autoconfig.json` |
-| **created with the automatic configuration** — it carries `autoconfig.json` | the choices keep being applied at every start, conversations or not | `data folder created with the automatic configuration: the choices stay applied` |
+| **created with the automatic configuration** — it carries `autoconfig.json`, or its journal shows that its first start was a 0.3.23 start that applied the choices (0.3.23 wrote no mark; the next start writes it) | the choices keep being applied at every start, conversations or not | `data folder created with the automatic configuration: the choices stay applied` |
 | **from an earlier setup** — it holds files but no `autoconfig.json`, or the mark cannot be read | the choices are only reported, marked `kept`, with the value the proxy would pick and why; nothing changes | `data folder from an earlier setup: the automatic choices are reported, not applied` |
 
 Write `"auto_config": true` in the config to apply them on an earlier folder as well; delete `autoconfig.json`

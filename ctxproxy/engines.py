@@ -434,8 +434,12 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisio
     chosen = autoconfig.decide(cfg, eng, explicit or (), mach,
                                exact=bool(counter is not None and counter.exact),
                                existing=(where == autoconfig.ORIGIN_EARLIER))
-    if mark and where == autoconfig.ORIGIN_FRESH and autoconfig.write_mark(data_dir, cfg, chosen):
-        eng.data_origin = autoconfig.ORIGIN_AUTO
+    # a folder recognised as new, or one 0.3.23 created (recognised from its journal, no mark yet): record it,
+    # so from now on the provenance never depends on the journal
+    if mark and (where == autoconfig.ORIGIN_FRESH or (where == autoconfig.ORIGIN_AUTO
+                                                       and not os.path.exists(autoconfig.mark_path(data_dir)))):
+        if autoconfig.write_mark(data_dir, cfg, chosen):
+            eng.data_origin = autoconfig.ORIGIN_AUTO
     if decisions is not None:
         decisions.extend(chosen)
     if journal is not None and chosen:
