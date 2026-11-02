@@ -129,7 +129,10 @@ class TestManager(unittest.TestCase):
         self.assertIn("write src/f0.js", out)
         self.assertIn("succeeded", out)   # 0.3.1: English
         self.assertIn("id=a", out)
-        # filtro di catena: niente risultati dalla domanda corrente in poi
+        # filtro di catena (0.3.24): un blocco della richiesta IN CORSO resta raggiungibile anche oltre max_idx
+        # (è il turno agentico che lo ha appena fatto mascherare); fuori dalla catena corrente il taglio tiene.
+        self.assertIn("ZETA11", mgr.recall(p.conv, {"query": "ZETA11"}, max_idx=3))
+        mgr.store.set_chain([])          # nessuna richiesta in corso: torna il solo taglio per indice
         self.assertIn("no results", mgr.recall(p.conv, {"query": "ZETA11"}, max_idx=3))
         # id di un'altra conversazione: non trovato prima di cercare nella propria
         self.assertIn("not found", mgr.recall(p.conv, {"id": "r0000000000"}))

@@ -21,6 +21,7 @@ import re
 import sqlite3
 
 from .lang import outcome_text
+from .core import chain_ok
 
 P_SCHEMA = """
 CREATE TABLE IF NOT EXISTS passages(pid INTEGER PRIMARY KEY, rid TEXT, conv TEXT, idx INT, role TEXT, off INT,
@@ -184,7 +185,8 @@ class PassageIndex:
             return []
         tbl = "p_norm" if flex else "p_raw"
         sql = ("SELECT p.pid, p.rid, p.idx, p.role, p.off, p.len, -bm25(%s) AS s FROM %s JOIN passages p ON "
-               "p.pid = %s.rowid WHERE %s MATCH ? AND p.conv=? AND p.idx < ? AND p.idx >= ?" % (tbl, tbl, tbl, tbl))
+               "p.pid = %s.rowid WHERE %s MATCH ? AND p.conv=? AND %s AND p.idx >= ?"
+               % (tbl, tbl, tbl, tbl, chain_ok("p.idx", "p.rid")))
         args = [expr, conv, max_idx if hi is None else min(max_idx, hi + 1), lo]
         if roles:
             sql += " AND p.role IN (%s)" % ",".join("?" * len(roles))
@@ -577,7 +579,8 @@ class Recall2:
             (with_hits if n else without).append("%s(%d)" % (t, n) if n else t)
         files = []
         with self.st.lock:
-            for p, in self.st.db.execute("SELECT path FROM fileops WHERE conv=? AND idx<? AND op IN ('write','edit') "
+            for p, in self.st.db.execute("SELECT path FROM fileops WHERE conv=? AND " + chain_ok("idx", "rid_out")
+                                          + " AND op IN ('write','edit') "
                                          "GROUP BY path ORDER BY count(*) DESC LIMIT 6", (conv, max_idx)):
                 files.append(p.rsplit("/", 2)[-2:] and "/".join(p.rsplit("/", 2)[-2:]))
         if self.en:
@@ -757,7 +760,10 @@ class Recall2:
     # ------------------------------------------------------------ attorno a un id
     def around(self, conv, rid, mode, args, max_idx, meta) -> str:
         r = self._row(rid, conv)
-        if not r:
+        if not r or (max_idx is not None and r[2] >= max_idx and not self.st.in_chain(rid)):
+            # 0.3.24: stessa regola di _recall_page. Prima `around` non applicava NESSUN filtro di catena,
+            # perciò un id di argomenti (a…) del turno in corso rispondeva e l'id dell'uscita (r…) no:
+            # l'asimmetria che il modello aggirava a tentoni (vedi chain_ok).
             return self.L("recall: id %s non trovato", "recall: id %s not found") % rid
         conv = r[1]
         cuts = seg_bounds(self.st, conv)
@@ -808,7 +814,7 @@ class Recall2:
             n = 2
         with self.st.lock:
             rows = self.st.db.execute("SELECT rid, idx, role, content, tokens FROM archive WHERE conv=? AND idx BETWEEN "
-                                      "? AND ? AND idx < ? ORDER BY idx, CASE role WHEN 'assistant-reasoning' THEN 0 "
+                                      "? AND ? AND " + chain_ok() + " ORDER BY idx, CASE role WHEN 'assistant-reasoning' THEN 0 "
                                       "WHEN 'assistant' THEN 1 WHEN 'assistant-tool-args' THEN 2 ELSE 3 END",
                                       (conv, idx - n, idx + n, max_idx)).fetchall()
         lines = [self.L("[recall: messaggi vicini a id=%s (messaggio %d, \u00b1%d): adiacenza, NON un collegamento "

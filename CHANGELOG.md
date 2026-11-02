@@ -2,6 +2,48 @@
 
 ## 0.3.24 — unreleased
 
+- **The recall of the current turn: the proxy handed out ids it then refused.** A single human prompt followed by
+  hundreds of tool calls — `opencode run`, a Hermes worker, any headless agent — is the shape where masking does
+  the most work, and it was exactly the shape where recall was blind. `server.py` passed `max_idx=last_user` (the
+  index of the last human message) to every recall and the archive filter was `idx < max_idx`, so **every block
+  masked after that message was unreachable for the rest of the turn**: its receipt was in the prompt, its id was
+  valid, its text was in the archive, and `recall(id=…)` answered `not found`. It became reachable only when a new
+  user message arrived — i.e. once the turn it belonged to was over. The same filter also hid the turn's own
+  `query` hits and the turn's `path` timeline.
+  - **Measured on our own journals, after the fact** (136 journals: 31 syntaxis sessions, the 104 journals of the
+    AgentLongBench bench run and the 0.3.23 production journal, read only, indices compared against the human
+    message recorded in each `recall` event): of 205 id calls, **32 asked for a block past the last human message
+    and all 32 came from one opencode session** — the one the README
+    quotes as "44 recall calls all used". In that session the filter itself refused none of the 32: they all used
+    `mode=output`, whose path (`Recall2.around`) applied no filter at all, so the 21 output ids (`r…`) got only
+    the pointer to their arguments id (that is what `mode=output` does for an output) and the 11 arguments ids got
+    700-char excerpts. A plain `recall(id=…)` of any of those blocks would have answered `not found`, which is
+    what a Windows user hit. The filter did empty the session's 4 `path` calls, although the file had been read
+    in that very turn. The 10 `emergency=current_tool` masks of
+    that session are unreachable by construction: that mask archives the LAST message of the request. The bench
+    run refuses nothing (140 id calls, 0 refused) because its driver sends every round as a new user message, so
+    `last_user` always sits at the end: this is a defect of the single-prompt shape, not of long sessions as such.
+  - **Two code paths, two different rules.** `Recall2.around` (`mode=output/call/neighbors`) resolved ids with
+    **no chain filter at all**; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`. So the
+    same block answered or not depending on the mode. Both paths now apply the same rule. (In the opencode session
+    the "no text" answers were not this filter: `mode=output` on an output id returns a pointer by design, and the
+    arguments id returns 700-char excerpts. That behaviour is a separate defect, listed below.)
+  - **The fix is a chain filter, not a wider window.** `idx < max_idx` was doing two jobs with one line: keeping
+    out sibling branches (edits, regenerations) and the current question, which is right, and keeping out the
+    current agentic turn, which is not. New `chain_ok()` (`core.py`) turns the filter into
+    `(idx < ? OR rid IN (SELECT rid FROM cur_chain))`, where `cur_chain` is a TEMP table holding the archive ids
+    of the prefix sent **now**, minus the current question (which the model sees in full). Same parameter list, so
+    every query keeps its signature. A sibling branch has different ids (`rid` = hash of index + content), so it
+    stays out; a test regenerates a turn and proves the abandoned text is still unreachable.
+  - **No change to the prompt.** The filter only decides what a recall answer may contain; masking, segments,
+    anchors and the prompt sent to the engine are untouched — checked hash by hash on a 40-request masking run with
+    no recall. `tests/test_recall_current_turn.py` (12 tests, 10 of them failing on the previous code) covers ids,
+    `emergency=current_tool`, `query`, `path`, the structured engine, the arguments/output symmetry, the exclusion
+    of the current question, the exclusion of sibling branches on both paths and one end-to-end request through
+    `Proxy.chat` with the recall issued in the middle of the turn. Adjacent defects found while measuring and left
+    for separate cards (ids resolved without a conversation, sibling branches below `max_idx`, `mode=output`
+    returning a pointer instead of text, arguments-id excerpts cut at 700 characters) are listed in the report.
+
 - **The first Windows user: the console no longer mangles what the commands print.** On a PowerShell window whose
   code page is not UTF-8, `mnemonic-proxy`, `demo`, `check`, `init-config` and `mnemonic-mcp` produced output the
   user could not read: `compat.console_safe` switched the stream to `errors="backslashreplace"`, so the receipt
