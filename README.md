@@ -181,7 +181,10 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
   LM Studio: `lms load <model> --context-length 32768`, then `lms server start`; `lms ps` shows it.
 - **The proxy reads that context** (0.3.8): Ollama `GET /api/ps` (`context_length` of the loaded model: the context
   it runs with, not the training context of `POST /api/show`), LM Studio `GET /api/v0/models`
-  (`loaded_context_length`). It reads it again before every request (one cheap GET; a model that is not loaded is
+  (`loaded_context_length`). Ollama is recognised only when `GET /api/version` **and** a coherent `/api/ps` models
+  array both answer (0.3.24): a gateway such as llama-swap that exposes the version but not `/api/ps` runs as a
+  generic engine, and its `/v1/models` catalog is reported as model availability with the loaded state and the
+  window unverified. It reads it again before every request (one cheap GET; a model that is not loaded is
   loaded first with a 1-token request), so the window follows the engine and a prompt never goes over it. Below
   16384 the proxy refuses to start; a `window` in the config bigger than the engine context also refuses the start
   and fails `check`, with the command that fixes it. You can leave `window` out of the config.
