@@ -1345,7 +1345,7 @@ def make_handler(proxy: Proxy):
                 try:
                     st, out = proxy.mark_action(json.loads(body or b"{}"))
                 except (ValueError, KeyError, TypeError) as e:
-                    st, out = 400, {"error": {"message": "richiesta non valida: %s" % e}}
+                    st, out = 400, {"error": {"message": "invalid request: %s" % e}}
                 return self._send(st, out)
             if path == "/v1/strata/saved-state/reset":
                 if not is_loopback(self.client_address[0]):      # module lookup at call time (patched in tests)
@@ -1369,7 +1369,7 @@ def make_handler(proxy: Proxy):
             try:
                 req = json.loads(body or b"{}")
             except ValueError:
-                return self._send(400, {"error": {"message": "JSON non valido"}})
+                return self._send(400, {"error": {"message": "invalid JSON"}})
             hint = self.headers.get("X-Strata-Conversation") or req.get("prompt_cache_key")
             if not req.get("stream"):
                 try:

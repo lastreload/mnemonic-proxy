@@ -239,7 +239,12 @@ class Config:
     # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + recall + tools;
     # gli altri si caricano con lo strumento tools (definizione nel risultato, in coda: il prefisso non cambia)
     tools_paging: bool = False
-    tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
+    # Nomi di base dei client documentati: pi / opencode / Claude Code (read bash edit write grep find ls) e
+    # Hermes (read_file write_file patch search_files terminal). Senza i nomi di Hermes il pager mandava in
+    # catalogo TUTTO il suo elenco e in testa restavano solo recall e tools (card t_3ebcb103). Un nome che il
+    # client non ha non cambia niente: la divisione degli altri client resta identica.
+    tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls",
+                         "read_file", "write_file", "patch", "search_files", "terminal")
     tools_load_max: int = 5
     # testa misurabile (card t_49579af0, toolheads.py): una riga di giornale `tool_heads` per conversazione e per
     # cambio dell'elenco strumenti, con nomi e peso delle definizioni. SOLO nomi e numeri: nessun testo.
@@ -668,9 +673,9 @@ class TokenCounter:
         if tokenizer_path:
             try:
                 self.tk = load_tokenizer(tokenizer_path)
-                self.kind = "esatto:" + os.path.basename(os.path.abspath(tokenizer_path).rstrip("/"))
+                self.kind = "exact:" + os.path.basename(os.path.abspath(tokenizer_path).rstrip("/"))
             except Exception as e:  # noqa: BLE001
-                self.kind += " (tokenizer non caricato: %s)" % e
+                self.kind += " (tokenizer not loaded: %s)" % e
         self._cache: dict[str, int] = {}
         self.prompt_template = None
         if self.tk is not None and tokenizer_path:
@@ -736,7 +741,7 @@ def load_tokenizer(path: str):
     if os.path.isdir(p) and os.path.exists(os.path.join(p, "vocab.json")):
         from .packtok import build
         return build(p)
-    raise ValueError("tokenizer non riconosciuto: %s" % path)
+    raise ValueError("unrecognized tokenizer: %s" % path)
 
 
 class Journal:

@@ -2,6 +2,41 @@
 
 ## 0.3.24 — unreleased
 
+- **The first Windows user: the console no longer mangles what the commands print.** On a PowerShell window whose
+  code page is not UTF-8, `mnemonic-proxy`, `demo`, `check`, `init-config` and `mnemonic-mcp` produced output the
+  user could not read: `compat.console_safe` switched the stream to `errors="backslashreplace"`, so the receipt
+  brackets `⟪ ⟫` arrived as the literal text `\u27ea` `\u27eb`, and the characters the code page *can* encode
+  (`·`, `—`, `«»`) were written as single bytes that the terminal then read back with another code page (`?`).
+  A non-UTF-8 stdout/stderr is now wrapped in `compat.AsciiConsole`: what reaches the terminal is **pure ASCII**
+  with readable stand-ins (`⟪`/`«` -> `<<`, `⟫`/`»` -> `>>`, `·` -> `-`, `—` -> `--`, `📌` -> `[pin]`, `✅` ->
+  `[ OK ]`), and accents in paths are folded (`Projet par défaut` -> `Projet par defaut`) instead of being left to
+  a code-page guess. `chcp 65001` brings the real characters back.
+  - **Console only, byte for byte.** A UTF-8 stream is returned untouched — the same object, the same bytes as
+    every earlier version. The text sent to the engine, the verbatim archive, the journal and `last_request.json`
+    never pass through this layer: an identity test runs the same `demo` on a UTF-8 and on a simulated `cp1252`
+    console and compares the archived content of the two runs byte for byte (`tests/test_windows_console.py`).
+    `mnemonic-mcp` wraps **stderr only**: the stdio protocol writes JSON on `sys.stdout.buffer` and stays UTF-8.
+- **Italian strings that reached the English output.** The startup line said `tokens=esatto:<tokenizer>` and
+  `(tokenizer non caricato: …)`; with `engine_tokenize` it said `esatto:/tokenize`. They are now `exact:` and
+  `(tokenizer not loaded: …)`. Also translated: the six engine notes `check` prints (`/v1/status does not answer`,
+  `/v1/models does not answer like ds4-server`, `slot %d is missing`, `%d slots (--parallel): the proxy pins
+  id_slot=…`, `/slots not available (server started with --no-slots)`, `saves are off: start llama-server with
+  --slot-save-path DIR`), the HTTP 400 bodies `invalid request: …`, `invalid JSON` and `unsupported role: …`
+  (Anthropic Messages and Responses), the `truncation_guard` journal reason `no room for reasoning`, and the
+  `kvarchive` errors and `--codecs` help. The Italian texts the proxy writes **into the prompt** are untouched:
+  they are selected by `prompt_language` and old conversations depend on them byte for byte.
+- **`tools_paging` is now usable with Hermes.** `tools_core` defaulted to `read bash edit write grep find ls`:
+  no Hermes tool name matched, so with the pager on the whole Hermes toolset went to the catalog and the prompt
+  head kept only `recall` and `tools` — every definition the model needed came back at the end of the history on
+  each load. The defaults now also contain Hermes' base names (`read_file`, `write_file`, `patch`,
+  `search_files`, `terminal`), so Hermes gets a base of five like opencode. The change is additive: a name the
+  client does not have moves nothing, and a test checks that the split for opencode, pi and Claude Code's names
+  is identical with the old defaults and the new ones.
+- **The client auto-compaction reminder names every documented client.** `check` listed only pi and Claude Code;
+  it now also prints opencode (`"compaction": {"auto": false}`) and Hermes (`compression.enabled false`, the real
+  Hermes key — not `compaction.*`). The README's agent table gained the missing opencode row, and the
+  troubleshooting table gained both clients and the Windows console symptom.
+
 - **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
   head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an
   interactive prompt (19 166 tokens median, 24.8 % of the prompt in the measurement of card `t_d1134087`), yet it
@@ -25,9 +60,8 @@
     `tools` or an unloaded tool. So an empty journal could not distinguish "the pager never ran" from "the pager
     ran and the model never touched the catalog". `tool_heads` now records the split itself. The split also
     depends entirely on the client's naming: with opencode's documented tools, `tools_core` keeps 5 in the head
-    (`bash edit write read grep`) and sends 6 to the catalog; with Hermes' tool names (`read_file`, `terminal`,
-    `search_files`, …) **no** name matches `tools_core`, so the whole list goes to the catalog and the head keeps
-    only `recall` + `tools` — a test covers both.
+    (`bash edit write read grep`) and sends 6 to the catalog; with Hermes' tool names it kept **none** until the
+    `tools_core` defaults gained them later in this same release (entry above) — a test covers both.
   - **Measured cost, no behaviour change.** About 450 bytes per line, one line per 200 requests in the test, and
     the line's size does not grow with the length of the definitions; the prompt sent to the engine is
     byte-identical with the event on or off (identity test, pager on and off). `render.prompt_head` factors the
