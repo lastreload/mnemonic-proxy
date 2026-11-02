@@ -400,7 +400,7 @@ def generic_slack(cfg, engine: Engine, explicit=(), exact: bool = False) -> floa
 
 
 def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisions=None,
-          machine=None) -> Engine:
+          machine=None, data_dir: str = "") -> Engine:
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
     chiesto e possibile, usa /tokenize del motore per contare i token.
 
@@ -416,7 +416,8 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisio
     from . import autoconfig
     mach = autoconfig.Machine.read(eng) if machine is None else machine
     chosen = autoconfig.decide(cfg, eng, explicit or (), mach,
-                               exact=bool(counter is not None and counter.exact))
+                               exact=bool(counter is not None and counter.exact),
+                               existing=autoconfig.existing_install(data_dir))
     if decisions is not None:
         decisions.extend(chosen)
     if journal is not None and chosen:

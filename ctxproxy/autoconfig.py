@@ -37,6 +37,8 @@ from __future__ import annotations
 import dataclasses
 import os
 import shutil
+import sqlite3
+from pathlib import Path
 import subprocess
 import sys
 
@@ -48,6 +50,8 @@ STATE_KB_SOURCE = "the 20000 bytes/token of autosave.py; spread in docs/dev-note
 # saved-state options the automatic configuration may switch ON (all of them only touch engine state files,
 # never the prompt). `seal_experimental` and `kv_archive` stay opt-in on purpose: see README.
 AUTO_SAVED_STATE = ("slot_save", "mask_anchor", "autosave")
+# every field decide() may set: restored as they were on an existing data folder
+AUTO_FIELDS = AUTO_SAVED_STATE + ("engine_tokenize", "response_floor", "notes_max_tokens")
 # how long to wait for an external helper (nvidia-smi, sysctl, vm_stat) before giving up on it
 PROBE_TIMEOUT_S = 3.0
 
@@ -330,16 +334,60 @@ def zstd_available() -> bool:
     return zstd is not None
 
 
-def decide(cfg, engine, explicit=(), machine: Machine | None = None, exact: bool = False) -> list[Decision]:
+def existing_install(data_dir) -> bool:
+    """True when the data folder already holds conversations (archive.sqlite with at least one archived message).
+
+    An upgrade must not change what a running setup does: automatic choices are only *applied* on a fresh data
+    folder, or when the user writes "auto_config": true. Read-only; an unreadable archive counts as existing.
+    """
+    if not data_dir:
+        return False
+    p = os.path.join(data_dir, "archive.sqlite")
+    if not os.path.isfile(p):
+        return False
+    try:
+        con = sqlite3.connect(Path(p).resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT 1 FROM archive LIMIT 1").fetchone() is not None
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return True
+
+
+EXISTING_WHY = ("not applied: this data folder already has conversations, so an upgrade keeps how they ran "
+                "(automatic choice: %s, because %s)")
+EXISTING_FIX = 'write "auto_config": true in the config to apply the automatic choices, or set "%s" yourself'
+
+
+def decide(cfg, engine, explicit=(), machine: Machine | None = None, exact: bool = False,
+           existing: bool = False) -> list[Decision]:
     """Pick the engine/machine-dependent defaults the user did not write. -> the decisions, in report order.
 
     `cfg` is modified in place for the fields marked `changed`. `explicit` is the set of field names the user
-    wrote (config file or command line): those are reported and never changed.
+    wrote (config file or command line): those are reported and never changed. `existing` (see
+    `existing_install`): the data folder already has conversations; unless "auto_config" was written, the
+    choices are reported as what the proxy would pick and `cfg` is left as it was.
     """
     explicit = set(explicit or ())
     out: list[Decision] = []
     if not getattr(cfg, "auto_config", True):
         return out
+    before = {f: getattr(cfg, f, None) for f in AUTO_FIELDS}
+    out = _decide(cfg, engine, explicit, machine, exact)
+    if existing and "auto_config" not in explicit:
+        for d in out:
+            if d.changed:
+                setattr(cfg, d.field, before.get(d.field))
+                d.why = EXISTING_WHY % (fmt(d.value), d.why)
+                d.override = EXISTING_FIX % d.field
+                d.value = before.get(d.field)
+                d.changed = False
+    return out
+
+
+def _decide(cfg, engine, explicit, machine, exact) -> list[Decision]:
+    out: list[Decision] = []
     window = int(getattr(cfg, "window", 0) or 0)
 
     # --- saved state: slot_save, mask_anchor, autosave (engine state files only, never the prompt)

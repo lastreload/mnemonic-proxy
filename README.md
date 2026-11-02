@@ -1402,7 +1402,14 @@ READY (exit 0)
 
 The same lines appear in the startup log as `[mnemonic-proxy] auto config: …`, and in `journal.jsonl` as one
 `auto_config` event. `"auto_config": false` turns the whole mechanism off: every default is then used exactly
-as written in the table below. The measured output of all of this, engine by engine, is in the
+as written in the table below.
+
+**Upgrades keep what was running.** The choices are *applied* only on a fresh data folder (no archived
+conversation yet). On a data folder that already has conversations they are reported, marked `kept`, with the
+value the proxy would pick and why, and nothing changes; write `"auto_config": true` in the config to apply
+them. The reason: the proxy cannot tell every engine apart (a PolyStrata release before v0.1.45-poly.7 ends
+the engine at the first save on a `strata-poly` model, and it answers like Strata), so an upgrade must never
+turn saved state on by itself. The measured output of all of this, engine by engine, is in the
 [dev note](docs/dev-notes/AUTOCONFIG-RESULT.md).
 
 **Why the rest of the recommended config is still not the default.** The proxy guarantees that an old

@@ -253,7 +253,8 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
     auto_probe = Config.from_dict(raw_cfg)
     engines.apply(auto_probe, eng, None, explicit, log=None)
     machine = autoconfig.Machine.read(eng)
-    decisions = autoconfig.decide(auto_probe, eng, explicit, machine, exact=bool(getattr(a, "tokenizer", None)))
+    decisions = autoconfig.decide(auto_probe, eng, explicit, machine, exact=bool(getattr(a, "tokenizer", None)),
+                                  existing=autoconfig.existing_install(getattr(a, "data", "") or ""))
     for d in decisions:
         if d.changed:
             setattr(cfg, d.field, d.value)

@@ -38,6 +38,11 @@
     option chosen, every option left alone, each with its reason and its override; `--json` carries the same
     under `auto_config`. The startup log prints the applied choices as `[mnemonic-proxy] auto config: …` and
     `journal.jsonl` gets one `auto_config` event. `"auto_config": false` turns the whole mechanism off.
+  - **Upgrades keep what was running**: the choices are applied only on a fresh data folder. When the data folder
+    already has archived conversations they are reported (`kept`, with the value that would be picked and why)
+    and nothing changes, unless `"auto_config": true` is written. The proxy cannot tell a PolyStrata release
+    before v0.1.45-poly.7 from Strata, and there the first save on a `strata-poly` model ends the engine: an
+    upgrade must never turn saved state on by itself (`tests/test_autoconfig.py`, `TestExistingInstall`).
   - Because `check` now reports the configuration the server would really run with, a Strata or llama-server
     setup with `slot_dir` goes from *"supported by the engine, not enabled in the proxy config"* to
     *"supported by the engine, configured in the proxy (slot_save, mask_anchor, autosave)"* with no edit.

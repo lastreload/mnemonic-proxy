@@ -193,6 +193,60 @@ class TestSavedStateRules(unittest.TestCase):
         self.assertIn("free on the slot_dir disk", why)
 
 
+def make_archive(data_dir, rows=1):
+    """A data folder as an earlier version leaves it: archive.sqlite with `rows` archived messages."""
+    from ctxproxy.core import Store
+    os.makedirs(data_dir, exist_ok=True)
+    store = Store(os.path.join(data_dir, "archive.sqlite"))
+    for i in range(rows):
+        store.db.execute("INSERT INTO archive(rid, conv, idx, role, name, content, tokens, created) "
+                         "VALUES (?, 'c1', ?, 'tool', 'bash', 'output', 1, 0)", ("r%d" % i, i))
+    store.db.commit()
+    store.db.close()
+
+
+class TestExistingInstall(unittest.TestCase):
+    """An upgrade must not change what a running setup does: on a data folder that already has conversations
+    the automatic choices are reported, not applied, unless "auto_config" is written. Found in review: a
+    PolyStrata release before poly.7 ends the engine at the first save on a strata-poly model, and the proxy
+    cannot tell PolyStrata from Strata, so turning saved state on by itself after an upgrade could kill it."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.data = os.path.join(self.tmp, "data")
+
+    def test_detects_only_a_folder_with_conversations(self):
+        self.assertFalse(autoconfig.existing_install(""))
+        self.assertFalse(autoconfig.existing_install(self.data), "missing folder")
+        make_archive(self.data, rows=0)
+        self.assertFalse(autoconfig.existing_install(self.data), "an empty archive is a fresh install")
+        make_archive(self.data, rows=1)
+        self.assertTrue(autoconfig.existing_install(self.data))
+
+    def test_existing_folder_keeps_every_field_and_says_what_it_would_pick(self):
+        cfg = Config(slot_dir=self.tmp)
+        before = {f: getattr(cfg, f) for f in autoconfig.AUTO_FIELDS}
+        d = autoconfig.decide(cfg, local_engine(tokenize=True), set(), BIG, existing=True)
+        self.assertEqual({f: getattr(cfg, f) for f in autoconfig.AUTO_FIELDS}, before)
+        self.assertTrue(d, "the choices must still be reported")
+        self.assertFalse([x.field for x in d if x.changed])
+        slot = [x for x in d if x.field == "slot_save"][0]
+        self.assertIn("already has conversations", slot.why)
+        self.assertIn("automatic choice: true", slot.why)
+        self.assertIn('"auto_config": true', slot.override)
+
+    def test_writing_auto_config_applies_the_choices_on_an_existing_folder(self):
+        cfg = Config(slot_dir=self.tmp, auto_config=True)
+        d = autoconfig.decide(cfg, local_engine(), {"auto_config"}, BIG, existing=True)
+        self.assertTrue(cfg.slot_save and cfg.mask_anchor and cfg.autosave)
+        self.assertIn("slot_save", [x.field for x in d if x.changed])
+
+    def test_fresh_folder_is_unchanged_behaviour(self):
+        cfg = Config(slot_dir=self.tmp)
+        autoconfig.decide(cfg, local_engine(), set(), BIG, existing=False)
+        self.assertTrue(cfg.slot_save)
+
+
 class TestOtherRules(unittest.TestCase):
     def test_engine_tokenize_when_the_engine_counts_exactly(self):
         cfg = Config()
@@ -329,6 +383,29 @@ class TestCheckExplainConfig(unittest.TestCase):
         saved = [i for i in data["checks"] if i["check"] == "saved state"][0]
         self.assertEqual(saved["status"], check.OK)
         self.assertIn("slot_save", saved["evidence"])
+
+    def test_check_on_an_existing_data_folder_reports_without_applying(self):
+        tmp = tempfile.mkdtemp()
+        cfg = {"slot_dir": os.path.join(tmp, "slots")}
+        fake = FakeEngine(flavor="strata", n_ctx=131072)
+        url = fake.start()
+        self.addCleanup(fake.stop)
+        data_dir = os.path.join(tmp, "data")
+        make_archive(data_dir)
+        path = os.path.join(tmp, "config.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        out = io.StringIO(); old = sys.stdout; sys.stdout = out
+        try:
+            check.main(["--json", "--upstream", url, "--port", "18997", "--data", data_dir, "--config", path])
+        except SystemExit:
+            pass
+        finally:
+            sys.stdout = old
+        data = json.loads(out.getvalue())
+        decisions = {d["field"]: d for d in data["auto_config"]["decisions"]}
+        self.assertFalse(decisions["slot_save"]["changed"])
+        self.assertIn("already has conversations", decisions["slot_save"]["why"])
 
     def test_without_a_slot_dir_the_reason_is_printed_and_nothing_is_on(self):
         data, _ = self.run_check("strata")

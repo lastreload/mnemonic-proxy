@@ -1514,7 +1514,7 @@ def serve(a, raw_cfg, cfg):
     # engine/machine-dependent options before the session folder and the saved-state workers are set up.
     decisions: list = []
     engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter, decisions=decisions,
-                          log=lambda m: print(m, file=sys.stderr, flush=True))
+                          log=lambda m: print(m, file=sys.stderr, flush=True), data_dir=a.data)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     # 0.3.22: the session folder is the proxy's job, not a setup step for the user. Only when the engine
