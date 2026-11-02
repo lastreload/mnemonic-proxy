@@ -373,7 +373,8 @@ def build_mcp_parser():
 
 def main(argv=None):
     a = build_mcp_parser().parse_args(argv)
-    compat.console_safe(sys.stderr)
+    # Only stderr: the stdio protocol writes JSON bytes on sys.stdout.buffer and must stay UTF-8.
+    sys.stderr = compat.console_safe(sys.stderr)
     srv = McpServer(Archive(a.db, a.journal, a.max_tokens, a.tokenizer))
     if a.http:
         srv.serve_http(a.host, a.http)

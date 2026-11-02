@@ -191,7 +191,7 @@ def _detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         # strata-poly, whose SAVE/RESTORE commands are unsupported.
         e = Engine("strata", slot_save=True, slot_id=slot_id, status_kind="strata", detected=kind == "auto")
         if s is None:
-            e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
+            e.notes.append("/v1/status does not answer (engine down or unreachable)")
         else:
             # Strata espone la finestra in context (native = max_positions = --max-context): la finestra
             # del motore viene letta qui, come llama.cpp la legge da /slots
@@ -222,7 +222,7 @@ def _detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
             e.model = m0.get("name") or m0.get("id")
             e.n_ctx = int(m0.get("context_length") or 0) or None
         else:
-            e.notes.append("/v1/models non risponde come ds4-server (motore spento o non raggiungibile)")
+            e.notes.append("/v1/models does not answer like ds4-server (engine down or unreachable)")
         return e
     props = _get_json(up, "/props") if kind in ("auto", "llama.cpp") else None
     if kind in ("auto", "llama.cpp") and isinstance(props, dict):
@@ -245,22 +245,22 @@ def _detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         if isinstance(slots, list):
             mine = next((x for x in slots if x.get("id") == slot_id), None)
             if mine is None:
-                e.notes.append("slot %d assente (slot: %s)" % (slot_id, [x.get("id") for x in slots]))
+                e.notes.append("slot %d is missing (slots: %s)" % (slot_id, [x.get("id") for x in slots]))
             else:
                 e.n_ctx = int(mine.get("n_ctx") or 0) or None
             if len(slots) > 1:
-                e.notes.append("%d slot (--parallel): il proxy fissa id_slot=%d nelle richieste" % (len(slots),
-                                                                                                   slot_id))
+                e.notes.append("%d slots (--parallel): the proxy pins id_slot=%d on every request"
+                               % (len(slots), slot_id))
         else:
             e.status_kind = None
-            e.notes.append("/slots non disponibile (server con --no-slots): niente stato del motore")
+            e.notes.append("/slots not available (server started with --no-slots): no engine state")
         if e.n_ctx is None:
             dgs = props.get("default_generation_settings") or {}
             e.n_ctx = int(dgs.get("n_ctx") or 0) or None
         en = _slots_enabled(up, slot_id)
         e.slot_save = bool(en) and e.status_kind is not None
         if en is False:
-            e.notes.append("salvataggi spenti: avviare llama-server con --slot-save-path DIR")
+            e.notes.append("saves are off: start llama-server with --slot-save-path DIR")
         return e
     e = Engine("openai", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
     # 0.3.8: Ollama / LM Studio expose the context they run with (enginectx.py); other generic engines: unchanged
@@ -451,7 +451,7 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisio
         up.router = eng.router_state
     if counter is not None and getattr(cfg, "engine_tokenize", False) and eng.tokenize and not counter.exact:
         counter.tk = RemoteTokenizer(up)
-        counter.kind = "esatto:/tokenize"
+        counter.kind = "exact:/tokenize"
     return eng
 
 

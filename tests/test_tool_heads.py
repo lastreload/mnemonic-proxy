@@ -474,20 +474,33 @@ class TestPagerSilence(Base):
         self.assertEqual([d["name"] for d in e["defs"]], ["read", "bash", RECALL_NAME, TOOLS_NAME])
 
     def test_real_clients_split(self):
-        """Strumenti reali dei due client contro `tools_core` di serie."""
+        """Strumenti reali dei due client contro `tools_core` di serie (0.3.24: contiene anche i nomi di base
+        di Hermes, perciò Hermes ha una base come opencode)."""
         core = Config().tools_core
         pager = ToolPager(core)
         base, catalog = pager.split([tool(n) for n in OPENCODE])
         self.assertEqual([tool_name(t) for t in base], ["bash", "edit", "write", "read", "grep"])
         self.assertEqual(sorted(catalog), ["apply_patch", "glob", "list", "task", "todowrite", "webfetch"])
-        # Hermes: NESSUN nome coincide con tools_core, l'intero elenco finisce in catalogo
         base, catalog = pager.split([tool(n) for n in HERMES])
-        self.assertEqual(base, [])
-        self.assertEqual(len(catalog), len(HERMES))
-        self.assertEqual(sorted(catalog), sorted(HERMES))
+        self.assertEqual([tool_name(t) for t in base],
+                         ["read_file", "write_file", "patch", "search_files", "terminal"])
+        self.assertEqual(sorted(catalog), sorted(HERMES[5:]))
+
+    def test_hermes_names_do_not_change_any_other_client(self):
+        """La correzione di `tools_core` è additiva: un nome che il client non ha non sposta niente. La divisione
+        di opencode e di pi è identica con i vecchi default e con i nuovi."""
+        old = ToolPager(("read", "bash", "edit", "write", "grep", "find", "ls"))
+        new = ToolPager(Config().tools_core)
+        PI = ["read", "write", "edit", "bash", "grep", "glob", "webfetch", "task"]
+        for names in (OPENCODE, PI, ["Read", "Write", "Edit", "Bash", "Grep", "Glob"]):
+            a_base, a_cat = old.split([tool(n) for n in names])
+            b_base, b_cat = new.split([tool(n) for n in names])
+            self.assertEqual([tool_name(t) for t in a_base], [tool_name(t) for t in b_base], names)
+            self.assertEqual(sorted(a_cat), sorted(b_cat), names)
 
     def test_real_clients_in_the_event(self):
-        for names, expect_base in ((OPENCODE, ["bash", "edit", "write", "read", "grep"]), (HERMES, [])):
+        for names, expect_base in ((OPENCODE, ["bash", "edit", "write", "read", "grep"]),
+                                   (HERMES, ["read_file", "write_file", "patch", "search_files", "terminal"])):
             mgr = self.mk(tools_paging=True)
             p = mgr.prepare(self.req(2, tools=[tool(n, "descrizione di %s" % n, path="string") for n in names]))
             e = self.heads(mgr)[0]
@@ -508,7 +521,7 @@ class TestPagerSilence(Base):
         on.prepare(self.req(2, tools=tools))
         a, b = self.heads(off)[0], self.heads(on)[0]
         self.assertEqual(a["tools"], len(HERMES) + 1)        # + recall
-        self.assertEqual(b["tools"], 2)                      # solo recall + tools
+        self.assertEqual(b["tools"], 7)                      # 5 di base (0.3.24) + recall + tools
         self.assertGreater(a["head_tokens"], b["head_tokens"])
 
 

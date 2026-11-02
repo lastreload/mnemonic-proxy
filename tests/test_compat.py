@@ -46,19 +46,21 @@ class TestLock(unittest.TestCase):
 
 
 class TestConsole(unittest.TestCase):
-    def test_cp1252_stream_does_not_crash(self):
+    def test_cp1252_stream_gets_ascii_stand_ins(self):
         raw = io.BytesIO()
         s = io.TextIOWrapper(raw, encoding="cp1252", errors="strict")
-        compat.console_safe(s)
-        s.write("pin \U0001F4CC drop \U0001F5D1 receipt \u27ea x \u27eb caff\u00e8\n")
-        s.flush()
-        out = raw.getvalue().decode("cp1252")
-        self.assertIn("\\U0001f4cc", out)
-        self.assertIn("caff\u00e8", out)          # representable characters unchanged
+        w = compat.console_safe(s)
+        w.write("pin \U0001F4CC drop \U0001F5D1 receipt \u27ea x \u27eb caff\u00e8\n")
+        w.flush()
+        out = raw.getvalue()
+        self.assertTrue(all(b < 0x80 for b in out), out)       # 0.3.24: nothing above ASCII reaches the console
+        text = out.decode("ascii")
+        self.assertEqual(text, "pin [pin] drop [del] receipt << x >> caffe\n")
+        self.assertNotIn("\\U0001f4cc", text)                  # the 0.3.23 backslashreplace output
 
     def test_utf8_stream_untouched(self):
         s = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", errors="strict")
-        compat.console_safe(s)
+        self.assertIs(compat.console_safe(s), s)
         self.assertEqual(s.errors, "strict")
 
 
