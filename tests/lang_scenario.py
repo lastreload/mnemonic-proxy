@@ -151,8 +151,10 @@ def run_conv(proxy_factory, steps, legacy_until, eng):
 
     def send(msgs):
         if legacy_until and st["n"] == legacy_until:
-            # from here on the conversation looks like one created by 0.3.0: no stored language
+            # from here on the conversation looks like one created by 0.3.0: no stored language, no stored
+            # receipt format (0.3.22), so the proxy keeps the texts it was masked with
             st["proxy"].store.db.execute("DELETE FROM kv WHERE k LIKE 'prompt_language:%'")
+            st["proxy"].store.db.execute("DELETE FROM kv WHERE k LIKE 'receipts:%'")
             st["proxy"].store.db.close()
             st["proxy"] = proxy_factory(None)
         k0 = len(eng.requests)
@@ -167,7 +169,9 @@ def run_conv(proxy_factory, steps, legacy_until, eng):
     return out
 
 
-def run_session(db_dir: str, cfg_over: dict | None = None, legacy_until: int = 0) -> list:
+def run_session(db_dir: str, cfg_over: dict | None = None, legacy_until: int = 0,
+                calib_min_samples: int = 1) -> list:
+    """`calib_min_samples=1` reproduces the calibration rule of 0.3.0-0.3.21 (see test_lang)."""
     eng = FakeEngine(policy)
     url = eng.start()
     res = []
@@ -180,7 +184,8 @@ def run_session(db_dir: str, cfg_over: dict | None = None, legacy_until: int = 0
                 if lang:
                     d["prompt_language"] = lang
                 return Proxy(Config.from_dict(d), Upstream(url), Store(db),
-                             Journal(os.path.join(db_dir, name + ".jsonl")), TokenCounter(3.5))
+                             Journal(os.path.join(db_dir, name + ".jsonl")),
+                             TokenCounter(3.5, min_samples=calib_min_samples))
             for r in run_conv(factory, steps, legacy_until, eng):
                 res.append({"conv": name, **r})
     finally:

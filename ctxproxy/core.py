@@ -28,7 +28,7 @@ from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, 
     norm_lang, outcome_text
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
                      query_terms, typed_receipt)
-from .render import message_piece, render_pieces, template_kwargs
+from .render import image_source, message_piece, redact_images, render_pieces, template_kwargs, volatile_pictures
 from .savedstate import state_available
 from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
@@ -61,6 +61,8 @@ DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb conclus
              "Testo completo: {rn} id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
 NOTES_MARK = "[strata-context: richiesta note di passaggio]"
+# 0.3.22: ricevute estese, scelte alla prima richiesta e ricordate come la lingua (Manager.receipt_detail)
+RECEIPTS_KEY = "receipts:"
 SEG_MARK = "[strata-context: segmento {seg}]"
 # 0.3.1: English texts for new conversations (prompt_language, see lang.py). The Italian ones above stay verbatim
 # for conversations born before 0.3.1 (byte-identical prefix). Recognition always accepts both.
@@ -257,7 +259,11 @@ class Config:
     # stima token
     chars_per_token: float = 3.5
     msg_overhead: int = 6
-    image_tokens: int = 1024
+    # One picture's bill, and it has to satisfy the rule the guard enforces: image_tokens >= vision.max_tokens + 2.
+    # piece_tokens charges image_tokens for the WHOLE marker region, so the two special tokens that stay in the
+    # prompt around the expansion (<|vision_start|>, <|vision_end|>) are inside this number. Strata's GPU default
+    # clamp is vision.max_tokens=1024, which therefore needs 1026: the old 1024 under-reserved 2 tokens per picture.
+    image_tokens: int = 1026
     reasoning_last_turn_only: bool = False  # template Strata: preserve_thinking indefinito => tiene tutto
     # salvataggio/ripristino automatico del segmento attivo (AUTOSAVE-RESULT.md)
     autosave: bool = False          # salva lo stato di Strata quando la conversazione che lo occupa resta ferma
@@ -304,6 +310,10 @@ class Config:
     # for NEW conversations: "en" (default) | "it". Saved per conversation at first use; conversations born before
     # 0.3.1 keep Italian (byte-identical prefix). Markers are recognized in both languages everywhere.
     prompt_language: str = "en"
+    # 0.3.22: richer receipts for NEW conversations (size of the output, error type, first error line). Saved per
+    # conversation at first use like the language: a conversation born before keeps the receipts it was masked with.
+    # Off by default until an A/B run shows the model uses them at least as well as the plain ones.
+    rich_receipts: bool = False
     # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
     window_guard: bool = True
     window_margin: int = 64              # technical margin (Strata itself keeps 8)
@@ -313,11 +323,30 @@ class Config:
     recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
     final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
     notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
+    # 0.3.23 automatic configuration (autoconfig.py): the options that depend on the engine and on the machine
+    # are chosen at startup from harmless reads (engine version/window/saved state, RAM, optional VRAM) and
+    # printed with their reason by `check --explain-config` and by the startup banner. A field written in the
+    # config file always wins. false = every default is used exactly as written here.
+    auto_config: bool = True
+    # size of one saved engine state file, per token of window. 19.5 KB/token = the 20000 bytes/token that
+    # autosave.py already uses for its disk check, so the two agree; measured values range from 7.6 KB/token
+    # (gemma E2B) to ~115 KB/token (llama-server with Qwen3-0.6B), see docs/dev-notes/ROUTER-MODE-RESULT.md and
+    # ENGINES-RESULT.md. Used only to check that a state file fits in the free RAM before the saved-state
+    # options are switched on by themselves: a floor, not a promise, which is why it is a field.
+    state_kb_per_token: float = 19.5
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
         names = {f.name for f in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names})
+        cfg = cls(**{k: v for k, v in d.items() if k in names})
+        # Un limite per le immagini che non limita nulla è un errore di battitura, non una scelta: si scoprirebbe
+        # solo con un prompt oltre la finestra. Si rifiuta già all'assemblaggio della configurazione (0 resta lecito,
+        # significa « immagini fuori»: il guard le rifiuta e l'avvio lo scrive dove tutti lo vedono).
+        it = cfg.image_tokens
+        if isinstance(it, bool) or not isinstance(it, int) or it < 0:
+            raise ValueError("image_tokens must be a non-negative integer (tokens charged for one picture: >= the "
+                             "engine's vision.max_tokens + 2), got %r" % (it,))
+        return cfg
 
 
 def H(*parts: str) -> str:
@@ -344,9 +373,9 @@ def content_text(content) -> str:
             if t in ("text", "input_text", "output_text"):
                 out.append(p.get("text") or "")
             elif t in ("image_url", "input_image", "image"):
-                url = p.get("image_url")
-                url = url.get("url") if isinstance(url, dict) else (url or p.get("data") or "")
-                out.append("<immagine:%s>" % H(str(url))[:16])
+                # The same extraction the render side uses (render.image_source): the archive row and a receipt's
+                # <immagine:..> have to name the same picture, one value read in one place.
+                out.append("<immagine:%s>" % H(str(image_source(p)))[:16])
     return "\n".join(out)
 
 
@@ -506,6 +535,34 @@ def is_human_user(m: dict) -> bool:
     return not (t.startswith("<tool_response>") and t.endswith("</tool_response>"))
 
 
+# ---------- control frames of the client in re-presented text (issue #61) ----------
+# A client can wrap a message in a frame the model is instructed to TRUST. Hermes' mid-turn steering is a
+# standalone role:"user" message wrapped in
+#   [OUT-OF-BAND USER MESSAGE - a direct message from the user, delivered once at this position; ...]
+#   ...
+#   [/OUT-OF-BAND USER MESSAGE]
+# (agent/prompt_builder.py: STEER_MARKER_OPEN / steer_user_row). When the proxy RE-PRESENTS that text at a
+# NEW position - automatic recall, pinned points, the verbatim first request, the handoff notes, a recall
+# result - the frame comes along intact, so the model reads the quotation as a FRESH delivery of the same
+# instruction and keeps answering it (issue #61: "delivered once, arrived 5+ times").
+# Fix: relabel the frame in every copy the proxy itself writes. Same words, visibly a quotation; the real
+# delivery, in its own place in the conversation, is never touched. This is the convention Hermes uses when
+# it republishes model text as role=user ("[member-quoted OUT-OF-BAND USER MESSAGE").
+CONTROL_FRAME_NAMES = ("OUT-OF-BAND USER MESSAGE", "CONTEXT COMPACTION", "CONTEXT SUMMARY", "PRIOR CONTEXT")
+QUOTED_PREFIX = "quoted "
+_CONTROL_FRAME_RE = re.compile(r"\[(?!%s)(/?)(%s)" % (re.escape(QUOTED_PREFIX),
+                                                      "|".join(re.escape(n) for n in CONTROL_FRAME_NAMES)))
+
+
+def quote_control_frames(text: str) -> str:
+    """Rietichetta i marcatori di controllo del client in un testo che il proxy RIPRESENTA in una posizione
+    nuova: «[OUT-OF-BAND USER MESSAGE …]» -> «[quoted OUT-OF-BAND USER MESSAGE …]». Pura e idempotente;
+    il testo resta leggibile per intero, cambia solo l'etichetta della cornice."""
+    if not isinstance(text, str) or "[" not in text:
+        return text
+    return _CONTROL_FRAME_RE.sub(lambda m: "[%s%s%s" % (QUOTED_PREFIX, m.group(1), m.group(2)), text)
+
+
 # ---------- 📌 punti fermi / 🗑 usa e getta (NEXT.md 11-12) ----------
 _PIN_LINE = re.compile(r"^[ \t]*(?:\U0001F4CC|!!)[ \t]*(.+)$", re.M)
 _PIN_BLOCK = re.compile(r"\[\[importante\]\](.*?)\[\[/importante\]\]", re.S | re.I)
@@ -570,6 +627,18 @@ def head_text(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
+# ---------------------------------------------------------------- guards on the estimate's calibration
+# The estimate drives masking: estimating *less* than the real prompt makes the proxy mask too late and
+# lets the engine cut the prompt in silence, so every guard here is biased towards overestimating.
+CALIB_ALPHA = 0.3               # weight of a new sample in the exponential average
+CALIB_MIN_EST_TOKENS = 1000     # under this the estimate is too noisy to teach anything
+CALIB_MIN_SAMPLES = 5           # accepted samples needed before the factor may be lowered
+CALIB_MIN_RATIO = 0.25          # real/estimated outside [MIN, MAX] is not a calibration sample
+CALIB_MAX_RATIO = 4.0
+CALIB_FLOOR = 0.5               # lower clamp (see CHANGELOG: not raised to 1.0)
+CALIB_CEILING = 2.0
+
+
 def receipt(info: dict | None, result: str, is_error=None, lang: str = "it") -> str:
     """Ricevuta di una riga degli effetti di una chiamata: «write src/a.js: riuscito»."""
     if not info:
@@ -581,9 +650,14 @@ class TokenCounter:
     """Stima token: tokenizer HF (tokenizers) se disponibile, altrimenti caratteri / chars_per_token.
     `scale` si calibra con i prompt_tokens reali restituiti da Strata."""
 
-    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None):
+    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None,
+                 min_samples: int = CALIB_MIN_SAMPLES):
         self.cpt = chars_per_token
         self.scale = 1.0
+        self.samples = 0            # accepted calibration samples (see calibrate)
+        self.min_samples = min_samples          # 1 reproduces the pre-0.3.22 rule (tests of old prompts)
+        self._pending = 1.0         # factor being learned; may only raise `scale` during warm-up
+        self.journal: Journal | None = None   # set by the server so rejected samples are visible
         self.tk = None
         self.kind = "chars/%.1f" % chars_per_token
         if tokenizer_path:
@@ -619,12 +693,28 @@ class TokenCounter:
     def count(self, text: str) -> int:
         return int(self.raw(text) * self.scale + 0.5)
 
-    def calibrate(self, estimated: int, real: int, alpha: float = 0.3) -> None:
+    def calibrate(self, estimated: int, real: int, alpha: float = CALIB_ALPHA) -> None:
+        """Teach the scale from the engine's real prompt_tokens, with the guards above.
+
+        Until CALIB_MIN_SAMPLES accepted samples have been seen the factor may only grow: one early sample
+        can make the proxy overestimate (it masks a little sooner, costing window) but cannot make it
+        underestimate, which would mask too late and let the engine cut the prompt. Samples whose
+        real/estimated ratio is implausible are rejected and journalled instead of averaged in.
+        """
         if self.tk is not None:
             return          # conteggio esatto (template + tokenizer del pack): nessuna scala da correggere
-        if estimated > 1000 and real > 0:
-            r = real / estimated
-            self.scale = min(2.0, max(0.5, self.scale * ((1 - alpha) + alpha * r)))
+        if not (estimated > CALIB_MIN_EST_TOKENS and real > 0):
+            return
+        r = real / estimated
+        if not (CALIB_MIN_RATIO <= r <= CALIB_MAX_RATIO):
+            if self.journal is not None:
+                self.journal.log("calibration_rejected", estimated=int(estimated), prompt_tokens=int(real),
+                                 ratio=round(r, 4), min_ratio=CALIB_MIN_RATIO, max_ratio=CALIB_MAX_RATIO,
+                                 samples=self.samples, scale=round(self.scale, 4))
+            return
+        self.samples += 1
+        self._pending = min(CALIB_CEILING, max(CALIB_FLOOR, self._pending * ((1 - alpha) + alpha * r)))
+        self.scale = self._pending if self.samples >= self.min_samples else max(self.scale, self._pending)
 
 
 def load_tokenizer(path: str):
@@ -1030,6 +1120,8 @@ class Manager:
         self.rn, self.tn = cfg.recall_tool_name or RECALL_NAME, cfg.tools_tool_name or TOOLS_NAME
         # lingua dei testi del proxy nella conversazione corrente (impostata da prepare; 0.3.1)
         self.lang = norm_lang(cfg.prompt_language)
+        # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
+        self.rich = bool(cfg.rich_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
@@ -1048,6 +1140,18 @@ class Manager:
         lang = "it" if existed else norm_lang(self.cfg.prompt_language)
         self.store.kv_set(key, lang)
         return lang
+
+    def receipt_detail(self, conv: str, existed: bool) -> bool:
+        """Ricevute estese per la conversazione (0.3.22), con la stessa regola della lingua: la scelta è fatta alla
+        prima richiesta e ricordata (kv). Una conversazione che ha già un archivio ma nessuna scelta registrata è
+        nata prima: conserva le ricevute con cui è stata mascherata, prefisso identico byte per byte."""
+        key = RECEIPTS_KEY + conv
+        v = self.store.kv_get(key)
+        if v in ("rich", "plain"):
+            return v == "rich"
+        rich = bool(self.cfg.rich_receipts) and not existed
+        self.store.kv_set(key, "rich" if rich else "plain")
+        return rich
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -1087,7 +1191,9 @@ class Manager:
                         per[i] += n
                 total = fixed + sum(per)
                 if self.tc.prompt_template is not None:
-                    total = self.tc.raw(self.tc.prompt_template.render(msgs, tools, self.kw))
+                    # Il template del pack scrive un marcatore visivo per immagine: piece_tokens le assegna il
+                    # tetto cfg.image_tokens (il numero vero di token lo conosce solo il motore, a richiesta inviata).
+                    total = self.piece_tokens(self.tc.prompt_template.render(msgs, tools, self.kw))
                 return total, per
             except ValueError:
                 pass
@@ -1101,7 +1207,7 @@ class Manager:
         riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
-            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang)
+            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang, self.rich)
             if rec:
                 return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
                                                                   receipt=rec, rn=self.rn)
@@ -1165,8 +1271,14 @@ class Manager:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
                 res = content_text(msgs[i].get("content"))
-                m = {**m, "content": call_note_text(name, path, rid, res, self.rn, self.lang) +
-                     (c0 if isinstance(c0, str) else content_text(c0))}
+                note = call_note_text(name, path, rid, res, self.rn, self.lang)
+                if isinstance(c0, str) or not n_images(c0):
+                    m = {**m, "content": note + (c0 if isinstance(c0, str) else content_text(c0))}
+                else:
+                    # La nota si antepone come parte di testo, le parti restano. Accorciare gli argomenti
+                    # di una chiamata non e' un motivo per togliere un'immagine promessa al motore (content_text
+                    # qui lascerebbe solo il suo segnaposto <immagine:hash>).
+                    m = {**m, "content": [{"type": "text", "text": note}] + list(c0)}
             tk = masks.get(hs[i] + THINK_SUFFIX)
             if tk and m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str):
                 # fix live 4/10: niente segnaposto nel ragionamento (il modello lo imitava al posto di ragionare);
@@ -1187,8 +1299,8 @@ class Manager:
             if strip and m.get("role") == "assistant":
                 m = dict(m)
                 c = content_text(m.get("content"))
-                if strip["strip_content"] and c.startswith(strip["strip_content"]):
-                    m["content"] = c[len(strip["strip_content"]):]
+                if strip["strip_content"] and c.startswith(strip["strip_content"]) and not n_images(m.get("content")):
+                    m["content"] = c[len(strip["strip_content"]):]   # con immagini dentro non si srotola: si paga il prefisso
                 r = m.get("reasoning_content")
                 if strip["strip_reasoning"] and isinstance(r, str) and r.startswith(strip["strip_reasoning"]):
                     m["reasoning_content"] = r[len(strip["strip_reasoning"]):]
@@ -1290,6 +1402,7 @@ class Manager:
         names = self.tool_names(conv, client_tools, legacy=existed)
         self.rn, self.tn = names["recall"], names["tools"]
         self.lang = self.prompt_lang(conv, existed)
+        self.rich = self.receipt_detail(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
         if cfg.tools_paging:
@@ -1680,6 +1793,7 @@ class Manager:
             low = content.lower()
             p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
             s = content[max(0, p - 300):p + 2400]
+            s = quote_control_frames(s)      # issue #61: la copia non deve sembrare una consegna nuova
             what = whatmap.get(role, role)
             b = "\n--- id=%s · %s %d (%s) · %d token%s%s\n" % (
                 rid, self.L("messaggio", "message"), idx + 1, what, tokens, self.L("", "s"),
@@ -2097,10 +2211,13 @@ class Manager:
                 events.append(self.journal.log("save", conv=conv, file=fn, ms=round((time.time() - t0) * 1000),
                                                result=r))
                 if cfg.data_dir:
-                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso)
+                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso);
+                    # le immagini ci vanno come segnaposto con hash, non come base64. Il payload si costruisce
+                    # prima di aprire il file: un errore non deve mai lasciarli troncato a zero byte.
+                    side = {"conv": conv, "seg": seg, "file": fn, "messages": redact_images(phys),
+                            "tools": tools, "params": params}
                     with open(os.path.join(cfg.data_dir, fn + ".json"), "w", encoding="utf-8") as f:
-                        json.dump({"conv": conv, "seg": seg, "file": fn, "messages": phys, "tools": tools,
-                                   "params": params}, f, ensure_ascii=False)
+                        json.dump(side, f, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001
                 events.append(self.journal.log("save_error", conv=conv, file=fn, error=str(e)[:300]))
         # 3) B = system + tool + [note + indice] + coda
@@ -2120,8 +2237,8 @@ class Manager:
                                                "## Archive index (most recent first)",
                                                "The conversation continues below.")
         if cfg.keep_first_user and first_user is not None and msgs.index(first_user) < c:
-            parts += ["", h_first, self._image_note(content_text(first_user.get("content")))]
-        parts += ["", h_notes, notes]
+            parts += ["", h_first, quote_control_frames(self._image_note(content_text(first_user.get("content"))))]
+        parts += ["", h_notes, quote_control_frames(notes)]
         idx = self.archive_index(msgs, c, conv)
         if idx:
             parts += ["", h_index, idx]
@@ -2146,7 +2263,7 @@ class Manager:
             return None, None
         lines, used, dropped = [], 0, 0
         for pid, idx, text, _, _ in reversed(rows):
-            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, text)
+            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, quote_control_frames(text))
             t = self.tc.count(line)
             if used + t > self.cfg.pins_max_tokens:
                 dropped += 1
@@ -2309,6 +2426,10 @@ class Manager:
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
+        return quote_control_frames(self._recall(conv, args, max_idx, meta, max_tokens))
+
+    def _recall(self, conv: str, args: dict, max_idx, meta, max_tokens) -> str:
+        """Scelta del motore di recall (il risultato passa da quote_control_frames in `recall`)."""
         if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
             if getattr(self, "_recall2", None) is None:
                 from .recall2 import Recall2
@@ -2570,6 +2691,13 @@ class Manager:
         params = {k: v for k, v in req.items() if k not in ("messages", "tools", "stream", "stream_options",
                                                              "max_tokens", "max_completion_tokens", "n",
                                                              "tool_choice")}
+        if volatile_pictures(phys):
+            # Un'immagine da fuori (url, percorso) può cambiare contenuto sotto lo stesso nome, e il prefisso fisico
+            # la hasherebbe uguale: il KV ripristinato sarebbe l'embedding di un'altra immagine. Meglio rifare il
+            # prompt intero che riattivare uno stato di cui non si può garantire l'identità (i data: URI, che
+            # portano i byte con sé, continuano a essere ancorati).
+            events.append(self.journal.log("anchor_skip", conv=conv, seg=seg, reason="volatile_picture"))
+            return events
         old = self.store.anchor(conv, seg)
         t0 = time.time()
         if old:

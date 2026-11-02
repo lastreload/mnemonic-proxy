@@ -141,9 +141,13 @@ class TestCheckLlama(CheckBase):
         self.assertEqual(code, 1)
 
     def test_missing_slot_dir(self):
-        code, st, _ = self.check(cfg=self.config(slot_dir=os.path.join(self.tmp.name, "nope")))
-        self.assertIn(("slot_dir", "fail"), st)
-        self.assertEqual(code, 1)
+        """0.3.22: the proxy creates the session folder itself (see tests/test_setup_optional_saved_state.py)."""
+        d = os.path.join(self.tmp.name, "nope")
+        code, st, items = self.check(cfg=self.config(slot_dir=d))
+        self.assertIn(("slot_dir", "ok"), st, items)
+        self.assertIn("created by the proxy", [i for i in items if i["check"] == "slot_dir"][0]["evidence"])
+        self.assertTrue(os.path.isdir(d))
+        self.assertNotEqual(code, 1, items)
 
     def test_port_busy(self):
         s = socket.socket()

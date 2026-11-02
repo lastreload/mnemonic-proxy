@@ -103,7 +103,7 @@ class CommandLineTests(unittest.TestCase):
         self.assertIsNone(cli.check_argv(["mnemonic-mcp", "--db", "a.sqlite"]))
 
     def test_known_subcommands_come_from_the_code(self):
-        self.assertEqual(["check", "demo", "forget"], cli.known_subcommands())
+        self.assertEqual(["check", "demo", "forget", "init-config"], cli.known_subcommands())
         self.assertEqual(sorted(cli.SUBCOMMAND_PARSERS), cli.known_subcommands())
 
 

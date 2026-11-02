@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mnemonic-proxy"
-version = "0.3.20"
+version = "0.3.24.dev0"
 description = "Transparent proxy that lets local coding agents work for hours: verbatim archive, structured recall, segments with handoff notes, saved engine state."
 readme = { file = "README.md", content-type = "text/markdown" }
 license = "MIT"
@@ -47,4 +47,14 @@ ctxproxy = "ctxproxy.server:main"          # 0.1 name, kept as an alias
 mnemonic-mcp = "ctxproxy.mcp_server:main"  # read-only MCP recall server over the archive
 
 [tool.setuptools]
-packages = ["ctxproxy"]
+packages = ["ctxproxy", "ctxproxy.examples"]
+
+# 0.3.23 (friction A2 of the "new user" trial): the repository's `examples/` folder ships inside the wheel as
+# `ctxproxy.examples`, so `mnemonic-proxy init-config --engine ...` can write a real config file after a plain
+# `pip install`, with no network and no clone. The folder keeps its place in the repository (the README links
+# and CI point at it); only the import name is new.
+[tool.setuptools.package-dir]
+"ctxproxy.examples" = "examples"
+
+[tool.setuptools.package-data]
+"ctxproxy.examples" = ["*.json", "*.ini", "*.service", "*.bat"]

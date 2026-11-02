@@ -25,6 +25,7 @@ import urllib.error
 import urllib.request
 
 from . import engines
+from . import initconfig
 from .core import Config
 from .enginectx import NAME, loaded_contexts
 from .savedstate import state_available
@@ -35,15 +36,18 @@ ICON = {OK: "\u2705", WARN: "\u26a0\ufe0f ", FAIL: "\u274c", INFO: "\u2139\ufe0f
 PLAIN = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]", INFO: "[INFO]"}
 # autorestore defaults to true but is inert without one of the save-producing
 # features; keep it out of the configured/verified save decision.
-SAVED_STATE = ("slot_save", "mask_anchor", "autosave", "seal_experimental", "kv_archive")
+SAVED_STATE = engines.SAVE_PRODUCING
 
 
 class Report:
     def __init__(self):
         self.items: list[dict] = []
+        self.auto: dict | None = None      # 0.3.23: automatic configuration (machine, decisions, report lines)
 
     def add(self, status, name, evidence, fix=""):
-        self.items.append({"status": status, "check": name, "evidence": evidence, "fix": fix})
+        item = {"status": status, "check": name, "evidence": evidence, "fix": fix}
+        self.items.append(item)
+        return item          # the caller may amend it later (the config hint waits for the detected engine)
 
     @property
     def exit_code(self) -> int:
@@ -94,11 +98,32 @@ def _writable(d):
         return False, str(e)
 
 
-def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
+def config_error_evidence(name, exc) -> str:
+    """The `config` line's evidence when the file could not be read (friction A1)."""
+    if isinstance(exc, FileNotFoundError):
+        return "%s does not exist (the proxy does not create it)" % name
+    return "%s cannot be read: %s" % (name, exc)
+
+
+def config_error_fix(name, exc) -> str:
+    """...and its fix: what the user can really do, never \"fix the JSON file\" about a file that is absent."""
+    if isinstance(exc, FileNotFoundError):
+        return initconfig.missing_config_fix(name)
+    return "fix the JSON file, or drop --config: the proxy works with the defaults (saved-state features off)"
+
+
+def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False, config_error=None) -> Report:
     rep = Report()
     explicit = set(raw_cfg)
     # --- config file
-    if a.config:
+    # 0.3.23 (friction A1): a --config that cannot be read is one line with the three real options, and the
+    # report goes on: the engine is what the user came here to check. `config_hint` is amended once the engine
+    # is known (friction A9: no llama-server advice in front of Strata).
+    if config_error is not None:
+        rep.add(FAIL, "config", "%s" % config_error_evidence(a.config, config_error),
+                config_error_fix(a.config, config_error))
+        config_hint = None
+    elif a.config:
         names = {f.name for f in dataclasses.fields(Config)}
         unknown = sorted(k for k in raw_cfg if k not in names)
         if unknown:
@@ -106,9 +131,10 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                     "check the spelling against the Configuration table in the README")
         else:
             rep.add(OK, "config", "%s: %d fields, all known" % (a.config, len(raw_cfg)))
+        config_hint = None
     else:
-        rep.add(INFO, "config", "no --config: defaults (saved-state features off)",
-                "for llama-server use examples/config.llama-server.json")
+        config_hint = rep.add(INFO, "config", "no --config: defaults (saved-state features off)",
+                              initconfig.engine_hint(None))
     # --- python
     if cfg.kv_archive and sys.version_info < (3, 14):
         rep.add(FAIL, "python", "kv_archive needs Python >= 3.14, this is %d.%d" % sys.version_info[:2],
@@ -146,6 +172,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(FAIL, "engine type", str(e), 'use "engine": "auto", "strata", "llama.cpp", "ds4" or "openai"')
         return rep
     how = "detected" if eng.detected else "forced by config/--engine"
+    if config_hint is not None:
+        # friction A9: now that the engine is known, the configuration advice is about THIS engine
+        config_hint["fix"] = initconfig.engine_hint(eng.kind)
     rep.add(OK if eng.detected or cfg.engine != "auto" else WARN, "engine type",
             "%s (%s)%s" % (eng.kind, how, ("; notes: " + "; ".join(eng.notes)) if eng.notes else ""),
             "" if eng.kind != "openai" or cfg.engine != "auto" else
@@ -261,14 +290,51 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
                 % (cfg.chars_per_token, ", slack %.2f" % sl if sl is not None else
                    ", slack %.2f from the config" % cfg.window_estimate_slack),
                 "use --tokenizer <tokenizer.json of the model> for an exact count")
+    # --- 0.3.23 automatic configuration: the engine/machine-dependent options the proxy chooses by itself.
+    # The decisions are applied to `cfg` so that every check below reports the configuration the server would
+    # really run with, and are printed with their reason (`--explain-config` adds what was NOT changed).
+    from . import autoconfig
+    auto_probe = Config.from_dict(raw_cfg)
+    engines.apply(auto_probe, eng, None, explicit, log=None)
+    machine = autoconfig.Machine.read(eng)
+    decisions = autoconfig.decide(auto_probe, eng, explicit, machine, exact=bool(getattr(a, "tokenizer", None)),
+                                  existing=autoconfig.existing_install(getattr(a, "data", "") or ""))
+    for d in decisions:
+        if d.changed:
+            setattr(cfg, d.field, d.value)
+    rep.auto = {"machine": machine.summary(), "decisions": [d.summary() for d in decisions],
+                "lines": autoconfig.explain(auto_probe, eng, machine, decisions, full=True)}
+    picked = [d for d in decisions if d.changed]
+    kept_existing = [d for d in decisions if d.kept_existing]
+    if not cfg.auto_config:
+        rep.add(INFO, "auto config", "off (\"auto_config\": false): every default is used as written",
+                "remove \"auto_config\" from the config to let the proxy choose the engine/machine-dependent "
+                "options")
+    elif picked:
+        rep.add(INFO, "auto config", "chosen for this engine and this machine: %s (%s)"
+                % (", ".join("%s=%s" % (d.field, autoconfig.fmt(d.value)) for d in picked), machine.line()),
+                "`mnemonic-proxy check --explain-config ...` prints every reason; a field written in the config "
+                "always wins")
+    elif kept_existing:
+        # 0.3.23 (friction A8): one line here, the four identical reasons in the extended block only
+        rep.add(INFO, "auto config", "%d choice%s not applied: this data folder already has conversations, so "
+                "an upgrade keeps how they ran" % (len(kept_existing), "" if len(kept_existing) == 1 else "s"),
+                "`mnemonic-proxy check --explain-config ...` prints each choice, its value and its reason; "
+                "write \"auto_config\": true in the config to apply them")
+    else:
+        why = list(dict.fromkeys(d.why for d in decisions))
+        rep.add(INFO, "auto config", "nothing to choose: %s (%s)"
+                % ("; ".join(why) or "the config already decides every engine/machine-dependent option",
+                   machine.line()),
+                "`mnemonic-proxy check --explain-config ...` prints every reason")
     # --- saved state: supported / configured / verified
     configured = [k for k in SAVED_STATE if getattr(cfg, k, False)]
     if eng.slot_save and configured:
         rep.add(OK, "saved state", "supported by the engine, configured in the proxy (%s)" % ", ".join(configured),
                 "" if live else "run `mnemonic-proxy check --live ...` to verify a real save/restore")
     elif eng.slot_save:
-        rep.add(WARN, "saved state", "supported by the engine, disabled in the proxy config",
-                "use examples/config.llama-server.json (slot_save, mask_anchor, autosave) with slot_dir set")
+        rep.add(WARN, "saved state", "supported by the engine, not enabled in the proxy config: the proxy works "
+                "without it (%s)" % engines.BASE_MODE, engines.saved_state_later(eng.kind))
     elif configured:
         hint = {"llama.cpp": "start llama-server with --slot-save-path DIR (same folder as slot_dir)",
                 "strata": "official Strata has no session files: build the session-files branch (README, Engines), "
@@ -282,20 +348,34 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False) -> Report:
         rep.add(INFO, "saved state", "ds4-server keeps its own state (start it with --kv-disk-dir DIR); the proxy "
                 "does not save or restore it")
     else:
-        rep.add(INFO, "saved state", "not supported by the engine and not configured: base mode (masking, archive, "
-                "recall, segments)")
+        rep.add(INFO, "saved state", "not supported by the engine and not configured: the proxy works without it "
+                "(%s)" % engines.BASE_MODE, engines.saved_state_later(eng.kind))
     if eng.slot_save and configured:
         if not cfg.slot_dir:
             rep.add(WARN, "slot_dir", "not set: old anchors and autosaves are never cleaned up, kv_archive off",
                     "set \"slot_dir\" to the engine's --slot-save-path folder")
-        elif not os.path.isdir(cfg.slot_dir):
-            rep.add(FAIL, "slot_dir", "%s does not exist" % cfg.slot_dir,
-                    "create it and start the engine with --slot-save-path pointing to it (same folder)")
         else:
-            ok, err = _writable(cfg.slot_dir)
-            rep.add(OK if ok else FAIL, "slot_dir", "%s exists%s" % (cfg.slot_dir, ", writable" if ok else
-                                                                     ", NOT writable: " + err),
-                    "" if live else "check --live verifies it is the engine's --slot-save-path")
+            # 0.3.22: the proxy creates the session folder itself (nobody should have to mkdir it by hand),
+            # but only when the engine is on this host: otherwise the local path is not --slot-save-path
+            # and an empty folder would hide the mismatch.
+            outcome, detail = engines.ensure_slot_dir(cfg.slot_dir, getattr(a, "upstream", "") or "")
+            if outcome == "remote":
+                rep.add(FAIL, "slot_dir", "%s does not exist and the engine is not on this host (%s): the proxy "
+                        "did not create it" % (cfg.slot_dir, a.upstream),
+                        "slot_dir must be the engine's --slot-save-path as seen from this host (a shared mount); "
+                        + engines.mkdir_hint(cfg.slot_dir))
+            elif outcome == "failed":
+                rep.add(FAIL, "slot_dir", "%s does not exist and the proxy could not create it: %s"
+                        % (cfg.slot_dir, detail),
+                        engines.mkdir_hint(cfg.slot_dir) + ", or point slot_dir at a writable folder "
+                        "(the engine's --slot-save-path)")
+            else:
+                ok, err = _writable(cfg.slot_dir)
+                made = " (created by the proxy)" if outcome == "created" else ""
+                rep.add(OK if ok else FAIL, "slot_dir", "%s exists%s%s" % (
+                    cfg.slot_dir, made, ", writable" if ok else ", NOT writable: " + err),
+                    "it must be the engine's --slot-save-path folder" if live else
+                    "it must be the engine's --slot-save-path folder; check --live verifies that")
     if live:
         _live(rep, up, eng, cfg)
         if eng.kind == "openai" and not any(
@@ -462,7 +542,8 @@ def _reminder(rep):
             "Claude Code: DISABLE_AUTO_COMPACT=1), otherwise two context managers fight over the same history")
 
 
-def render(rep: Report, out=sys.stdout):
+def render(rep: Report, out=None, explain: bool = False):
+    out = sys.stdout if out is None else out       # resolved at call time: `check` is testable under redirect
     enc = (getattr(out, "encoding", None) or "ascii").lower()
     try:
         "\u2705\u26a0\ufe0f\u274c\u2139\ufe0f".encode(enc)
@@ -473,6 +554,10 @@ def render(rep: Report, out=sys.stdout):
         print("%s %-18s %s" % (icons[i["status"]], i["check"], i["evidence"]), file=out)
         if i["fix"]:
             print("   %-18s -> %s" % ("", i["fix"]), file=out)
+    if explain and rep.auto:
+        print("\nautomatic configuration (a field written in the config always wins):", file=out)
+        for line in rep.auto["lines"]:
+            print("  " + line, file=out)
     word = {0: "READY", 2: "READY with warnings", 1: "NOT READY"}[rep.exit_code]
     print("\n%s (exit %d)" % (word, rep.exit_code), file=out)
 
@@ -487,6 +572,10 @@ def build_check_parser():
     ap.add_argument("--live", action="store_true",
                     help="also run a short generation, a tool call and a save/restore on the engine "
                          "(refused while the slot is busy; the slot content is put back)")
+    ap.add_argument("--explain-config", action="store_true",
+                    help="print the automatic configuration in full: what was read about the engine and the "
+                         "machine, every option chosen (and every one left alone) with its reason and how to "
+                         "force it otherwise. The proxy is not started.")
     return ap
 
 
@@ -494,18 +583,23 @@ def main(argv=None):
     from .server import load_config
     ap = build_check_parser()
     a = ap.parse_args(argv)
+    config_error = None
     try:
         raw_cfg, cfg = load_config(a)
     except (OSError, ValueError) as e:
-        rep = Report()
-        rep.add(FAIL, "config", "%s: %s" % (a.config, e), "fix the JSON file")
-    else:
-        rep = run_checks(a, raw_cfg, cfg, live=a.live)
+        # 0.3.23 (friction A1): the report does not stop at a config file that is missing or broken. The
+        # remaining checks run against the defaults — exactly the configuration the user is told to fall back
+        # to — so one `check` still says everything there is to say about this machine and this engine.
+        config_error = e
+        raw_cfg, cfg = {}, Config.from_dict({})
+    rep = run_checks(a, raw_cfg, cfg, live=a.live, config_error=config_error)
     if a.json:
-        print(json.dumps({"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items},
-                         ensure_ascii=False, indent=1))
+        out = {"ready": rep.exit_code != 1, "exit_code": rep.exit_code, "checks": rep.items}
+        if rep.auto is not None:
+            out["auto_config"] = rep.auto
+        print(json.dumps(out, ensure_ascii=False, indent=1))
     else:
-        render(rep)
+        render(rep, explain=bool(getattr(a, "explain_config", False)))
     sys.exit(rep.exit_code)
 
 

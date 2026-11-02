@@ -1,6 +1,221 @@
 # Changelog
 
-## Unreleased
+## 0.3.24 — unreleased
+
+## 0.3.23 — 2026-11-02
+
+- **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
+  @lupus0).** With `--tokenizer` on a Strata pack, a request with a picture used to fail with a misleading 400
+  ("prompt 131072 + margin 64 leaves no room in the window"). Now the template writes one vision marker per
+  picture and the guard prices each one at `image_tokens`, an upper bound (`image_tokens >= vision.max_tokens + 2`;
+  default **1026**, Strata's GPU clamp of 1024 plus the two markers that stay; 302 for a CPU reader clamped to 300).
+  `window_guard` events for such prompts carry `guarantee=image_bounded`; text-only prompts stay `exact` and
+  byte-identical. Fail-closed where the count could not be honest: a picture in a `system` message, a picture with
+  no readable source, a template without a vision branch, video and audio are refused with the real reason. Picture
+  bytes never reach disk (`live_dump` and the KV sidecar name a picture by hash), and saved-state identity includes
+  the pictures. Tested live on Strata 0.1.50 with a CPU picture reader: 0.3.22 returned the 400; with the patch the
+  model read the test picture correctly, at about 230 prompt tokens per picture. Review fix on top: the default was
+  1024, which broke the rule on a GPU reader (an under-count of 2 per picture).
+- **When a count fails, the client gets the real reason** instead of the window message above (same patch).
+
+- **The proxy no longer re-delivers a client's out-of-band message (issue #61).** Reported by @akohlsmith with
+  Hermes over Slack: a mid-turn steering message he sent **once** ("there is no vision model running on port
+  8080; the proxy is 8001 …") reached the model **5+ times**, in new positions, sometimes after a segment
+  change, while Hermes' own session database held exactly one copy of it. The model kept acknowledging the
+  rule because every copy still looked like a fresh delivery.
+  - **Why.** Hermes delivers a `/steer` as a standalone `role:"user"` message wrapped in a frame the model is
+    told to trust: `[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this
+    position; …] … [/OUT-OF-BAND USER MESSAGE]` (`agent/prompt_builder.py`, `steer_user_row`). The proxy
+    re-presents archived text at **new** positions — handoff notes (the notes instruction asks the model for
+    the user's constraints "almost verbatim", so a compliant model copies the frame too), `keep_first_user`'s
+    *First user request (verbatim)*, the 📌 pinned-points block, automatic recall pieces, a `recall` result —
+    and the frame came along intact. Three of those blocks are themselves `role:"user"` messages, so the copy
+    was indistinguishable from the real thing. With `auto_recall: true` the same frame appeared **twice in one
+    physical prompt**; with the default configuration it appeared once per prompt but moved to a new position
+    at every segment change, which is the same thing seen one turn at a time.
+  - **Fix** (`core.quote_control_frames`, pure and idempotent): in every copy the proxy itself writes, a
+    client control frame is relabelled — `[OUT-OF-BAND USER MESSAGE …]` becomes
+    `[quoted OUT-OF-BAND USER MESSAGE …]`, `[/OUT-OF-BAND USER MESSAGE]` becomes
+    `[quoted /OUT-OF-BAND USER MESSAGE]`. Same words, whole text, visibly a quotation. This is the convention
+    Hermes itself uses when it republishes model text as `role=user` (`[member-quoted …]`). Also covered:
+    `CONTEXT COMPACTION`, `CONTEXT SUMMARY`, `PRIOR CONTEXT`.
+  - **The real delivery is never touched**: in its own place in the conversation the user's message stays byte
+    for byte what the client sent. Existing conversations keep their prefix: notes, pinned-points blocks and
+    automatic-recall insertions are stored when they are built, and stored text is replayed unchanged — only
+    newly built blocks carry the new label. Masked tool-output placeholders and receipts are deliberately left
+    alone, because recomputing them would change the prefix of every live conversation.
+  - Tests: `tests/test_issue61_steer_echo.py` (notes, verbatim first request, pinned points, automatic recall,
+    `recall` result, and the invariant "at most one intact frame per physical prompt").
+- **The first run of a new user, fixed where it actually broke.** A trial of the README by a fresh user on a
+  clean machine (`docs/dev-notes/README-NEWUSER-RESULT.md`) got stuck before the proxy ever ran. Eight frictions,
+  all of them now closed; `main` also reports its version as `0.3.23.dev0` instead of claiming to be the last
+  release.
+  - **A `--config` file that does not exist is a sentence, not a traceback.** The Install block told the user to
+    pass `--config config.json` and never to create it; the proxy answered with a raw `FileNotFoundError`
+    traceback and `check` stopped at the first line advising *"fix the JSON file"* about a file that was not
+    there. Now the proxy prints one line with the three real options (create it, with the command; or drop
+    `--config`: the defaults work), and `check` reports it as one `❌ config` line **and goes on with every other
+    check** against the defaults — the engine is what the user came to verify.
+  - **`mnemonic-proxy init-config --engine strata|llama-server|ds4|openai-32k`** writes `config.json` from the
+    example that now ships *inside* the package (`ctxproxy.examples`, mapped from the repository's `examples/`).
+    No clone, no network, nothing to copy by hand; `--dir`, `--name` and `--force` are there, and an existing
+    file is never overwritten without `--force`. `pip install mnemonic-proxy` does not create an `examples/`
+    folder, so every hint that names an example now prints either this command or the full
+    `raw.githubusercontent.com` URL **of the version that is installed** (`vX.Y.Z` for a release, `main` for a
+    `.dev` build, so a copied link is never a 404).
+  - **The configuration hint follows the engine that was detected.** `check` without a `--config` used to say
+    *"for llama-server use examples/config.llama-server.json"* in front of any engine, Strata included. It now
+    says what to do for Strata, llama-server, ds4-server or a generic OpenAI engine — and stays generic when the
+    engine never answered.
+  - **`check`'s three outcomes are documented**: `READY` (exit 0), `READY with warnings` (exit 2) and
+    `NOT READY` (exit 1); the README only mentioned the first.
+  - **The automatic-configuration summary stays one line** on a data folder that already has conversations:
+    *"N choices not applied: this data folder already has conversations, so an upgrade keeps how they ran"*,
+    with each value and reason left to `check --explain-config`, instead of repeating the same sentence once per
+    field.
+  - **The fake engine is reachable the way the README says**: `python3 -m ctxproxy.fake_engine` (it moved into
+    the package in 0.3.2; `tests/fake_engine.py` is only an import shim), and the Install section now shows how
+    to try `check` and the proxy with no engine installed at all.
+  - Smaller documentation fixes from the same trial: how to get `uv` when it is missing, that
+    `pip install git+…` needs `git` on PATH, and that `$XDG_CONFIG_HOME/opencode/opencode.json` is usually
+    `~/.config/opencode/opencode.json`.
+  - The shutdown test `test_sigint_exits_promptly_with_idle_keepalive_connection` no longer fails on a loaded
+    machine: it waits for the proxy to really serve (up to 60 s) and then gives the shutdown a budget scaled to
+    that same machine's measured start-up time. What it proves is unchanged — an idle keep-alive connection must
+    not block shutdown, and a hang still fails.
+
+- **Automatic configuration: the proxy now chooses the engine/machine-dependent options, out loud.** Reported
+  on r/LocalLLM: *"why is the default config not the recommended config? It would be so nice if it could detect
+  the engine version, context size, VRAM + RAM and apply the best settings by itself"*, by a user who had
+  enabled saved state by hand and then found a 2 GB state file eating the RAM he needed for the model. The
+  answer was "because those values depend on your engine and your machine, and the proxy did not look". It
+  looks now (`ctxproxy/autoconfig.py`), and nothing is silent: every choice carries its reason and the way to
+  force it otherwise.
+  - **What is read**, all from endpoints and files already in use, no new dependency and no telemetry: the
+    engine version (Strata `/v1/status` → `engine`, e.g. `0.1.51`; llama-server `/props` → `build_info`), the
+    context window, saved-state support, how many requests the engine serves at once (Strata `concurrency`,
+    llama-server `total_slots`), whether the engine is on this host, RAM total and available (Linux
+    `/proc/meminfo`, macOS `sysctl` + `vm_stat`, Windows `GlobalMemoryStatusEx`), the free disk of `slot_dir`,
+    and — only when it comes for free — VRAM from the GPU figures Strata already reports, otherwise
+    `nvidia-smi` if it happens to be on PATH. Nothing is required: an unknown figure never blocks a choice.
+  - **What is decided**, when the user did not write it: `slot_save`, `mask_anchor` and `autosave` (the engine
+    offers saved state, it is on this host, `slot_dir` is set, and one state file fits in the available RAM —
+    `autosave` also needs the disk); `response_floor` = `window / 8` and `notes_max_tokens` =
+    `window * 3 / 32` (16384 and 12288 at 131072, 4096 and 3072 at 32768), from a 16384 window up;
+    `engine_tokenize` when the engine counts exactly and no `--tokenizer` was given. So the recommended
+    saved-state setup is now reached by writing **one** field, `slot_dir`.
+  - **The sizing number is explicit and has a source**: a state file costs about 19.5 KB per token of window
+    (`state_kb_per_token` — the 20000 bytes/token `autosave.py` already uses for its own disk check, so the two
+    agree), so 131072 tokens ≈ 2.4 GiB. The measured spread is wide (37–73 KB/token for Qwen3.5 35B-A3B,
+    7.6–9 KB/token for gemma E2B, ~115 KB/token for llama-server with Qwen3-0.6B), which is why it is a field
+    and why the rule is a floor and not a promise. With less RAM available than that, the saved-state options
+    stay off *and say why*, instead of filling the RAM the model needs. That is the r/LocalLLM case, decided
+    for the user.
+  - **Nothing that changes the prompt is touched.** An old conversation must be replayed byte for byte, so the
+    recommendations that change what the proxy writes into the prompt (`mask_reasoning`, `mask_tool_args`,
+    `recall_struct`, `recall_flex`, `recall_multi`, `tools_paging`) keep their default and the README now says
+    *why*, together with the three that stay opt-in because of what they spend (`seal_experimental`,
+    `kv_archive`, `live_dump`). Making them defaults needs the same per-conversation storage as the receipts.
+  - **Seen without starting anything**: `mnemonic-proxy check --explain-config` prints what was read, every
+    option chosen, every option left alone, each with its reason and its override; `--json` carries the same
+    under `auto_config`. The startup log prints the applied choices as `[mnemonic-proxy] auto config: …` and
+    `journal.jsonl` gets one `auto_config` event. `"auto_config": false` turns the whole mechanism off.
+  - **Upgrades keep what was running**: the choices are applied only on a fresh data folder. When the data folder
+    already has archived conversations they are reported (`kept`, with the value that would be picked and why)
+    and nothing changes, unless `"auto_config": true` is written. The proxy cannot tell a PolyStrata release
+    before v0.1.45-poly.7 from Strata, and there the first save on a `strata-poly` model ends the engine: an
+    upgrade must never turn saved state on by itself (`tests/test_autoconfig.py`, `TestExistingInstall`).
+  - Because `check` now reports the configuration the server would really run with, a Strata or llama-server
+    setup with `slot_dir` goes from *"supported by the engine, not enabled in the proxy config"* to
+    *"supported by the engine, configured in the proxy (slot_save, mask_anchor, autosave)"* with no edit.
+    Below a 16384 window nothing is decided: the proxy already refuses to start there without an explicit
+    opt-in, and the documented choice is the scaled defaults.
+  - Measured output engine by engine, the Strata 0.1.51 source reads behind the `concurrency` rule, and what is
+    deliberately *not* decided: `docs/dev-notes/AUTOCONFIG-RESULT.md`.
+
+## 0.3.22 — 2026-11-01
+
+- **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the
+  engine's `usage.prompt_tokens` could be moved to its full extent by a single sample, in either direction; a
+  sample that pulls it *down* makes the proxy estimate less than the real prompt, mask too late, and risk a prompt
+  the engine cuts in silence. Now a sample is accepted only above 1,000 estimated tokens and with a real/estimated
+  ratio inside 0.25–4.0 (outside it the sample is rejected and journalled as `calibration_rejected`), and until 5
+  samples have been accepted the factor may only grow, never shrink. Masking decisions are unchanged on the
+  language scenario: only the token counts the proxy prints move, by under 5% on blocks masked during the warm-up
+  (`tests/test_calibration_guards.py`), and the 0.3.0 byte-identity lock still holds for the old rule
+  (`TokenCounter(min_samples=1)`).
+
+  The lower clamp stays **0.5**, deliberately. Replaying 68 recorded local sessions (3,446 first-round requests
+  counted by estimate) the factor ran below 1.0 in 525 of them (15.2%), down to 0.514; the warm-up guard alone
+  brings that to 409 (−22%). Raising the clamp to 1.0 would remove them all, but it only moves the share of
+  requests whose estimate is below the real prompt from 66.5% to 63.6%, while the 95th percentile of
+  estimated/real goes from 1.047 to 1.211: window given away for almost no protection. chars/3.5 is already a
+  pessimistic baseline for prose (unlike the 4.0 of the tool this guard was modelled on), so a factor below 1.0 is
+  a legitimate correction, and prudence against a cut prompt belongs to `window_estimate_slack` and to the
+  `engine_truncated` detection, which already excludes a cut prompt from calibration (0.3.8).
+
+- **Setup: saved state is optional, and the session folder is the proxy's job.** Reported on r/LocalLLM: the
+  setup looked like it required `--slot-save-path` in the Strata configuration and a session folder created by
+  hand. It never did, and now nothing suggests it does.
+  - The proxy **creates `slot_dir` itself** (with its parents) when it is missing, both in `check` and at
+    startup, and says so (`slot_dir … (created by the proxy)`; `created the session folder …`). When it cannot,
+    the message carries the exact `mkdir -p` command. It does **not** create it when the engine is not on this
+    host: the local path would not be the engine's `--slot-save-path`, so `check` keeps failing with that
+    reason instead of hiding the mismatch behind an empty folder. `check --live` still verifies that the state
+    file really appears in `slot_dir`.
+  - `check` no longer calls base mode "disabled": with an engine that supports saved state but a config that
+    does not enable it, the line now reads *supported by the engine, not enabled in the proxy config: the proxy
+    works without it* and names what keeps working (masking, the verbatim archive, `recall`, segments with
+    handoff notes) and the one thing that is lost (the fast resume of a long session), plus how to turn it on
+    later. The old hint pointed Strata users at a llama-server example file.
+  - The **startup banner** reports the configuration, not just the engine: `saved state yes` only when a
+    save-producing option is on, otherwise `saved state off (optional)` followed by one line saying what still
+    works and how to enable it later. Before, a Strata engine printed `saved state yes` even with every
+    saved-state option set to `false`.
+  - **README**: a new *Strata in two commands* section — `pip install` plus one `mnemonic-proxy` line, no
+    configuration file, no folder to create, no engine flag — with saved state as a clearly optional later
+    step that gives the exact Strata command line and the three config fields. The engine table, Requirements
+    and Troubleshooting no longer present `--slot-save-path` and `slot_dir` as part of the basic setup, and T1
+    no longer tells the user to `mkdir` the proxy's own data folder.
+  - New tests: `tests/test_setup_optional_saved_state.py` (folder creation, the remote-engine refusal, the
+    unwritable-parent message, the `check` and startup wording, and the README's minimal path executed against
+    the fake Strata engine).
+
+- **README: opencode** — opencode 1.19.5 tested live against the proxy on Strata (Qwen3.8 Flash Next IQ3_XXS),
+  one 1 h 32 min session: 554 requests, real history up to 1.17 M tokens against a physical prompt of at most
+  108K, 51 masks, 3 segment switches, 44 `recall` calls by the model all served and used, 669 tool calls with no
+  empty result and no HTTP error. Masking costs ~5 s of extra prefill on the request where it happens (median
+  7.0 s against 1.9 s) and nothing on the next one. New *opencode (Chat Completions)* section with the minimal
+  copyable configuration (`provider` + `npm`, not the newer plural `providers`), the real auto-compaction switch
+  (`"compaction": {"auto": false}`) and the limits found; new *opencode on Strata, measured* table under *Tested
+  combinations*; opencode moved from the untested clients to the tested ones in the engines table.
+
+- **Richer receipts for a hidden tool output.** A receipt said what the call did and how it ended; it did not say
+  how big the output was, which kind of error it was, nor where the failure *started*. It now also carries the
+  output's size in lines and UTF-8 bytes, the error type (`AssertionError`, `command not found`, …) and the
+  **first** error line, cut at 160 characters — the last lines are still there for a failure. An output whose kind
+  is not recognised gets a receipt too (size, error fields and its first line) instead of only the first 140
+  characters. Every field is read off the archived bytes with fixed rules: no model, no clock, no counter, so the
+  same output always gives the same receipt and the placeholder stays a fixed point inside the cacheable prefix.
+
+  Measured cost (with `rich_receipts: true`) on the regression fixture of an oversized tool result: the prompt after
+  masking goes from 8,885 to 8,897 estimated tokens, +12 tokens for one receipt. The receipt is in the stable prefix, so it is paid once per
+  masked block.
+
+  Like the receipt language in 0.3.1, the choice is made at a conversation's first request and remembered: a
+  conversation that already has an archive keeps the receipts it was masked with, so its prefix stays byte-identical
+  and the engine's KV cache is not invalidated.
+
+  **Off by default** (`rich_receipts: false`): the cost is measured, the benefit is not. A richer receipt could also
+  make a model reason on the first error line instead of recalling the full output, so it stays opt-in until an
+  A/B run shows it does not hurt. Set `rich_receipts: true` to try it on new conversations.
+
+## 0.3.21 — 2026-11-01
+
+- Saved state: the HTTP 501 that PolyStrata v0.1.45-poly.7 returns on `strata-poly` models ("slot save/restore is not
+  available with strata-poly, this model's engine", VecSzn/PolyStrata#114) is recognised as permanent, so saved
+  state stays suspended for that model instead of pausing and retrying every 15 minutes. README: with poly.7 or later
+  the engine is no longer ended; older releases still need the saved-state options off for those models.
 
 - **The README is under test** (three levels, standard library only). A documented command that
   no longer exists is a worse bug than a missing feature: this README once showed

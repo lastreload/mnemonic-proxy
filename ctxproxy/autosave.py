@@ -26,7 +26,8 @@ import threading
 import time
 
 from .core import H
-from .render import render, template_kwargs
+from .render import (LITERAL_MARKER, VISION, image_hashes, quote_markers, render_pieces, stamp_images,
+                     template_kwargs, volatile_pictures)
 from .savedstate import SavedStateUnavailable, state_available
 from .upstream import UpstreamError
 
@@ -34,11 +35,31 @@ STATE_KEY = "strata_state"
 
 
 def prompt_text(body: dict) -> str | None:
-    """Testo del prompt fino all'ultimo confine di turno (dove Strata mette il checkpoint riusabile)."""
+    """Testo del prompt fino all'ultimo confine di turno (dove Strata mette il checkpoint riusabile).
+
+    Le immagini lasciano la loro firma nel punto esatto in cui il template ha scritto il marcatore visivo: i
+    marcatori sono identici fra immagini diverse, quindi senza firma due prompt con lo stesso testo e immagini
+    diverse darebbero lo stesso phash, e un restore riporterebbe un KV che contiene l'embedding di un'altra
+    immagine (stessa regola di test_autosave::test_no_restore_for_edited_history). Il testo firmato serve solo
+    come identita' dello stato: non viene mai inviato al motore.
+
+    None anche per un prompt con immagini da fuori (un url, un percorso): la loro identità non è la stringa che le
+    nomina, perché il contenuto può cambiare sotto lo stesso nome, quindi lo stato non si registra e non si
+    ripristina - lo stesso conservatorismo che vale per un prompt modificato a mano, qui imposto dal payload."""
     try:
-        return render(body.get("messages") or [], body.get("tools") or None, template_kwargs(body),
-                      add_generation_prompt=False)
-    except (ValueError, TypeError, KeyError, AttributeError):
+        msgs = body.get("messages") or []
+        if volatile_pictures(msgs):
+            return None
+        # Una citazione del marcatore nel testo non è un'immagine: senza piegarla prima di firmare, la firma sotto
+        # si sposterebbe e un'immagine reale resterebbe nominata dall'hash di un'altra.
+        src = quote_markers(msgs)
+        pieces = render_pieces(src, body.get("tools") or None, template_kwargs(body), add_generation_prompt=False)
+        text = "".join(t for _, t in pieces)
+        hashes = [h for i, _ in pieces if i is not None for h in image_hashes(src[i].get("content"))]
+        if not hashes:
+            return text
+        return stamp_images(text, hashes).replace(LITERAL_MARKER, VISION)   # la citazione resta visibile come testo
+    except (ValueError, TypeError, KeyError, AttributeError, IndexError):
         return None
 
 

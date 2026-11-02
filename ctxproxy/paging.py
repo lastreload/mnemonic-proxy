@@ -29,6 +29,8 @@ import hashlib
 import json
 import re
 
+from .lang import pick
+
 TOOLS_NAME = "tools"                 # 0.2.0 (era strata_tools: resta per le conversazioni nate prima, vedi core.py)
 LEGACY_TOOLS_NAME = "strata_tools"
 TOOLS_HEAD_TPL = "[%s: definizioni caricate: "
@@ -277,6 +279,72 @@ def last_lines(text: str, n: int = 4, max_chars: int = 320) -> str:
     return s[:max_chars] + ("…" if len(s) > max_chars else "")
 
 
+# ------------------------------------------------- campi in più delle ricevute estese (0.3.22)
+# Tutti ricavati dal solo testo archiviato: nessun LLM, nessun orologio, nessun contatore. Stesso testo ->
+# stessa ricevuta, sempre: il segnaposto è dentro il prefisso cacheabile e non deve cambiare tra richieste.
+FIRST_ERROR_MAX = 160           # prima riga d'errore: taglio come lcc (pointer "lean")
+# Eccezioni in stile Python/JS/Java, poi i guasti di shell che non hanno un nome di tipo.
+_ERRTYPE = re.compile(r"\b([A-Z][A-Za-z0-9_]*(?:Error|Exception))\b")
+_ERRKIND = (re.compile(r"command not found", re.I), re.compile(r"No such file or directory", re.I),
+            re.compile(r"[Pp]ermission denied"), re.compile(r"npm ERR!"), re.compile(r"[Ss]egmentation fault"),
+            re.compile(r"[Kk]illed"), re.compile(r"[Tt]imed? ?out"))
+_DECOR = re.compile(r"[=\-_~*#]{3,}")           # cornici dei runner di test: «=== FAILURES ===»
+
+
+def size_text(text: str, lang: str = "it") -> str:
+    """«412 righe/38 KB»: righe e byte UTF-8, mai token (non dipende dal tokenizer)."""
+    nbytes = len((text or "").encode("utf-8", "surrogatepass"))
+    size = "%d B" % nbytes if nbytes < 1024 else "%.1f KB" % (nbytes / 1024)
+    return "%d %s/%s" % (len((text or "").splitlines()), pick(lang, "righe", "lines"), size)
+
+
+def error_type(text: str) -> str:
+    """Nome del tipo d'errore (AssertionError...) o la categoria del guasto; «» se non se ne riconosce uno."""
+    m = _ERRTYPE.search(text or "")
+    if m:
+        return m.group(1)
+    for rx in _ERRKIND:
+        m = rx.search(text or "")
+        if m:
+            return _q(m.group(0), 40)
+    return ""
+
+
+def head_line(text: str, max_chars: int = 120) -> str:
+    """Prima riga non vuota dell'uscita, accorciata: dove comincia il testo vero."""
+    for l in (text or "").splitlines():
+        if l.strip():
+            return _q(l, max_chars)
+    return ""
+
+
+def first_error_line(text: str, max_chars: int = FIRST_ERROR_MAX) -> str:
+    """PRIMA riga d'errore (non l'ultima): è lì che il guasto comincia. «» se l'uscita non ha righe d'errore.
+
+    Le righe di cornice dei test («=== FAILURES ===») contengono «FAIL» ma non dicono nulla: si scartano
+    togliendo le sequenze di decorazione e chiedendo che resti del testo vero (una minuscola).
+    """
+    for l in (text or "").splitlines():
+        l = l.strip()
+        if not l or _EXIT.search(l) or not _ERRLINE.search(l):
+            continue
+        if not any(c.islower() for c in _DECOR.sub(" ", l)):
+            continue        # cornice o banner in maiuscolo: non è la riga del guasto
+        return _q(l, max_chars)
+    return ""
+
+
+def error_text(text: str, lang: str = "it") -> str:
+    """Coda della ricevuta con tipo e prima riga d'errore, già punteggiata; «» se non c'è nulla da dire."""
+    kind, first = error_type(text), first_error_line(text)
+    out = ""
+    if kind:
+        out += pick(lang, ". Tipo d'errore: %s", ". Error type: %s") % kind
+    if first:
+        out += pick(lang, ". Prima riga d'errore: \u00ab%s\u00bb", ". First error line: \u00ab%s\u00bb") % first
+    return out
+
+
 # ---------------------------------------------------------------- guardia in uscita
 # write/edit/bash di pi; Write/Edit/MultiEdit/NotebookEdit/Bash di Claude Code; apply_patch/exec_command/shell di
 # Codex (il confronto ignora maiuscole e minuscole, vedi is_guarded)
@@ -384,11 +452,15 @@ def receipt_kind(info: dict | None, text: str, failed: bool) -> str:
 
 
 def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | None = None,
-                  rn: str = "recall", lang: str = "it") -> tuple[str, str]:
+                  rn: str = "recall", lang: str = "it", rich: bool = False) -> tuple[str, str]:
     """-> (tipo, testo della ricevuta) per un'uscita nascosta. Funzione pura di (chiamata, uscita, esito, lingua).
-    Il tipo (scrittura, lettura...) è interno; solo il testo cambia lingua."""
+    Il tipo (scrittura, lettura...) è interno; solo il testo cambia lingua.
+
+    `rich` (0.3.22, ricevute estese): aggiunge righe/byte dell'uscita, il tipo d'errore e la PRIMA riga d'errore.
+    Resta spento nelle conversazioni nate prima, che conservano la ricevuta con cui sono state mascherate.
+    """
     if lang != "it":
-        return _typed_receipt_en(info, text, failed, rid_args, rn)
+        return _typed_receipt_en(info, text, failed, rid_args, rn, rich)
     kind = receipt_kind(info, text, failed)
     args = (info or {}).get("args") or {}
     if kind in ("scrittura", "modifica"):
@@ -403,7 +475,7 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
         if rid_args:
             s += ", argomenti originali: %s id=%s" % (rn, rid_args)
         if failed:
-            s += ". Errore: \u00ab%s\u00bb" % last_lines(text, 2, 200)
+            s += (error_text(text, lang) if rich else "") + ". Errore: \u00ab%s\u00bb" % last_lines(text, 2, 200)
         return kind, s
     if kind == "lettura":
         off, lim = args.get("offset"), args.get("limit")
@@ -411,12 +483,17 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
                if (off or lim) else "file intero")
         n = len((text or "").splitlines())
         if failed:
-            return kind, "lettura FALLITA (%s): \u00ab%s\u00bb" % (rng, last_lines(text, 2, 200))
+            return kind, "lettura FALLITA (%s)%s: \u00ab%s\u00bb" % (rng, error_text(text, lang) if rich else "",
+                                                                     last_lines(text, 2, 200))
+        if rich:
+            return kind, "lettura: %s, %s, sha256 %s del testo letto" % (rng, size_text(text, lang), sha12(text))
         return kind, "lettura: %s, %d righe restituite, sha256 %s del testo letto" % (rng, n, sha12(text))
     if kind == "test":
         t = test_summary(_receipt_command(info or {}), text) or {}
         code = exit_code(text)
         parts = ["codice d'uscita %s" % (code if code is not None else 0)]
+        if rich:
+            parts.append(size_text(text, lang))
         if t.get("pass") is not None:
             parts.append("passati %d" % t["pass"])
         if t.get("fail") is not None:
@@ -425,23 +502,33 @@ def typed_receipt(info: dict | None, text: str, failed: bool, rid_args: str | No
         if t.get("failed_names"):
             s += " (%s%s)" % (", ".join(t["failed_names"]),
                               ", \u2026" if t["n_failed_names"] > len(t["failed_names"]) else "")
+            if rich:
+                s += error_text(text, lang)
         elif code not in (None, 0):
-            s += ". Ultime righe: \u00ab%s\u00bb" % last_lines(text, 3, 240)
+            s += (error_text(text, lang) if rich else "") + ". Ultime righe: \u00ab%s\u00bb" % last_lines(text, 3, 240)
         return kind, s
     if kind == "shell_errore":
         code = exit_code(text)
-        return kind, "comando FALLITO: codice d'uscita %s. Ultime righe: \u00ab%s\u00bb" % (
-            code if code is not None else "non indicato", last_lines(text))
+        return kind, "comando FALLITO: codice d'uscita %s%s%s. Ultime righe: \u00ab%s\u00bb" % (
+            code if code is not None else "non indicato", ", " + size_text(text, lang) if rich else "",
+            error_text(text, lang) if rich else "", last_lines(text))
     if kind == "shell_ok":
         lines = [l for l in (text or "").splitlines() if l.strip()]
         last = _q(lines[-1], 120) if lines else ""
-        return kind, "comando riuscito: codice d'uscita 0, %d righe di uscita%s" % (
-            len(lines), (". Ultima riga: \u00ab%s\u00bb" % last) if last else "")
+        return kind, "comando riuscito: codice d'uscita 0, %s%s" % (
+            size_text(text, lang) if rich else "%d righe di uscita" % len(lines),
+            (". Ultima riga: \u00ab%s\u00bb" % last) if last else "")
+    if rich:
+        # 0.3.22: anche un'uscita di tipo non riconosciuto dice almeno quanto è grande e dove comincia il guasto
+        s = "uscita: %s%s" % (size_text(text, lang), error_text(text, lang))
+        head = head_line(text)
+        return kind, s + ((". Inizio: \u00ab%s\u00bb" % head) if head else "")
     return kind, ""
 
 
-def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
+def _typed_receipt_en(info, text, failed, rid_args, rn, rich: bool = False) -> tuple[str, str]:
     """English receipts (0.3.1): same structure and information as the Italian ones."""
+    lang = "en"
     kind = receipt_kind(info, text, failed)
     args = (info or {}).get("args") or {}
     if kind in ("scrittura", "modifica"):
@@ -456,7 +543,7 @@ def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
         if rid_args:
             s += ", original arguments: %s id=%s" % (rn, rid_args)
         if failed:
-            s += ". Error: \u00ab%s\u00bb" % last_lines(text, 2, 200)
+            s += (error_text(text, lang) if rich else "") + ". Error: \u00ab%s\u00bb" % last_lines(text, 2, 200)
         return kind, s
     if kind == "lettura":
         off, lim = args.get("offset"), args.get("limit")
@@ -464,12 +551,17 @@ def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
                if (off or lim) else "whole file")
         n = len((text or "").splitlines())
         if failed:
-            return kind, "read FAILED (%s): \u00ab%s\u00bb" % (rng, last_lines(text, 2, 200))
+            return kind, "read FAILED (%s)%s: \u00ab%s\u00bb" % (rng, error_text(text, lang) if rich else "",
+                                                                 last_lines(text, 2, 200))
+        if rich:
+            return kind, "read: %s, %s, sha256 %s of the text read" % (rng, size_text(text, lang), sha12(text))
         return kind, "read: %s, %d lines returned, sha256 %s of the text read" % (rng, n, sha12(text))
     if kind == "test":
         t = test_summary(_receipt_command(info or {}), text) or {}
         code = exit_code(text)
         parts = ["exit code %s" % (code if code is not None else 0)]
+        if rich:
+            parts.append(size_text(text, lang))
         if t.get("pass") is not None:
             parts.append("passed %d" % t["pass"])
         if t.get("fail") is not None:
@@ -478,18 +570,26 @@ def _typed_receipt_en(info, text, failed, rid_args, rn) -> tuple[str, str]:
         if t.get("failed_names"):
             s += " (%s%s)" % (", ".join(t["failed_names"]),
                               ", \u2026" if t["n_failed_names"] > len(t["failed_names"]) else "")
+            if rich:
+                s += error_text(text, lang)
         elif code not in (None, 0):
-            s += ". Last lines: \u00ab%s\u00bb" % last_lines(text, 3, 240)
+            s += (error_text(text, lang) if rich else "") + ". Last lines: \u00ab%s\u00bb" % last_lines(text, 3, 240)
         return kind, s
     if kind == "shell_errore":
         code = exit_code(text)
-        return kind, "command FAILED: exit code %s. Last lines: \u00ab%s\u00bb" % (
-            code if code is not None else "not given", last_lines(text))
+        return kind, "command FAILED: exit code %s%s%s. Last lines: \u00ab%s\u00bb" % (
+            code if code is not None else "not given", ", " + size_text(text, lang) if rich else "",
+            error_text(text, lang) if rich else "", last_lines(text))
     if kind == "shell_ok":
         lines = [l for l in (text or "").splitlines() if l.strip()]
         last = _q(lines[-1], 120) if lines else ""
-        return kind, "command succeeded: exit code 0, %d output lines%s" % (
-            len(lines), (". Last line: \u00ab%s\u00bb" % last) if last else "")
+        return kind, "command succeeded: exit code 0, %s%s" % (
+            size_text(text, lang) if rich else "%d output lines" % len(lines),
+            (". Last line: \u00ab%s\u00bb" % last) if last else "")
+    if rich:
+        s = "output: %s%s" % (size_text(text, lang), error_text(text, lang))
+        head = head_line(text)
+        return kind, s + ((". Start: \u00ab%s\u00bb" % head) if head else "")
     return kind, ""
 
 
