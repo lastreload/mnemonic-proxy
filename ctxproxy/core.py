@@ -27,9 +27,11 @@ import uuid
 from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, CUSTOM_INPUT_DESC_IT, norm as \
     norm_lang, outcome_text
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
-                     query_terms, typed_receipt)
-from .render import image_source, message_piece, redact_images, render_pieces, template_kwargs, volatile_pictures
+                     query_terms, tool_desc, tool_name, typed_receipt)
+from .render import (def_text, image_source, message_piece, prompt_head, redact_images, render_pieces,
+                     template_kwargs, volatile_pictures)
 from .savedstate import state_available
+from .toolheads import EVENT as TOOL_HEADS_EVENT, fingerprint as tools_fingerprint, payload as tool_heads_payload
 from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
 
@@ -239,6 +241,9 @@ class Config:
     tools_paging: bool = False
     tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
     tools_load_max: int = 5
+    # testa misurabile (card t_49579af0, toolheads.py): una riga di giornale `tool_heads` per conversazione e per
+    # cambio dell'elenco strumenti, con nomi e peso delle definizioni. SOLO nomi e numeri: nessun testo.
+    journal_tool_heads: bool = True
     # ricevute tipizzate al posto dell'«Inizio» nei segnaposti delle uscite nascoste
     typed_receipts: bool = True
     receipt_guard: bool = True           # blocca write/edit/bash che contengono ricevute/segnaposti copiati
@@ -1123,6 +1128,7 @@ class Manager:
         # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
         self.rich = bool(cfg.rich_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
+        self._tool_heads_fp: dict = {}   # conv -> impronta dell'elenco strumenti già registrato (evento tool_heads)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
     def L(self, it: str, en: str) -> str:
@@ -1176,6 +1182,40 @@ class Manager:
 
     def tools_tokens(self, tools) -> int:
         return self.tc.count(json.dumps(tools, ensure_ascii=False)) if tools else 0
+
+    def tool_heads(self, conv: str, phys: list, tools: list | None, base=(), catalog=(),
+                   paging: bool = False) -> dict | None:
+        """Evento `tool_heads`: nomi e peso delle definizioni in testa, UNA riga per conversazione e per cambio
+        dell'elenco strumenti (toolheads.py). Di sola lettura: non tocca il prompt inviato al motore.
+
+        La testa è il primo pezzo del prompt reso (impalcatura del template + definizioni + sistema). Con il
+        tokenizer del pack il conto è esatto e coincide con quello di `estimate`; senza tokenizer è la stima col
+        ripiego caratteri/`chars_per_token`, e l'evento lo dichiara in `counting`.
+        """
+        fp = tools_fingerprint(tools)
+        if self._tool_heads_fp.get(conv) == fp:
+            return None
+        if len(self._tool_heads_fp) > 1024:
+            self._tool_heads_fp.clear()
+        self._tool_heads_fp[conv] = fp
+        try:
+            head, sys_text, tdefs = prompt_head(phys, tools, self.kw)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return None                       # testa non rappresentabile: niente evento, nessun rumore nel giornale
+        exact = self.tc.exact
+        if exact:
+            defs_n = [self.piece_tokens(def_text(t)) for t in tdefs]
+            sys_n = self.piece_tokens(sys_text) if sys_text else 0
+            head_n = self.piece_tokens(head)
+        else:
+            defs_n = [self.tc.count(json.dumps(t, ensure_ascii=False)) for t in tools or []]
+            sys_n = self.tc.count(sys_text) if sys_text else 0
+            head_n = self.tools_tokens(tools) + sys_n
+        rec = tool_heads_payload(fp, [tool_name(t) for t in tools or []], defs_n,
+                                 [self.tc.count(tool_desc(t)) for t in tools or []],
+                                 head_n, sys_n, exact, paging=paging,
+                                 base=[tool_name(t) for t in base or ()], catalog=list(catalog or ()))
+        return self.journal.log(TOOL_HEADS_EVENT, conv=conv, **rec)
 
     def estimate(self, msgs: list, tools) -> tuple[int, list[int]]:
         """-> (totale, token per messaggio). Con il tokenizer del pack: conteggio ESATTO del prompt che Strata
@@ -1405,8 +1445,10 @@ class Manager:
         self.rich = self.receipt_detail(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
+        base_tools: list = []
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
+            base_tools = list(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == self.rn for t in tools):
             from .recall2 import recall_tool
             tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang), self.lang))
@@ -1425,6 +1467,10 @@ class Manager:
         phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
         est, per = self.estimate(phys, tools)
         virtual, _ = self.estimate(msgs, client_tools)
+        if cfg.journal_tool_heads:
+            ev = self.tool_heads(conv, phys, tools, base_tools, catalog, cfg.tools_paging)
+            if ev is not None:
+                events.append(ev)
 
         # ---- livello 1: masking a pacchetti ----
         if cfg.mask_enabled and est > cfg.mask_trigger:
