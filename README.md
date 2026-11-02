@@ -28,6 +28,9 @@ an agent and an OpenAI-compatible backend: the agent sends its history as usual;
 uvx mnemonic-proxy demo
 ```
 
+No `uv` yet? `pip install uv` (or `curl -LsSf https://astral.sh/uv/install.sh | sh`), or skip `uv` entirely and
+use the three `pip` lines of [T0](#t0--see-it-work-1-minute-no-model).
+
 Expected result: **`PASS`**.
 
 The demo uses the real proxy with a **scripted fake model** to check archive, masking and byte-for-byte recall.
@@ -60,21 +63,48 @@ OpenAI-compatible backends; capabilities and test coverage vary ([Engines](#engi
 
 ## Install
 
-The first time: install, watch it work with no model, check your engine, start.
+The first time: install, watch it work with no model, check your engine, start. No configuration file is needed
+to begin — these four lines are the whole first run.
 
 <!-- readme-test: ci -->
 ```sh
 python3 -m venv mnemonic-venv && . mnemonic-venv/bin/activate
 pip install mnemonic-proxy
 mnemonic-proxy demo      # 1 minute, no model: archive, masking, recall -> PASS
-mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
-mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
+mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data
+mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
 ```
 
-`check` ends with `READY` (exit 0) or says, line by line, what to change; `--live` adds a real generation, a tool
-call and a save/restore. `--upstream` is the engine's address. Then point the agent at the proxy (port 8096)
-instead of the engine. The engine window must be at least 16K tokens, 32K or more recommended
-([Requirements](#requirements)). Step by step with a small model on CPU: [Quick start](#quick-start).
+`check` ends with one of three outcomes: **`READY` (exit 0)**, **`READY with warnings` (exit 2)** — it works, but
+something optional is off (typically saved state) — or **`NOT READY` (exit 1)**, and then it says, line by line,
+what to change; `--live` adds a real generation, a tool call and a save/restore. `--upstream` is the engine's
+address. Then point the agent at the proxy (port 8096) instead of the engine. The engine window must be at least
+16K tokens, 32K or more recommended ([Requirements](#requirements)). Step by step with a small model on CPU:
+[Quick start](#quick-start).
+
+**No engine running yet?** The package ships the fake engine the test suite uses, so `check` and the proxy can be
+tried with nothing installed but this package:
+
+<!-- readme-test: ci -->
+```sh
+python3 -m ctxproxy.fake_engine --flavor llama --n-ctx 32768 --port 8095 &
+mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data
+```
+
+**A configuration file, when you want one** (saved state, or an engine that needs explicit thresholds). It is a
+separate, explicit step — the proxy runs on its defaults without it:
+
+<!-- readme-test: ci -->
+```sh
+mnemonic-proxy init-config --engine strata        # or llama-server, ds4, openai-32k
+mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data --config config.json
+```
+
+`init-config` writes `config.json` from the example that ships inside the package (no network, no clone), prints
+which example it used and never overwrites a file you have already edited (`--force` does). The same files are
+browsable at [`examples/`](https://github.com/lastreload/mnemonic-proxy/tree/main/examples); `check` prints the
+full `raw.githubusercontent.com` URL of the one for *your* version whenever it suggests one. Fields:
+[Configuration](#configuration).
 
 ### Strata in two commands
 
@@ -254,7 +284,9 @@ mnemonic-proxy demo
 With [uv](https://docs.astral.sh/uv/), no venv to create: `uvx mnemonic-proxy demo`. `uvx` runs the command from a
 temporary environment and installs nothing, so keep the prefix for the next commands (`uvx mnemonic-proxy check ...`)
 or install the command once with `uv tool install mnemonic-proxy`. The development version (the
-`main` branch, newer than the last PyPI release): `pip install git+https://github.com/lastreload/mnemonic-proxy`.
+`main` branch, newer than the last PyPI release): `pip install git+https://github.com/lastreload/mnemonic-proxy`
+(needs `git` on PATH: `sudo apt install git`). Its `--version` ends in `.dev0` — a `main` build is not the next
+release, and the examples it points at are the ones on `main`.
 
 The demo starts the real proxy in a temporary folder, in front of a scripted fake model. An agent reads a long
 `build.log` that contains one build id; the session grows until the proxy hides the log; the demo prints what the
@@ -601,7 +633,8 @@ example SoL-Pi's ObservationPack), we have not tested them together with the pro
 ### opencode (Chat Completions)
 
 Tested with opencode **1.19.5** on Strata: one 1 h 32 min session, 554 requests, 51 masks, 44 `recall` calls all
-used, numbers [below](#opencode-on-strata-measured). Put this in `$XDG_CONFIG_HOME/opencode/opencode.json` (global)
+used, numbers [below](#opencode-on-strata-measured). Put this in `$XDG_CONFIG_HOME/opencode/opencode.json`
+(global; `$XDG_CONFIG_HOME` defaults to `~/.config`, so that is usually `~/.config/opencode/opencode.json`)
 or `opencode.json` in the project:
 
 <!-- readme-test: real-engine; config: client -->
@@ -1540,10 +1573,10 @@ On a generic OpenAI engine drop the saved-state fields (`mask_anchor`, `slot_dir
 
 ### Every command-line option
 
-Three commands are installed: `mnemonic-proxy` (the proxy, with its `demo`, `check` and `forget`
-subcommands; `ctxproxy` is a 0.1 alias of the same program) and `mnemonic-mcp` (the read-only MCP
-recall server). `tests/test_readme_coverage.py` fails if an option exists in the code and is not
-listed here.
+Three commands are installed: `mnemonic-proxy` (the proxy, with its `demo`, `check`, `init-config`
+and `forget` subcommands; `ctxproxy` is a 0.1 alias of the same program) and `mnemonic-mcp` (the
+read-only MCP recall server). `tests/test_readme_coverage.py` fails if an option exists in the code
+and is not listed here.
 
 | command | option | what |
 |---|---|---|
@@ -1562,6 +1595,10 @@ listed here.
 | | `--live` | also run a real generation, a tool call and a save/restore on the engine |
 | | `--json` | machine-readable report: `{"ready", "exit_code", "checks": [...], "auto_config": {...}}`, for a script or a health probe |
 | | `--explain-config` | print the automatic configuration in full: what was read about the engine and the machine, every option chosen (and every one left alone) with its reason and how to force it otherwise ([Automatic configuration](#automatic-configuration)) |
+| `mnemonic-proxy init-config` | `--engine NAME` | which engine the configuration is for: `strata`, `llama-server`, `ds4`, `openai-32k`, `official-strata`, `llama-server-32k` or `llama-server-router` (required; `--help` lists what each one is for) |
+| | `--dir DIR` | folder to write the file in, created when missing (default `.`) |
+| | `--name FILE` | file name to write (default `config.json`) |
+| | `--force` | overwrite an existing file; without it nothing is written and the exit code is 1 |
 | `mnemonic-proxy forget` | `--data DIR` | the data folder to delete from (required) |
 | | `--list` | list conversation ids, logical sizes and UTC timestamps |
 | | `--conv ID` | the conversation to remove |
@@ -1773,8 +1810,9 @@ was measured, 1 when nothing was restored, 2 on a usage error.
 python3 -m unittest discover -s tests -t .
 ```
 
-Uses a fake OpenAI-compatible engine (`tests/fake_engine.py`, also runnable stand-alone with
-`python3 -m tests.fake_engine --port 18095`). Optional groups are skipped unless their inputs are present: exact
+Uses a fake OpenAI-compatible engine (`ctxproxy/fake_engine.py`, shipped with the package and runnable stand-alone
+with `python3 -m ctxproxy.fake_engine --port 18095`; `tests/fake_engine.py` is a one-line import shim kept for
+older command lines). Optional groups are skipped unless their inputs are present: exact
 counting (a tokenizer in `./tok` or `CTX_TOKDIR`, plus `tokenizers`), Strata mock integration (`STRATA_DIR`, plus
 `jinja2`), and `kv_archive` (Python ≥ 3.14). `tools/replay_dry.py` and `tools/replay_exact.py` replay a pi session
 through the context manager offline. `tools/state_e2e.py --server PATH/llama-server --model M.gguf --work DIR`

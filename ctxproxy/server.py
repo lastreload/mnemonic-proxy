@@ -1479,6 +1479,56 @@ def load_config(a) -> tuple[dict, Config]:
     return raw_cfg, cfg
 
 
+def config_error_line(name, exc) -> str:
+    """One line about a `--config` that cannot be read: what is wrong and the three real options.
+
+    0.3.23 (friction A1): the Install block of the README used to pass `--config config.json` without ever
+    telling anybody to create it, and the proxy answered with a raw FileNotFoundError traceback. The file is
+    optional, so the message has to say so.
+    """
+    from . import initconfig as examples
+    if isinstance(exc, FileNotFoundError):
+        return "%s does not exist. %s" % (name, examples.missing_config_fix(name))
+    return "%s cannot be read: %s -> fix the JSON file, or drop --config: the proxy works with the defaults" \
+        % (name, exc)
+
+
+def build_init_config_parser():
+    """The `init-config` parser: write one of the shipped example configurations next to the user."""
+    from . import initconfig as examples
+    ap = argparse.ArgumentParser(
+        prog="mnemonic-proxy init-config",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Write the example configuration of one engine as config.json, from the copy inside the "
+                    "package (no network). Engines:\n" + "\n".join(examples.list_lines()))
+    ap.add_argument("--engine", required=True, choices=list(examples.ENGINES),
+                    help="which engine the configuration is for")
+    ap.add_argument("--dir", default=".", help="folder to write config.json in (created if missing, default .)")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing config.json")
+    ap.add_argument("--name", default="config.json", help="file name to write (default config.json)")
+    return ap
+
+
+def init_config_main(argv=None) -> int:
+    """`mnemonic-proxy init-config --engine ...`: the config file the README asks for, written for real."""
+    from . import initconfig as examples
+    a = build_init_config_parser().parse_args(argv)
+    try:
+        target = examples.write_config(a.engine, a.dir, force=a.force, filename=a.name)
+    except FileExistsError as e:
+        print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)" % e,
+              file=sys.stderr, flush=True)
+        return 1
+    except (OSError, KeyError, ValueError) as e:
+        print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
+        return 1
+    name, why = examples.ENGINES[a.engine]
+    print("wrote %s (%s, for %s)" % (target, name, why))
+    print("check it with: mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data "
+          "--config %s" % target)
+    return 0
+
+
 def main(argv=None):
     from . import __version__
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1492,8 +1542,15 @@ def main(argv=None):
     if argv and argv[0] == "forget":
         from .forget import main as forget_main
         raise SystemExit(forget_main(argv[1:]))
+    if argv and argv[0] == "init-config":
+        raise SystemExit(init_config_main(argv[1:]))
     a = build_parser().parse_args(argv)
-    raw_cfg, cfg = load_config(a)
+    try:
+        raw_cfg, cfg = load_config(a)
+    except (OSError, ValueError) as e:
+        # 0.3.23: a --config that is not there is a one-line message with the three real options, never a
+        # FileNotFoundError traceback (friction A1 of the "new user" trial).
+        raise SystemExit("mnemonic-proxy: %s" % config_error_line(a.config, e)) from None
     os.makedirs(a.data, exist_ok=True)
     from .datalock import DataLock
     try:
