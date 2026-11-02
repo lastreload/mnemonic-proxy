@@ -219,6 +219,9 @@ class Decision:
     why: str
     override: str = ""
     changed: bool = True
+    # 0.3.23 (friction A8): this choice was NOT applied because the data folder already has conversations.
+    # `check` counts these in one summary line and leaves the reasons to `--explain-config`.
+    kept_existing: bool = False
 
     def line(self) -> str:
         mark = "auto" if self.changed else "kept"
@@ -226,6 +229,8 @@ class Decision:
 
     def summary(self) -> dict:
         d = {"field": self.field, "value": self.value, "why": self.why, "changed": self.changed}
+        if self.kept_existing:
+            d["kept_existing"] = True
         if self.override:
             d["override"] = self.override
         return d
@@ -383,6 +388,7 @@ def decide(cfg, engine, explicit=(), machine: Machine | None = None, exact: bool
                 d.override = EXISTING_FIX % d.field
                 d.value = before.get(d.field)
                 d.changed = False
+                d.kept_existing = True
     return out
 
 

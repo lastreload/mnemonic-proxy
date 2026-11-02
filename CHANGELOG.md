@@ -2,6 +2,44 @@
 
 ## 0.3.23 — unreleased
 
+- **The first run of a new user, fixed where it actually broke.** A trial of the README by a fresh user on a
+  clean machine (`docs/dev-notes/README-NEWUSER-RESULT.md`) got stuck before the proxy ever ran. Eight frictions,
+  all of them now closed; `main` also reports its version as `0.3.23.dev0` instead of claiming to be the last
+  release.
+  - **A `--config` file that does not exist is a sentence, not a traceback.** The Install block told the user to
+    pass `--config config.json` and never to create it; the proxy answered with a raw `FileNotFoundError`
+    traceback and `check` stopped at the first line advising *"fix the JSON file"* about a file that was not
+    there. Now the proxy prints one line with the three real options (create it, with the command; or drop
+    `--config`: the defaults work), and `check` reports it as one `❌ config` line **and goes on with every other
+    check** against the defaults — the engine is what the user came to verify.
+  - **`mnemonic-proxy init-config --engine strata|llama-server|ds4|openai-32k`** writes `config.json` from the
+    example that now ships *inside* the package (`ctxproxy.examples`, mapped from the repository's `examples/`).
+    No clone, no network, nothing to copy by hand; `--dir`, `--name` and `--force` are there, and an existing
+    file is never overwritten without `--force`. `pip install mnemonic-proxy` does not create an `examples/`
+    folder, so every hint that names an example now prints either this command or the full
+    `raw.githubusercontent.com` URL **of the version that is installed** (`vX.Y.Z` for a release, `main` for a
+    `.dev` build, so a copied link is never a 404).
+  - **The configuration hint follows the engine that was detected.** `check` without a `--config` used to say
+    *"for llama-server use examples/config.llama-server.json"* in front of any engine, Strata included. It now
+    says what to do for Strata, llama-server, ds4-server or a generic OpenAI engine — and stays generic when the
+    engine never answered.
+  - **`check`'s three outcomes are documented**: `READY` (exit 0), `READY with warnings` (exit 2) and
+    `NOT READY` (exit 1); the README only mentioned the first.
+  - **The automatic-configuration summary stays one line** on a data folder that already has conversations:
+    *"N choices not applied: this data folder already has conversations, so an upgrade keeps how they ran"*,
+    with each value and reason left to `check --explain-config`, instead of repeating the same sentence once per
+    field.
+  - **The fake engine is reachable the way the README says**: `python3 -m ctxproxy.fake_engine` (it moved into
+    the package in 0.3.2; `tests/fake_engine.py` is only an import shim), and the Install section now shows how
+    to try `check` and the proxy with no engine installed at all.
+  - Smaller documentation fixes from the same trial: how to get `uv` when it is missing, that
+    `pip install git+…` needs `git` on PATH, and that `$XDG_CONFIG_HOME/opencode/opencode.json` is usually
+    `~/.config/opencode/opencode.json`.
+  - The shutdown test `test_sigint_exits_promptly_with_idle_keepalive_connection` no longer fails on a loaded
+    machine: it waits for the proxy to really serve (up to 60 s) and then gives the shutdown a budget scaled to
+    that same machine's measured start-up time. What it proves is unchanged — an idle keep-alive connection must
+    not block shutdown, and a hang still fails.
+
 - **Automatic configuration: the proxy now chooses the engine/machine-dependent options, out loud.** Reported
   on r/LocalLLM: *"why is the default config not the recommended config? It would be so nice if it could detect
   the engine version, context size, VRAM + RAM and apply the best settings by itself"*, by a user who had
