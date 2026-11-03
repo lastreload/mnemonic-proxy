@@ -304,14 +304,26 @@ jobs:
           $bat = Get-Content start-mnemonic-proxy.bat -Raw
           if ($bat -notmatch 'pause') { throw 'the generated .bat does not pause at the end' }
           if ($bat -notmatch '18196') { throw 'the generated .bat does not carry --port' }
-          # no engine yet: the .bat must refuse, say so, and never start the proxy.
           # Empty stdin, because the failure paths end with `pause`, which would otherwise wait forever.
           New-Item -ItemType File -Force empty.txt | Out-Null
+          # the venv is not where a user's would be: the .bat must say how to install, not crash
+          $novenv = Start-Process -FilePath cmd.exe -ArgumentList "/c","start-mnemonic-proxy.bat" `
+            -RedirectStandardInput empty.txt `
+            -RedirectStandardOutput novenv.log -RedirectStandardError novenv.err.log -PassThru -Wait
+          $txt = (Get-Content novenv.log -Raw) + (Get-Content novenv.err.log -Raw)
+          Write-Host $txt
+          if ($novenv.ExitCode -ne 1) { throw "the .bat did not stop on a missing venv (exit $($novenv.ExitCode))" }
+          if ($txt -notmatch 'is not installed in') { throw 'no clear message about the missing venv' }
+          # every value is overridable from the environment: point VENV at the CI venv
+          $env:VENV = "$env:RUNNER_TEMP\venv"
+          # no engine yet: the .bat must refuse, say so, and never start the proxy
           $no = Start-Process -FilePath cmd.exe -ArgumentList "/c","start-mnemonic-proxy.bat" `
             -RedirectStandardInput empty.txt `
             -RedirectStandardOutput noengine.log -RedirectStandardError noengine.err.log -PassThru -Wait
+          $txt = (Get-Content noengine.log -Raw) + (Get-Content noengine.err.log -Raw)
+          Write-Host $txt
           if ($no.ExitCode -ne 1) { throw "the .bat did not refuse without an engine (exit $($no.ExitCode))" }
-          if ((Get-Content noengine.log -Raw) -notmatch 'does not answer') { throw 'no clear message about the missing engine' }
+          if ($txt -notmatch 'does not answer') { throw 'no clear message about the missing engine' }
           # now the engine answers: check passes and the proxy comes up on 18196
           Start-Process -FilePath $py -ArgumentList "-m","ctxproxy.fake_engine","--flavor","strata","--n-ctx","32768","--port","18195" -RedirectStandardOutput fe.log -RedirectStandardError fe.err.log
           foreach ($i in 1..50) { try { Invoke-RestMethod http://127.0.0.1:18195/v1/status | Out-Null; break } catch { Start-Sleep -Milliseconds 200 } }
