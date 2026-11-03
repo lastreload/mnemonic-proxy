@@ -1494,18 +1494,39 @@ def config_error_line(name, exc) -> str:
 
 
 def build_init_config_parser():
-    """The `init-config` parser: write one of the shipped example configurations next to the user."""
+    """The `init-config` parser: the minimal starting configuration, and the one-click launcher."""
     from . import initconfig as examples
     ap = argparse.ArgumentParser(
         prog="mnemonic-proxy init-config",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Write the example configuration of one engine as config.json, from the copy inside the "
-                    "package (no network). Engines:\n" + "\n".join(examples.list_lines()))
+        description="Write a MINIMAL config.json for one engine: only what the proxy cannot work out by "
+                    "itself, so the automatic configuration stays in charge of the rest. `--full` writes the "
+                    "complete documented example instead (from the copy inside the package, no network), "
+                    "`--launcher` also writes the one-click starter for this platform. Engines:\n"
+                    + "\n".join(examples.list_lines()))
     ap.add_argument("--engine", required=True, choices=list(examples.ENGINES),
                     help="which engine the configuration is for")
     ap.add_argument("--dir", default=".", help="folder to write config.json in (created if missing, default .)")
-    ap.add_argument("--force", action="store_true", help="overwrite an existing config.json")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing config.json / launcher")
     ap.add_argument("--name", default="config.json", help="file name to write (default config.json)")
+    ap.add_argument("--full", action="store_true",
+                    help="write the complete documented example instead of the minimal file (every field "
+                         "explicit, which switches the automatic configuration off)")
+    ap.add_argument("--slot-dir", default="",
+                    help="the engine's --slot-save-path folder, for saved state (%s): the one thing the "
+                         "proxy cannot discover" % ", ".join(examples.slot_dir_engines()))
+    ap.add_argument("--launcher", action="store_true",
+                    help="also write %s (%s off Windows): one click to start the proxy in front of an engine "
+                         "that is already running" % (examples.launcher_name("Windows"),
+                                                      examples.launcher_name("Linux")))
+    ap.add_argument("--upstream", default="http://127.0.0.1:8095",
+                    help="--launcher: the engine's address to bake into it (default %(default)s)")
+    ap.add_argument("--port", type=int, default=8096,
+                    help="--launcher: the port the proxy listens on (default %(default)s)")
+    ap.add_argument("--data", default="", help="--launcher: the proxy's data folder (default: data next to it)")
+    ap.add_argument("--tokenizer", default="",
+                    help="--launcher: the model's tokenizer for an exact token count (left commented out "
+                         "when not given)")
     return ap
 
 
@@ -1513,8 +1534,10 @@ def init_config_main(argv=None) -> int:
     """`mnemonic-proxy init-config --engine ...`: the config file the README asks for, written for real."""
     from . import initconfig as examples
     a = build_init_config_parser().parse_args(argv)
+    slot_dir = a.slot_dir or None
     try:
-        target = examples.write_config(a.engine, a.dir, force=a.force, filename=a.name)
+        target = examples.write_config(a.engine, a.dir, force=a.force, filename=a.name,
+                                       full=a.full, slot_dir=slot_dir)
     except FileExistsError as e:
         print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)" % e,
               file=sys.stderr, flush=True)
@@ -1523,9 +1546,35 @@ def init_config_main(argv=None) -> int:
         print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
         return 1
     name, why = examples.ENGINES[a.engine]
-    print("wrote %s (%s, for %s)" % (target, name, why))
-    print("check it with: mnemonic-proxy check --upstream http://127.0.0.1:8095 --port 8096 --data ./data "
-          "--config %s" % target)
+    if a.full:
+        print("wrote %s (%s in full, for %s)" % (target, name, why))
+        print("every field is explicit there, so the automatic configuration has nothing left to choose: "
+              "delete the lines you do not mean to pin")
+        if not slot_dir and examples.has_slot_dir_placeholder(a.engine):
+            print("set \"slot_dir\" to the engine's --slot-save-path folder (it is a placeholder in there) or "
+                  "remove it: saved state stays off until it is a real folder")
+    else:
+        print("wrote %s (minimal, for %s)" % (target, why))
+        print("%s" % examples.minimal_note(a.engine))
+        if not slot_dir and examples.accepts_slot_dir(a.engine):
+            print("saved state (optional): re-run with --slot-dir DIR, the engine's --slot-save-path folder")
+        print("every field in full: mnemonic-proxy init-config --engine %s --full" % a.engine)
+    if a.launcher:
+        try:
+            started = examples.write_launcher(a.dir, force=a.force, upstream=a.upstream, port=a.port,
+                                              data=a.data, config=os.path.abspath(target),
+                                              tokenizer=a.tokenizer)
+        except FileExistsError as e:
+            print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)"
+                  % e, file=sys.stderr, flush=True)
+            return 1
+        except OSError as e:
+            print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
+            return 1
+        print("wrote %s: start your engine, then run it (the proxy checks the engine and the port first)"
+              % started)
+    print("check it with: mnemonic-proxy check --upstream %s --port %d --data %s --config %s"
+          % (a.upstream, a.port, a.data or "./data", target))
     return 0
 
 

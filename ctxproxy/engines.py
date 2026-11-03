@@ -329,6 +329,26 @@ def budget_adjustments(cfg) -> list[tuple[str, int, int]]:
             if int(getattr(cfg, field) or 0) > cap]
 
 
+def _scale(cfg, explicit, ratio: float) -> dict:
+    """Scale the window-sized thresholds the user did not write by `ratio`. -> {field: new value}.
+
+    Lifted out of `apply` in 0.3.24 so the two callers — a window read from the engine and a window written
+    in the config for an engine that reports none — compute it in exactly one place.
+    """
+    scaled = {}
+    for f in SCALED:
+        if f in explicit or not hasattr(cfg, f):
+            continue
+        v = getattr(cfg, f)
+        if isinstance(v, int) and v > 0:
+            nv = max(64, SCALED_MIN.get(f, 0) if ratio < 1 else 0, int(v * ratio))
+            nv = min(nv, v) if ratio < 1 else nv
+            if nv != v:
+                setattr(cfg, f, nv)
+                scaled[f] = nv
+    return scaled
+
+
 def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=print) -> list[str]:
     """Adatta la configurazione al motore: spegne le funzioni senza supporto, finestra da n_ctx. -> avvisi."""
     explicit = set(explicit or ())
@@ -355,20 +375,22 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window
         cfg.window = engine.n_ctx
-        scaled = {}
-        for f in SCALED:
-            if f in explicit or not hasattr(cfg, f):
-                continue
-            v = getattr(cfg, f)
-            if isinstance(v, int) and v > 0:
-                nv = max(64, SCALED_MIN.get(f, 0) if ratio < 1 else 0, int(v * ratio))
-                nv = min(nv, v) if ratio < 1 else nv
-                if nv != v:
-                    setattr(cfg, f, nv)
-                    scaled[f] = nv
+        scaled = _scale(cfg, explicit, ratio)
         warn.append("window from engine n_ctx: %d (was %d); thresholds scaled x%.3f" % (cfg.window, old, ratio))
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
+    elif not engine.n_ctx and "window" in explicit and 0 < int(cfg.window or 0) < BASE_WINDOW:
+        # 0.3.24: a plain OpenAI-compatible engine reports no context, so `window` has to be written — and
+        # until now the %d-sized defaults stayed behind it, so a 32K setup had to repeat every single
+        # threshold by hand (examples/config.openai-32k.json, whose values ARE this scaling). Scale them
+        # here exactly as the engine-n_ctx branch above, so `{"window": 32768}` is a complete 32K config.
+        ratio = int(cfg.window) / float(BASE_WINDOW)
+        scaled = _scale(cfg, explicit, ratio)
+        if scaled:
+            warn.append("window %d written in the config and the engine reports none; thresholds scaled "
+                        "x%.3f from the %d defaults" % (cfg.window, ratio, BASE_WINDOW))
+            if journal is not None:
+                journal.log("config_window", window=cfg.window, scaled=scaled)
     # una risposta minima che da sola riempie (quasi) la finestra fa scattare un cambio di segmento a ogni richiesta
     for field, was, value in budget_adjustments(cfg):
         setattr(cfg, field, value)
