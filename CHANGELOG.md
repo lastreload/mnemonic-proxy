@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.25 — unreleased
+
 ## 0.3.24 — 2026-11-03
 
 - **`init-config` writes a minimal file and leaves the automatic configuration in charge** (reported by the first
