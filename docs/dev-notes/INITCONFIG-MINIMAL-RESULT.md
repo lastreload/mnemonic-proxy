@@ -180,9 +180,11 @@ Verified on Linux against a fake Strata, all four paths:
 * `tests/test_readme_run.py`: new level-2 test that really executes every README `ci` block calling
   `init-config`, then asserts the file on disk holds nothing the proxy decides, and `sh -n`s the launcher.
 * `.github/workflows/ci.yml`, `test-windows`: `init-config --launcher`, assert `config.json == {}` and the
-  `.bat`'s shape, then run the `.bat` three times — without an engine (must refuse), with a fake Strata
-  (proxy must answer on 18196 and create `--data`), and with `PORT` on the engine's own port (must stop with
-  `taken by another program`). Stdin is an empty file, because the failure paths end in `pause`.
+  `.bat`'s shape, then run the `.bat` four times — with `VENV` pointing nowhere (must print the install hint),
+  without an engine (must refuse), with a fake Strata (proxy must answer on 18196 and create `--data`), and
+  with `PORT` on the engine's own port (must stop with `taken by another program`). `VENV` and `PORT` are set
+  through the environment, which also proves the variables at the top are overridable. Stdin is an empty
+  file, because the failure paths end in `pause`.
 * Full suite: 1029 tests, OK (66 skipped — live/model-dependent), Python 3.14 locally; README level 1 (27)
   and level 2 (11) green.
 
