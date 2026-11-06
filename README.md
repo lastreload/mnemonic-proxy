@@ -34,8 +34,11 @@ use the three `pip` lines of [T0](#t0--see-it-work-1-minute-no-model).
 Expected result: **`PASS`**.
 
 The demo uses the real proxy with a **scripted fake model** to check archive, masking and byte-for-byte recall.
-It does not test a real model's tool use or saved engine state. [Without uv / demo details](#t0--see-it-work-1-minute-no-model)
-· [Connect your agent and engine](#install).
+It does not test a real model's tool use or saved engine state. [Without uv / demo details](#t0--see-it-work-1-minute-no-model).
+
+**Already running an engine and an agent?** [Install](#install) is four lines (install, demo, check, start); then
+[connect your agent](#connect-your-agent): one row per agent with the address to use and the setting that turns its
+own auto-compaction off.
 
 **Measured, not guaranteed** — single runs on our hardware; setup and limitations at each link:
 
@@ -81,6 +84,21 @@ what to change; `--live` adds a real generation, a tool call and a save/restore.
 address. Then point the agent at the proxy (port 8096) instead of the engine. The engine window must be at least
 16K tokens, 32K or more recommended ([Requirements](#requirements)). Step by step with a small model on CPU:
 [Quick start](#quick-start).
+
+### Connect your agent
+
+Point the agent at the proxy (port 8096) instead of the engine and turn off the agent's own auto-compaction,
+otherwise two context managers fight over the same history:
+
+| agent | point it at | turn off | setup |
+|---|---|---|---|
+| pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
+| opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
+| Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](docs/hermes-agent.md) |
+| Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
+| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
+| Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
+| any MCP client (Claude Code, Codex, Hermes) | `mnemonic-mcp --db ./data/archive.sqlite` (read-only search of the archive) | — | [MCP](#mcp-recall-server-claude-code-codex-hermes) |
 
 **No engine running yet?** The package ships the fake engine the test suite uses, so `check` and the proxy can be
 tried with nothing installed but this package:
@@ -155,7 +173,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
 ```
 
 The proxy creates `./data` itself and reads the window from Strata's `/v1/status`. Point your agent at
-`http://127.0.0.1:8096/v1` instead of 8095 and turn off its own auto-compaction (table below). Everything but
+`http://127.0.0.1:8096/v1` instead of 8095 and turn off its own auto-compaction ([Connect your agent](#connect-your-agent)). Everything but
 one feature is already working: masking, the verbatim archive, `recall`, segments with handoff notes, 📌/🗑 and
 tools on demand. Run `mnemonic-proxy check --upstream http://127.0.0.1:8095 --data ./data` first if you want the
 setup verified line by line; the startup log says in one line what is on and what is off.
@@ -244,18 +262,6 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
   prompt of 0.9× the window and fails with "engine context smaller than window" if it does not come back whole.
 - Ollama ignores an integrated GPU by default and runs on the CPU (much slower); `OLLAMA_IGPU_ENABLE=1` makes it use
   it. With it, Ollama chose a default context of 262144 from the shared memory: set `OLLAMA_CONTEXT_LENGTH` anyway.
-
-**Your agent.** Turn off the agent's own auto-compaction, otherwise two context managers fight over the same history:
-
-| agent | point it at | turn off | setup |
-|---|---|---|---|
-| pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
-| opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
-| Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](docs/hermes-agent.md) |
-| Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
-| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
-| Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
-| any MCP client (Claude Code, Codex, Hermes) | `mnemonic-mcp --db ./data/archive.sqlite` (read-only search of the archive) | — | [MCP](#mcp-recall-server-claude-code-codex-hermes) |
 
 **Your OS.**
 - **Linux**: the reference; the commands on this page, and all the measured sessions.
