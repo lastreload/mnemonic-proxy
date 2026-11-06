@@ -36,7 +36,7 @@ Expected result: **`PASS`**.
 The demo uses the real proxy with a **scripted fake model** to check archive, masking and byte-for-byte recall.
 It does not test a real model's tool use or saved engine state. [Without uv / demo details](#t0--see-it-work-1-minute-no-model).
 
-**Already running an engine and an agent?** [Install](#install) is four lines (install, demo, check, start); then
+**Already running an engine and an agent?** [Install](#install) is five lines (venv, install, demo, check, start); then
 [connect your agent](#connect-your-agent): one row per agent with the address to use and the setting that turns its
 own auto-compaction off.
 
@@ -67,7 +67,7 @@ OpenAI-compatible backends; capabilities and test coverage vary ([Engines](#engi
 ## Install
 
 The first time: install, watch it work with no model, check your engine, start. No configuration file is needed
-to begin — these four lines are the whole first run.
+to begin — these five lines are the whole first run.
 
 <!-- readme-test: ci -->
 ```sh
@@ -81,7 +81,7 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
 `check` ends with one of three outcomes: **`READY` (exit 0)**, **`READY with warnings` (exit 2)** — it works, but
 something optional is off (typically saved state) — or **`NOT READY` (exit 1)**, and then it says, line by line,
 what to change; `--live` adds a real generation, a tool call and a save/restore. `--upstream` is the engine's
-address. Then point the agent at the proxy (port 8096) instead of the engine. The engine window must be at least
+address. Then [connect your agent](#connect-your-agent) to the proxy. The engine window must be at least
 16K tokens, 32K or more recommended ([Requirements](#requirements)). Step by step with a small model on CPU:
 [Quick start](#quick-start).
 
@@ -99,6 +99,8 @@ otherwise two context managers fight over the same history:
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
 | Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
 | any MCP client (Claude Code, Codex, Hermes) | `mnemonic-mcp --db ./data/archive.sqlite` (read-only search of the archive) | — | [MCP](#mcp-recall-server-claude-code-codex-hermes) |
+
+### No engine yet, a configuration file, one click
 
 **No engine running yet?** The package ships the fake engine the test suite uses, so `check` and the proxy can be
 tried with nothing installed but this package:

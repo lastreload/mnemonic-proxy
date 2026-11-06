@@ -2,6 +2,11 @@
 
 ## 0.3.25 — unreleased
 
+- **Docs**: the README tells readers who already run an engine and an agent where to go, right after the demo:
+  the per-agent table (address to use, setting that turns the agent's own auto-compaction off) now sits under its
+  own heading, [Connect your agent](README.md#connect-your-agent), right after the install lines instead of after
+  the engine notes. Table content unchanged.
+
 ## 0.3.24 — 2026-11-03
 
 - **`init-config` writes a minimal file and leaves the automatic configuration in charge** (reported by the first
