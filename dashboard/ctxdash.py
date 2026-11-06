@@ -23,9 +23,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MAX_EVENTS = 50000
 
 
-def http_json(url: str, timeout: float = 2.0):
+def http_json(url: str, timeout: float = 2.0, api_key: str = ""):
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        req = urllib.request.Request(url)
+        if api_key:
+            req.add_header("Authorization", "Bearer " + api_key)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8")), None
     except Exception as e:  # noqa: BLE001
         return None, "%s: %s" % (type(e).__name__, e)
@@ -127,8 +130,9 @@ class VirtualEstimator:
 
 
 class State:
-    def __init__(self, strata: str, data: str):
+    def __init__(self, strata: str, data: str, api_key: str = ""):
         self.strata, self.data = strata.rstrip("/"), data
+        self.api_key = api_key
         self.journal = JournalTail(os.path.join(data, "journal.jsonl"))
         self.virt = VirtualEstimator(os.path.join(data, "archive.sqlite"))
         self.series: list[dict] = []  # un punto per evento "request"
@@ -175,8 +179,8 @@ class State:
 
     def snapshot(self, ev_after: int, pt_after: int, lr_mtime: float | None) -> dict:
         self.refresh()
-        status, e1 = http_json(self.strata + "/status")
-        metrics, e2 = http_json(self.strata + "/metrics")
+        status, e1 = http_json(self.strata + "/status", api_key=self.api_key)
+        metrics, e2 = http_json(self.strata + "/metrics", api_key=self.api_key)
         m = None
         if metrics:
             m = {k: metrics.get(k) for k in ("engine", "live", "requests", "totals", "hardware", "time")}
@@ -340,6 +344,7 @@ def proxy_call(url: str, body: bytes | None = None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="dashboard live contesto virtuale (sola lettura)")
     ap.add_argument("--strata", default="http://127.0.0.1:8095")
+    ap.add_argument("--api-key-file", help="file containing Strata's API key")
     ap.add_argument("--data", required=True, help="data_dir del proxy (journal.jsonl, archive.sqlite, live/)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8097)
@@ -347,7 +352,16 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.host not in ("127.0.0.1", "localhost", "::1"):
         ap.error("solo localhost (privacy: il prompt resta sulla macchina)")
-    state = State(a.strata, a.data)
+    api_key = ""
+    if a.api_key_file:
+        try:
+            with open(a.api_key_file, encoding="utf-8") as f:
+                api_key = f.read().strip()
+        except (OSError, UnicodeError) as e:
+            ap.error("cannot read --api-key-file: %s" % e)
+        if not api_key:
+            ap.error("--api-key-file is empty")
+    state = State(a.strata, a.data, api_key)
     state.proxy = a.proxy.rstrip("/")
     state.refresh()
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(state))
