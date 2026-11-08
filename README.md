@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/logo.png" alt="Mnemonic Proxy logo" width="120">
+  <img src="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/hero.jpg" alt="Mnemonic Proxy" width="100%">
 </p>
 
 <h1 align="center">Mnemonic Proxy</h1>
