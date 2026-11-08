@@ -147,61 +147,62 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
 </head>
 <body>
 <div class="top">
-  <h1>Contesto virtuale</h1>
-  <span class="conn" id="conn"><i></i><span id="connTxt">connessione…</span></span>
+  <h1 data-i18n="app">Contesto virtuale</h1>
+  <span class="conn" id="conn"><i></i><span id="connTxt" data-i18n="connWait">connessione…</span></span>
   <span class="src" id="src"></span>
-  <label>conversazione <select id="conv"></select></label>
-  <label><input type="checkbox" id="pause"> pausa</label>
+  <label><span data-i18n="langLabel">lingua</span> <select id="lang"></select></label>
+  <label><span data-i18n="convLabel">conversazione</span> <select id="conv"></select></label>
+  <label><input type="checkbox" id="pause"><span data-i18n="pause">pausa</span></label>
   <span class="num dim" id="upd" style="width:70px;text-align:right">—</span>
 </div>
 
 <div class="status">
-  <div class="cell" title="Pallino: verde sotto il 60% del limite, giallo 60–80%, arancione oltre l'80%, rosso se il prossimo turno (contesto + riserva per la risposta) non entra.">
-    <div class="lbl">Memoria · contesto fisico</div>
+  <div class="cell" data-i18n-title="memTip">
+    <div class="lbl" data-i18n="lblMem">Memoria · contesto fisico</div>
     <div class="mem-head"><span class="mem-dot" id="memDot"></span>
       <span class="big" id="memVal">—</span><span class="mem-state" id="memState"></span></div>
-    <div class="gauge" title="riempito = contesto fisico; tratteggio = riserva per la risposta; tacche a 60% e 80%">
+    <div class="gauge" data-i18n-title="gauge">
       <div class="f" id="gF" style="width:0"></div><div class="r" id="gR" style="left:0;width:0"></div>
       <div class="t" style="left:60%"></div><div class="t" style="left:80%"></div></div>
     <div class="sub" id="memSub" style="margin-top:6px"></div>
   </div>
   <div class="cell">
-    <div class="lbl">Fase</div>
+    <div class="lbl" data-i18n="lblPhase">Fase</div>
     <div class="big" id="phase" style="font-family:var(--sans);font-size:22px">—</div>
     <div class="sub" id="phaseSub"></div>
     <div class="prog"><i id="phaseProg"></i></div>
   </div>
   <div class="cell">
-    <div class="lbl">Velocità (media 2 s)</div>
+    <div class="lbl" data-i18n="lblSpeed">Velocità (media 2 s)</div>
     <div class="big" id="tps">—<small> tok/s</small></div>
     <div class="sub" id="tpsSub"></div>
   </div>
   <div class="cell">
-    <div class="lbl">Storia virtuale</div>
+    <div class="lbl" data-i18n="lblVirt">Storia virtuale</div>
     <div class="big" id="virt">—</div>
     <div class="sub" id="virtSub"></div>
   </div>
   <div class="cell compact">
-    <div class="lbl">Azioni</div>
-    <button disabled title="Segnaposto: la compattazione manuale non è ancora collegata al proxy">Compatta ora</button>
-    <div class="sub" style="margin-top:6px">non ancora disponibile</div>
+    <div class="lbl" data-i18n="lblActions">Azioni</div>
+    <button disabled data-i18n="btnCompact" data-i18n-title="btnCompactTip">Compatta ora</button>
+    <div class="sub" style="margin-top:6px" data-i18n="notAvail">non ancora disponibile</div>
   </div>
 </div>
 <div class="facts" id="facts">
-  <span class="g"><span>ultima richiesta</span><span>riusati <b class="num" id="fReu">—</b></span><span>riletti <b class="num" id="fRd">—</b></span><span>decode <b class="num" id="fDec">—</b></span><span>draft <b class="num" id="fDr">—</b></span></span>
-  <span class="g"><span>sessione</span><span><b class="num" id="fTot">—</b></span><span>riuso <b class="num" id="fTr">—</b></span></span>
-  <span class="g" title="token di cache invalidati dal proxy (blocchi, segmenti, richiamo automatico, strumenti): ultima richiesta, somma e andamento"><span>invalidati</span><span><b class="num" id="fInv">—</b></span><span>somma <b class="num" id="fInvT">—</b></span><svg id="fInvG" width="90" height="16" style="vertical-align:middle"></svg></span>
+  <span class="g"><span data-i18n="fLastReq">ultima richiesta</span><span><span data-i18n="fReu">riusati</span> <b class="num" id="fReu">—</b></span><span><span data-i18n="fRd">riletti</span> <b class="num" id="fRd">—</b></span><span>decode <b class="num" id="fDec">—</b></span><span>draft <b class="num" id="fDr">—</b></span></span>
+  <span class="g"><span data-i18n="fSession">sessione</span><span><b class="num" id="fTot">—</b></span><span><span data-i18n="fTr">riuso</span> <b class="num" id="fTr">—</b></span></span>
+  <span class="g" data-i18n-title="invTip"><span data-i18n="fInv">invalidati</span><span><b class="num" id="fInv">—</b></span><span><span data-i18n="fSum">somma</span> <b class="num" id="fInvT">—</b></span><svg id="fInvG" width="90" height="16" style="vertical-align:middle"></svg></span>
   <span class="g"><span>GPU <b class="num" id="fGpu">—</b></span><span>RAM <b class="num" id="fRam">—</b></span></span>
 </div>
 <div class="err" id="errs"></div>
 
 <main>
 <section>
-  <div class="sh"><h2>Uso del contesto</h2><span class="mu" style="font-size:12px">quanto contesto usa davvero il modello, rispetto a quanta storia esiste</span>
+  <div class="sh"><h2 data-i18n="hCtx">Uso del contesto</h2><span class="mu" style="font-size:12px" data-i18n="hCtxSub">quanto contesto usa davvero il modello, rispetto a quanta storia esiste</span>
     <span class="opts">
-      <label><input type="radio" name="ax" value="i" checked> per richiesta</label>
-      <label><input type="radio" name="ax" value="t"> per orario</label>
-      <label><input type="checkbox" id="onlyR0"> solo round 0</label>
+      <label><input type="radio" name="ax" value="i" checked><span data-i18n="axReq"> per richiesta</span></label>
+      <label><input type="radio" name="ax" value="t"><span data-i18n="axTime"> per orario</span></label>
+      <label><input type="checkbox" id="onlyR0"><span data-i18n="axR0"> solo round 0</span></label>
     </span></div>
   <div class="chartrow">
     <div>
@@ -209,39 +210,39 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
       <div class="sumline num" id="rsum"></div>
     </div>
     <div class="legend">
-      <div class="it"><span class="sw area"></span><span><b>Contesto fisico</b>: i token che il modello legge davvero a ogni richiesta.</span></div>
-      <div class="it"><span class="sw line"></span><span><b>Storia virtuale</b>: tutta la conversazione che esiste, anche la parte nascosta. <span id="lgEst"></span></span></div>
-      <div class="it"><span class="sw lim"></span><span><b>Limite 131.072</b>: oltre questa linea il contesto fisico non entra nel modello.</span></div>
-      <div class="it"><span class="sw band"></span><span><b>Segmento</b> (seg 0, seg 1…): tratto di conversazione con la stessa cache; a ogni cambio il vecchio tratto viene riassunto in note.</span></div>
-      <div class="it"><span class="sw seg"></span><span><b>Cambio segmento</b>: congelamento, note, sigillo e salvataggio del segmento precedente.</span></div>
-      <div class="it"><span class="sw mask"></span><span><b>Mask −NK</b>: il proxy nasconde vecchie uscite degli strumenti; il contesto fisico scende di N mila token.</span></div>
-      <div class="it"><span class="sw rec"></span><span><b>Recall</b> (punti sotto l'asse): il modello ha richiamato un pezzo nascosto. Punto più grande = più richiami vicini.</span></div>
-      <div class="it"><span class="sw br"></span><span><b>Branch</b>: il client ha ripreso la storia da un punto precedente.</span></div>
-      <div class="it"><span class="sw rd"></span><span><b>Riletti</b> (in basso): token che il modello ha dovuto rileggere; il resto viene dalla cache. Basso è meglio.</span></div>
-      <div class="note">Passa il mouse sul grafico per i dettagli di ogni richiesta.</div>
+      <div class="it"><span class="sw area"></span><span data-i18n-html="legPhys"><b>Contesto fisico</b>: i token che il modello legge davvero a ogni richiesta.</span></div>
+      <div class="it"><span class="sw line"></span><span data-i18n-html="legVirt"><b>Storia virtuale</b>: tutta la conversazione che esiste, anche la parte nascosta. <span id="lgEst"></span></span></div>
+      <div class="it"><span class="sw lim"></span><span data-i18n-html="legLimit"><b>Limite 131.072</b>: oltre questa linea il contesto fisico non entra nel modello.</span></div>
+      <div class="it"><span class="sw band"></span><span data-i18n-html="legSeg"><b>Segmento</b> (seg 0, seg 1…): tratto di conversazione con la stessa cache; a ogni cambio il vecchio tratto viene riassunto in note.</span></div>
+      <div class="it"><span class="sw seg"></span><span data-i18n-html="legSwitch"><b>Cambio segmento</b>: congelamento, note, sigillo e salvataggio del segmento precedente.</span></div>
+      <div class="it"><span class="sw mask"></span><span data-i18n-html="legMask"><b>Mask −NK</b>: il proxy nasconde vecchie uscite degli strumenti; il contesto fisico scende di N mila token.</span></div>
+      <div class="it"><span class="sw rec"></span><span data-i18n-html="legRecall"><b>Recall</b> (punti sotto l'asse): il modello ha richiamato un pezzo nascosto. Punto più grande = più richiami vicini.</span></div>
+      <div class="it"><span class="sw br"></span><span data-i18n-html="legBranch"><b>Branch</b>: il client ha ripreso la storia da un punto precedente.</span></div>
+      <div class="it"><span class="sw rd"></span><span data-i18n-html="legRead"><b>Riletti</b> (in basso): token che il modello ha dovuto rileggere; il resto viene dalla cache. Basso è meglio.</span></div>
+      <div class="note" data-i18n="chartHint">Passa il mouse sul grafico per i dettagli di ogni richiesta.</div>
     </div>
   </div>
 </section>
 
 <section class="lower">
   <div>
-    <div class="sh"><h2>Operazioni del proxy</h2><span class="mu num" id="evcount" style="font-size:12px"></span></div>
+    <div class="sh"><h2 data-i18n="hOps">Operazioni del proxy</h2><span class="mu num" id="evcount" style="font-size:12px"></span></div>
     <div class="chips" id="chips"></div>
     <div class="tbox" id="tbox"><table><colgroup><col style="width:74px"><col style="width:118px"><col></colgroup>
-      <thead><tr><th>ora</th><th>evento</th><th>dettagli (clic per espandere)</th></tr></thead><tbody id="evtb"></tbody></table></div>
+      <thead><tr><th data-i18n="thTime">ora</th><th data-i18n="thEvent">evento</th><th data-i18n="thDetails">dettagli (clic per espandere)</th></tr></thead><tbody id="evtb"></tbody></table></div>
   </div>
   <div>
-    <div class="sh"><h2>Prompt e risposta</h2><span class="mu" id="lrinfo" style="font-size:12px"></span></div>
+    <div class="sh"><h2 data-i18n="hPrompt">Prompt e risposta</h2><span class="mu" id="lrinfo" style="font-size:12px"></span></div>
     <div class="pbox">
-      <div class="pinfo"><span>Risposta</span><span id="respinfo" class="dim"></span>
-        <span class="opts"><button id="copyResp" title="copia la risposta negli appunti">copia</button></span></div>
+      <div class="pinfo"><span data-i18n="respLabel">Risposta</span><span id="respinfo" class="dim"></span>
+        <span class="opts"><button id="copyResp" data-i18n="copyBtn" data-i18n-title="copyRespTip">copia</button></span></div>
       <div class="resp" id="resp"><span class="dim">—</span></div>
-      <div class="pinfo"><span>Prompt fisico dell'ultima richiesta</span><span id="phcount" class="num dim"></span>
-        <span class="opts"><button id="copyAll" title="copia prompt e risposta">copia tutto</button><button id="expMd" title="esporta il prompt in Markdown">prompt .md</button><button id="expJson" title="esporta il prompt in JSON">prompt .json</button><button id="expHist" title="esporta la storia completa in Markdown">storia .md</button><button id="expHistJ" title="esporta la storia completa in JSON">storia .json</button><label class="mu"><input type="checkbox" id="onlyPh"> solo con segnaposto</label><button id="expand">espandi</button><button id="collapse">comprimi</button></span></div>
-      <div class="plist" id="prompt"><div class="empty">Il proxy non scrive ancora <code>live/last_request.json</code> (opzione <code>live_dump</code>).</div></div>
+      <div class="pinfo"><span data-i18n="promptLabel">Prompt fisico dell'ultima richiesta</span><span id="phcount" class="num dim"></span>
+        <span class="opts"><button id="copyAll" data-i18n="copyAllBtn" data-i18n-title="copyAllTip">copia tutto</button><button id="expMd" data-i18n="expMdBtn" data-i18n-title="expMdTip">prompt .md</button><button id="expJson" data-i18n="expJsonBtn" data-i18n-title="expJsonTip">prompt .json</button><button id="expHist" data-i18n="expHistBtn" data-i18n-title="expHistTip">storia .md</button><button id="expHistJ" data-i18n="expHistJBtn" data-i18n-title="expHistJTip">storia .json</button><label class="mu"><input type="checkbox" id="onlyPh"><span data-i18n="onlyPh"> solo con segnaposto</span></label><button id="expand" data-i18n="expandBtn">espandi</button><button id="collapse" data-i18n="collapseBtn">comprimi</button></span></div>
+      <div class="plist" id="prompt"><div class="empty" data-i18n-html="noLive">Il proxy non scrive ancora <code>live/last_request.json</code> (opzione <code>live_dump</code>).</div></div>
     </div>
-    <div class="sh" style="margin-top:10px"><h2>📌 Punti fermi e 🗑 usa e getta</h2><span class="mu" id="mkinfo" style="font-size:12px"></span></div>
-    <div class="pbox"><div class="plist" id="marks" style="max-height:260px"><div class="empty">nessuna conversazione</div></div></div>
+    <div class="sh" style="margin-top:10px"><h2 data-i18n="hMarks">📌 Punti fermi e 🗑 usa e getta</h2><span class="mu" id="mkinfo" style="font-size:12px"></span></div>
+    <div class="pbox"><div class="plist" id="marks" style="max-height:260px"><div class="empty" data-i18n="noConv">nessuna conversazione</div></div></div>
   </div>
 </section>
 </main>
@@ -250,13 +251,16 @@ mark.sg{background:rgba(226,197,65,.12);color:var(--warn);border-radius:2px;padd
 "use strict";
 const W = 131072, POLL_MS = 1000, RESERVE_DEFAULT = 16384, MAX_ROWS = 600;
 const $ = id => document.getElementById(id);
-const nf0 = new Intl.NumberFormat("it-IT", {maximumFractionDigits: 0});
-const nf1 = new Intl.NumberFormat("it-IT", {minimumFractionDigits: 1, maximumFractionDigits: 1});
+const LOCALE={it:"it-IT",en:"en-US",fr:"fr-FR"};
+let nf0,nf1,loc;
+function setLocale(l){loc=LOCALE[l]||"it-IT";
+  nf0=new Intl.NumberFormat(loc,{maximumFractionDigits:0});
+  nf1=new Intl.NumberFormat(loc,{minimumFractionDigits:1,maximumFractionDigits:1});}
 const full = n => n == null ? "—" : nf0.format(n);
 const kfmt = n => n == null ? "—" : Math.abs(n) >= 1000 ? nf1.format(n / 1000) + "K" : nf0.format(n);
 const secs = ms => ms == null ? "—" : nf1.format(ms / 1000) + " s";
 const pct = (a, b) => b ? nf1.format(100 * a / b) + "%" : "—";
-const hhmmss = ts => ts ? new Date(ts * 1000).toLocaleTimeString("it-IT", {hour12: false}) : "—";
+const hhmmss = ts => ts ? new Date(ts * 1000).toLocaleTimeString(loc, {hour12: false}) : "—";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 // scritture DOM solo se il valore cambia
 function setText(el, s) { if (el._t !== s) { el._t = s; el.textContent = s; } }
@@ -267,10 +271,207 @@ function setCls(el, c, on) { if (el.classList.contains(c) !== !!on) el.classList
 const S = {ev: 0, pt: 0, lr: null, events: [], points: [], conv: null, userConv: false, convs: [], lastLive: null,
            ax: "i", tps: [], tpsShown: null, dataVer: 0, lastStatus: null};
 
+/* ---------- lingua ----------
+   Il testo è tradotto solo nel dashboard: i dati restano quelli del proxy.
+   Le chiavi `*-html` contengono markup e sono inserite con innerHTML. */
+const I18N={};
+I18N.it={app:"Contesto virtuale",connWait:"connessione…",connLive:"in diretta",connPoll:"a intervalli",connDead:"nessun collegamento",
+ langLabel:"lingua",convLabel:"conversazione",pause:"pausa",langAuto:"automatico",
+ lblMem:"Memoria · contesto fisico",lblPhase:"Fase",lblSpeed:"Velocità (media 2 s)",lblVirt:"Storia virtuale",lblActions:"Azioni",
+ gauge:"riempito = contesto fisico; tratteggio = riserva per la risposta; tacche a 60% e 80%",
+ memTip:"Pallino: verde sotto il 60% del limite, giallo 60–80%, arancione oltre l'80%, rosso se il prossimo turno (contesto + riserva per la risposta) non entra.",
+ virtTip:"la conversazione integrale che esiste, anche la parte nascosta; il contesto fisico è ciò che entra davvero",
+ btnCompact:"Compatta ora",btnCompactTip:"Segnaposto: la compattazione manuale non è ancora collegata al proxy",notAvail:"non ancora disponibile",
+ phaseIdle:"in attesa di richieste",phaseDraft:"🔧 draft del contesto",phaseDecode:"🧠 decode della risposta",phaseMask:"⌛ mask in attesa",
+ tokSuffix:"t",reused:"riusati",reusedEst:"riusati (stimati)",reread:"riletti",reusedOf:"di cui riusati",
+ estSuffix:"t stimati",estExact:"conteggio preciso",estFallback:"stimato (conteggio assente)",
+ invSuffix:"t invalidati",invNone:"nessuna invalidazione",invTotal:"somma",
+ fLastReq:"ultima richiesta",fReu:"riusati",fRd:"riletti",fSession:"sessione",fTr:"riuso",fInv:"invalidati",fSum:"somma",
+ invTip:"token di cache invalidati dal proxy (blocchi, segmenti, richiamo automatico, strumenti): ultima richiesta, somma e andamento",
+ hCtx:"Uso del contesto",hCtxSub:"quanto contesto usa davvero il modello, rispetto a quanta storia esiste",
+ axReq:"per richiesta",axTime:"per orario",axR0:"solo round 0",
+ legPhys:"<b>Contesto fisico</b>: i token che il modello legge davvero a ogni richiesta.",
+ legVirt:"<b>Storia virtuale</b>: tutta la conversazione che esiste, anche la parte nascosta. <span id=\"lgEst\"></span>",
+ legLimit:"<b>Limite 131.072</b>: oltre questa linea il contesto fisico non entra nel modello.",
+ legSeg:"<b>Segmento</b> (seg 0, seg 1…): tratto di conversazione con la stessa cache; a ogni cambio il vecchio tratto viene riassunto in note.",
+ legSwitch:"<b>Cambio segmento</b>: congelamento, note, sigillo e salvataggio del segmento precedente.",
+ legMask:"<b>Mask −NK</b>: il proxy nasconde vecchie uscite degli strumenti; il contesto fisico scende di N mila token.",
+ legRecall:"<b>Recall</b> (punti sotto l'asse): il modello ha richiamato un pezzo nascosto. Punto più grande = più richiami vicini.",
+ legBranch:"<b>Branch</b>: il client ha ripreso la storia da un punto precedente.",
+ legRead:"<b>Riletti</b> (in basso): token che il modello ha dovuto rileggere; il resto viene dalla cache. Basso è meglio.",
+ chartHint:"Passa il mouse sul grafico per i dettagli di ogni richiesta.",
+ scaleLog:"scala log",scaleLin:"scala lineare",
+ thTime:"ora",thEvent:"evento",thDetails:"dettagli (clic per espandere)",
+ hPrompt:"Prompt e risposta",respLabel:"Risposta",promptLabel:"Prompt fisico dell'ultima richiesta",
+ copyBtn:"copia",copyRespTip:"copia la risposta negli appunti",copyAllBtn:"copia tutto",copyAllTip:"copia prompt e risposta",
+ expMdBtn:"prompt .md",expMdTip:"esporta il prompt in Markdown",expJsonBtn:"prompt .json",expJsonTip:"esporta il prompt in JSON",
+ expHistBtn:"storia .md",expHistTip:"esporta la storia completa in Markdown",expHistJBtn:"storia .json",expHistJTip:"esporta la storia completa in JSON",
+ onlyPh:"solo con segnaposto",expandBtn:"espandi",collapseBtn:"comprimi",
+ noLive:"Il proxy non scrive ancora <code>live/last_request.json</code> (opzione <code>live_dump</code>).",
+ hOps:"Operazioni del proxy",hMarks:"📌 Punti salvati e 🗑 usa e getta",noConv:"nessuna conversazione",
+ parts:["system","stor. fis.","note","richiami","user","risp. tool","altro"],
+ connUp:"dashboard collegata",connDown:"dashboard non risponde",memNone:"nessun dato",memOver:"il prossimo turno non entra",
+ memRes:"riserva per la risposta",memTh:"soglie 60% e 80%",phaseDead:"Strata non risponde",phaseIdleWord:"inattivo",
+ memOk:"ok",memWarn:"attenzione",memHigh:"alta",phaseRead:"lettura prompt",phaseThink:"ragionamento",phaseAnswer:"risposta",phaseTool:"chiamata strumento",
+ since:"da {x} s",ofWord:" di ",tokWord:"token",genWord:"in generazione",idleWord:"fermo",queued:"in coda {x}",
+ lastReqAt:"ultima richiesta alle {x}",virtRatio:"{x}× il contesto fisico",srcEst:" · stima",lgEstTxt:"Qui è stimata dall'archivio del proxy.",
+ reqWord:"richieste",cacheWord:"dalla cache",noChart:"nessuna richiesta nel giornale",noPrompt:"nessun prompt",limitLbl:"limite del modello",
+ pins:"punti salvati",overLimit:" · OLTRE IL TETTO",dropWord:"usa e getta",pinTitle:"fissa il messaggio come punto salvato",
+ dropTitle:"scambio usa e getta",unpinBtn:"togli",editBtn:"modifica",noUsers:"nessun messaggio utente archiviato",
+ pinPrompt:"nuovo testo del punto salvato",histLbl:"storia virtuale",msgWord:"messaggi",idxWord:"da indice",
+ rereadEst:"rilettura stimata",cutWord:"taglio",resWord:"riserva",estWord:"stima",idleSince:"fermo da {x} s",
+ readLbl:"token riletti per richiesta (il resto viene dalla cache)",segStart:"inizio seg {x}:",frozen:"congelato a {x}",
+ notesLine:"note {x} tok in {y}",savedLine:"salvato {x} GiB",respDone:"completa",respRun:"in corso",liveQueue:"coda live da Strata",
+ evDropped:"scartati",evCache:"in cache",evRead:"riletti",evPhys:"fisico",evInv:"invalidati",evNoteTok:"note tok",evKnown:"noti",
+ evRestored:"tok ripristinati",evGain:"guadagno",evRestart:"dopo riavvio/perdita di Strata",evOtherConv:"Strata aveva un'altra conversazione",
+ evSuperseded:"superato",evOverLimits:"oltre i limiti",evReason:"motivo",evLost:"tok persi in Strata",evPlaceholders:"segnaposti",evReal:"reali",
+ evnDropped:"richiami scartati",evnFreeze:"congelamento",evnNotes:"note",evnSeal:"sigillo",evnSave:"salvataggio",evnSwitch:"cambio segmento",
+ evnNewConv:"nuova conversazione",evnAutosave:"autosalvataggio",evnAutorestore:"ripristino automatico",evnPrune:"pulizia salvataggi",evnLost:"stato di Strata perso",
+ tipReq:"Richiesta #{x}",tipPhys:"contesto fisico",tipEvents:"eventi prima: ",tipNoEv:"nessun evento del proxy",
+ copyOk:"copiato ✓",copyErr:"errore",reasonPrefix:"‹ragionamento› ",mdHeader:"# Prompt fisico —",
+ mdTime:"ora",mdMsgs:"messaggi",mdEst:"token stimati",mdReal:"reali",mdTools:"strumenti"};
+I18N.en={app:"Virtual context",connWait:"connecting…",connLive:"live",connPoll:"polled",connDead:"no connection",
+ langLabel:"language",convLabel:"conversation",pause:"pause",langAuto:"automatic",
+ lblMem:"Memory · physical context",lblPhase:"Phase",lblSpeed:"Speed (2 s average)",lblVirt:"Virtual history",lblActions:"Actions",
+ gauge:"filled = physical context; hatched = reserve for the answer; ticks at 60% and 80%",
+ memTip:"Dot: green below 60% of the limit, yellow 60–80%, orange above 80%, red when the next turn (context + answer reserve) does not fit.",
+ virtTip:"the whole conversation that exists, including the hidden part; physical context is what actually enters",
+ btnCompact:"Compact now",btnCompactTip:"Placeholder: manual compaction is not wired to the proxy yet",notAvail:"not available yet",
+ phaseIdle:"waiting for requests",phaseDraft:"🔧 context draft",phaseDecode:"🧠 answer decode",phaseMask:"⌛ mask pending",
+ tokSuffix:"t",reused:"reused",reusedEst:"reused (estimated)",reread:"re-read",reusedOf:"of which reused",
+ estSuffix:"t estimated",estExact:"exact count",estFallback:"estimated (no count)",
+ invSuffix:"t invalidated",invNone:"no invalidation",invTotal:"total",
+ fLastReq:"last request",fReu:"reused",fRd:"re-read",fSession:"session",fTr:"reuse",fInv:"invalidated",fSum:"total",
+ invTip:"cache tokens invalidated by the proxy (blocks, segments, automatic recall, tools): last request, total and trend",
+ hCtx:"Context usage",hCtxSub:"how much context the model really reads, compared with how much history exists",
+ axReq:"per request",axTime:"per time",axR0:"round 0 only",
+ legPhys:"<b>Physical context</b>: the tokens the model actually reads on each request.",
+ legVirt:"<b>Virtual history</b>: the whole conversation that exists, including the hidden part. <span id=\"lgEst\"></span>",
+ legLimit:"<b>Limit 131,072</b>: above this line the physical context does not fit the model.",
+ legSeg:"<b>Segment</b> (seg 0, seg 1…): a stretch of conversation sharing one cache; on each switch the previous stretch is summarised into notes.",
+ legSwitch:"<b>Segment switch</b>: freeze, notes, seal and save of the previous segment.",
+ legMask:"<b>Mask −NK</b>: the proxy hides old tool outputs; physical context drops by N thousand tokens.",
+ legRecall:"<b>Recall</b> (dots below the axis): the model recalled a hidden piece. Bigger dot = more recalls nearby.",
+ legBranch:"<b>Branch</b>: the client resumed the history from an earlier point.",
+ legRead:"<b>Re-read</b> (bottom): tokens the model had to read again; the rest comes from cache. Lower is better.",
+ chartHint:"Hover the chart for the details of each request.",
+ scaleLog:"log scale",scaleLin:"linear scale",
+ thTime:"time",thEvent:"event",thDetails:"details (click to expand)",
+ hPrompt:"Prompt and answer",respLabel:"Answer",promptLabel:"Physical prompt of the last request",
+ copyBtn:"copy",copyRespTip:"copy the answer to the clipboard",copyAllBtn:"copy all",copyAllTip:"copy prompt and answer",
+ expMdBtn:"prompt .md",expMdTip:"export the prompt as Markdown",expJsonBtn:"prompt .json",expJsonTip:"export the prompt as JSON",
+ expHistBtn:"history .md",expHistTip:"export the full history as Markdown",expHistJBtn:"history .json",expHistJTip:"export the full history as JSON",
+ onlyPh:"placeholder only",expandBtn:"expand",collapseBtn:"collapse",
+ noLive:"The proxy does not write <code>live/last_request.json</code> yet (<code>live_dump</code> option).",
+ hOps:"Proxy operations",hMarks:"📌 Saved context and 🗑 Throwaway",noConv:"no conversation",
+ parts:["system","phys. hist.","notes","recalls","user","tool replies","other"],
+ connUp:"dashboard connected",connDown:"dashboard not responding",memNone:"no data",memOver:"the next turn won't fit",
+ memRes:"reserve for the answer",memTh:"thresholds 60% and 80%",phaseDead:"Strata not responding",phaseIdleWord:"idle",
+ memOk:"ok",memWarn:"caution",memHigh:"high",phaseRead:"prompt read",phaseThink:"reasoning",phaseAnswer:"answer",phaseTool:"tool call",
+ since:"{x} s",ofWord:" of ",tokWord:"tokens",genWord:"generating",idleWord:"idle",queued:"queued {x}",
+ lastReqAt:"last request at {x}",virtRatio:"{x}× the physical context",srcEst:" · estimated",lgEstTxt:"Estimated here from the proxy archive.",
+ reqWord:"requests",cacheWord:"from cache",noChart:"no request in the journal",noPrompt:"no prompt",limitLbl:"model limit",
+ pins:"saved points",overLimit:" · OVER THE LIMIT",dropWord:"throwaway",pinTitle:"pin the message as a saved point",
+ dropTitle:"throwaway exchange",unpinBtn:"remove",editBtn:"edit",noUsers:"no archived user message",
+ pinPrompt:"new saved-point text",histLbl:"virtual history",msgWord:"messages",idxWord:"from index",
+ rereadEst:"estimated re-read",cutWord:"cut",resWord:"reserve",estWord:"estimated",idleSince:"idle for {x} s",
+ readLbl:"re-read tokens per request (the rest comes from cache)",segStart:"segment {x} starts:",frozen:"frozen at {x}",
+ notesLine:"notes {x} tok in {y}",savedLine:"saved {x} GiB",respDone:"done",respRun:"in progress",liveQueue:"live queue from Strata",
+ evDropped:"dropped",evCache:"in cache",evRead:"re-read",evPhys:"physical",evInv:"invalidated",evNoteTok:"notes tok",evKnown:"known",
+ evRestored:"tokens restored",evGain:"gain",evRestart:"after Strata restart/loss",evOtherConv:"Strata had another conversation",
+ evSuperseded:"superseded",evOverLimits:"over limits",evReason:"reason",evLost:"tokens lost in Strata",evPlaceholders:"placeholders",evReal:"actual",
+ evnDropped:"dropped recalls",evnFreeze:"freeze",evnNotes:"notes",evnSeal:"seal",evnSave:"save",evnSwitch:"segment switch",
+ evnNewConv:"new conversation",evnAutosave:"autosave",evnAutorestore:"auto-restore",evnPrune:"save pruning",evnLost:"Strata state lost",
+ tipReq:"Request #{x}",tipPhys:"physical context",tipEvents:"events before: ",tipNoEv:"no proxy events",
+ copyOk:"copied ✓",copyErr:"error",reasonPrefix:"‹reasoning› ",mdHeader:"# Physical prompt —",
+ mdTime:"time",mdMsgs:"messages",mdEst:"estimated tokens",mdReal:"actual",mdTools:"tools"};
+I18N.fr={app:"Contexte virtuel",connWait:"connexion…",connLive:"en direct",connPoll:"par intervalles",connDead:"aucune liaison",
+ langLabel:"langue",convLabel:"conversation",pause:"pause",langAuto:"automatique",
+ lblMem:"Mémoire · contexte physique",lblPhase:"Phase",lblSpeed:"Vitesse (moyenne 2 s)",lblVirt:"Histoire virtuelle",lblActions:"Actions",
+ gauge:"rempli = contexte physique ; hachuré = réserve pour la réponse ; repères à 60% et 80%",
+ memTip:"Point : vert sous 60% de la limite, jaune 60–80%, orange au-delà de 80%, rouge si la prochaine manche (contexte + réserve de réponse) ne tient pas.",
+ virtTip:"la conversation intégrale qui existe, même la partie cachée ; le contexte physique est ce qui entre réellement",
+ btnCompact:"Compacter maintenant",btnCompactTip:"Placeholder : la compaction manuelle n'est pas encore branchée sur le proxy",notAvail:"pas encore disponible",
+ phaseIdle:"en attente de requêtes",phaseDraft:"🔧 brouillon du contexte",phaseDecode:"🧠 décodage de la réponse",phaseMask:"⌛ mask en attente",
+ tokSuffix:"t",reused:"réutilisés",reusedEst:"réutilisés (estimés)",reread:"relus",reusedOf:"dont réutilisés",
+ estSuffix:"t estimés",estExact:"comptage exact",estFallback:"estimé (comptage absent)",
+ invSuffix:"t invalidés",invNone:"aucune invalidation",invTotal:"somme",
+ fLastReq:"dernière requête",fReu:"réutilisés",fRd:"relus",fSession:"session",fTr:"réutilisation",fInv:"invalidés",fSum:"somme",
+ invTip:"tokens de cache invalidés par le proxy (blocs, segments, rappel automatique, outils) : dernière requête, somme et tendance",
+ hCtx:"Usage du contexte",hCtxSub:"combien de contexte le modèle lit vraiment, par rapport à l'historique existant",
+ axReq:"par requête",axTime:"par horaires",axR0:"manche 0 seulement",
+ legPhys:"<b>Contexte physique</b> : les tokens que le modèle lit vraiment à chaque requête.",
+ legVirt:"<b>Historique virtuel</b> : toute la conversation qui existe, partie cachée comprise. <span id=\"lgEst\"></span>",
+ legLimit:"<b>Limite 131 072</b> : au-delà de cette ligne le contexte physique ne tient pas dans le modèle.",
+ legSeg:"<b>Segment</b> (seg 0, seg 1…) : tronçon de conversation partageant un cache ; à chaque changement le tronçon précédent est résumé en notes.",
+ legSwitch:"<b>Changement de segment</b> : gel, notes, sceau et sauvegarde du segment précédent.",
+ legMask:"<b>Mask −NK</b> : le proxy cache d'anciennes sorties d'outils ; le contexte physique baisse de N milliers de tokens.",
+ legRecall:"<b>Recall</b> (points sous l'axe) : le modèle a rappelé un morceau caché. Point plus grand = plus de rappels à proximité.",
+ legBranch:"<b>Branch</b> : le client a repris l'historique depuis un point antérieur.",
+ legRead:"<b>Relus</b> (en bas) : tokens que le modèle a dû relire ; le reste vient du cache. Plus bas, mieux.",
+ chartHint:"Survolez le graphique pour le détail de chaque requête.",
+ scaleLog:"échelle log",scaleLin:"échelle linéaire",
+ thTime:"heure",thEvent:"événement",thDetails:"détails (clic pour ouvrir)",
+ hPrompt:"Prompt et réponse",respLabel:"Réponse",promptLabel:"Prompt physique de la dernière requête",
+ copyBtn:"copier",copyRespTip:"copier la réponse dans le presse-papiers",copyAllBtn:"tout copier",copyAllTip:"copier prompt et réponse",
+ expMdBtn:"prompt .md",expMdTip:"exporter le prompt en Markdown",expJsonBtn:"prompt .json",expJsonTip:"exporter le prompt en JSON",
+ expHistBtn:"historique .md",expHistTip:"exporter tout l'historique en Markdown",expHistJBtn:"historique .json",expHistJTip:"exporter tout l'historique en JSON",
+ onlyPh:"avec marqueur",expandBtn:"développer",collapseBtn:"replier",
+ noLive:"Le proxy ne écrit pas encore <code>live/last_request.json</code> (option <code>live_dump</code>).",
+ hOps:"Opérations du proxy",hMarks:"📌 Contexte sauvegardé et 🗑 jetables",noConv:"aucune conversation",
+ parts:["system","hist. phys.","notes","rappels","user","resp. outils","autre"],
+ connUp:"tableau de bord connecté",connDown:"tableau de bord hors ligne",memNone:"aucune donnée",memOver:"le prochain tour ne tient pas",
+ memRes:"réserve pour la réponse",memTh:"seuils 60% et 80%",phaseDead:"Strata ne répond pas",phaseIdleWord:"inactif",
+ memOk:"ok",memWarn:"attention",memHigh:"élevée",phaseRead:"lecture du prompt",phaseThink:"raisonnement",phaseAnswer:"réponse",phaseTool:"appel d'outil",
+ since:"depuis {x} s",ofWord:" de ",tokWord:"tokens",genWord:"génération",idleWord:"inactif",queued:"en file {x}",
+ lastReqAt:"dernière requête à {x}",virtRatio:"{x}× le contexte physique",srcEst:" · estimé",lgEstTxt:"Ici estimé depuis l'archive du proxy.",
+ reqWord:"requêtes",cacheWord:"du cache",noChart:"aucune requête dans le journal",noPrompt:"aucun prompt",limitLbl:"limite du modèle",
+ pins:"points sauvegardés",overLimit:" · AU-DESSUS DU TET",dropWord:"jetables",pinTitle:"épingler le message comme point sauvegardé",
+ dropTitle:"échange jetable",unpinBtn:"retirer",editBtn:"modifier",noUsers:"aucun message utilisateur archivé",
+ pinPrompt:"nouveau texte du point sauvegardé",histLbl:"historique virtuel",msgWord:"messages",idxWord:"de l'indice",
+ rereadEst:"relecture estimée",cutWord:"coupure",resWord:"réserve",estWord:"estimé",idleSince:"inactif depuis {x} s",
+ readLbl:"tokens relus par requête (le reste vient du cache)",segStart:"début du segment {x} :",frozen:"figé à {x}",
+ notesLine:"notes {x} tok en {y}",savedLine:"sauvegardé {x} GiB",respDone:"terminée",respRun:"en cours",liveQueue:"file live de Strata",
+ evDropped:"jetés",evCache:"en cache",evRead:"relus",evPhys:"physique",evInv:"invalidés",evNoteTok:"notes tok",evKnown:"connus",
+ evRestored:"tokens restaurés",evGain:"gain",evRestart:"après redémarrage/perte de Strata",evOtherConv:"Strata avait une autre conversation",
+ evSuperseded:"remplacé",evOverLimits:"au-dessus des limites",evReason:"motif",evLost:"tokens perdus dans Strata",evPlaceholders:"marqueurs",evReal:"réels",
+ evnDropped:"rappels ignorés",evnFreeze:"figé",evnNotes:"note",evnSeal:"scellé",evnSave:"sauvegarde",evnSwitch:"changement de segment",
+ evnNewConv:"nouvelle conversation",evnAutosave:"sauvegarde auto",evnAutorestore:"restauration auto",evnPrune:"nettoyage des sauvegardes",evnLost:"état Strata perdu",
+ tipReq:"Requête #{x}",tipPhys:"contexte physique",tipEvents:"événements avant : ",tipNoEv:"aucun événement du proxy",
+ copyOk:"copié ✓",copyErr:"erreur",reasonPrefix:"‹raisonnement› ",mdHeader:"# Prompt physique —",
+ mdTime:"heure",mdMsgs:"messages",mdEst:"tokens estimés",mdReal:"réels",mdTools:"outils"};
+const AUTO_LANG=(navigator.language||"it").toLowerCase().startsWith("fr")?"fr":
+                (navigator.language||"it").toLowerCase().startsWith("en")?"en":"it";
+let lang=localStorage.getItem("mnem-lang")||"auto";
+const T=k=>(I18N[lang==="auto"?AUTO_LANG:lang]||I18N.it)[k]||I18N.it[k];
+const F=(k,x)=>T(k).replace("{x}",x);
+function applyLang(){
+  document.title=T("app");
+  const L=I18N[lang==="auto"?AUTO_LANG:lang]||I18N.it;
+  for(const el of document.querySelectorAll("[data-i18n]"))el.textContent=L[el.dataset.i18n]||I18N.it[el.dataset.i18n];
+  for(const el of document.querySelectorAll("[data-i18n-html]"))el.innerHTML=L[el.dataset.i18nHtml]||I18N.it[el.dataset.i18nHtml];
+  for(const el of document.querySelectorAll("[data-i18n-title]"))el.title=L[el.dataset.i18nTitle]||I18N.it[el.dataset.i18nTitle];
+}
+const langSel=$("lang");
+langSel.innerHTML=`<option value="auto"></option><option value="it">italiano</option><option value="en">English</option><option value="fr">français</option>`;
+function setLang(v){
+  lang=v;localStorage.setItem("mnem-lang",v);langSel.value=v;langSel.title=T("langAuto");
+  langSel.options[0].textContent=T("langAuto");
+  setLocale(lang==="auto"?AUTO_LANG:lang);
+  applyLang();
+  if(S.lastStatus)renderStatus(S.lastStatus);
+  drawChart();
+  $("evtb").textContent="";addEvents(S.events);applyConvFilter();
+  renderMarks();
+  if(S.lastLive)renderPrompt(S.lastLive);
+  if(S.lastStatus)renderResponse(S.lastStatus);
+}
+
 // ---------- controlli ----------
 document.querySelectorAll("input[name=ax]").forEach(r => r.addEventListener("change", e => { S.ax = e.target.value; S.dataVer++; drawChart(); }));
 $("onlyR0").addEventListener("change", () => { S.dataVer++; drawChart(); });
 $("conv").addEventListener("change", e => { S.conv = e.target.value; S.userConv = true; S.dataVer++; drawChart(); applyConvFilter(); });
+langSel.addEventListener("change", e => setLang(e.target.value));
 
 // ---------- polling (mai due richieste sovrapposte) ----------
 async function tick() {
@@ -280,10 +481,10 @@ async function tick() {
       const r = await fetch(`/api/state?ev=${S.ev}&pt=${S.pt}&lr=${S.lr ?? ""}`, {cache: "no-store"});
       const d = await r.json();
       ingest(d);
-      setCls($("conn"), "on", true); setCls($("conn"), "off", false); setText($("connTxt"), "dashboard collegata");
+      setCls($("conn"), "on", true); setCls($("conn"), "off", false); setText($("connTxt"), T("connUp"));
       setText($("upd"), hhmmss(d.now));
     } catch (e) {
-      setCls($("conn"), "on", false); setCls($("conn"), "off", true); setText($("connTxt"), "dashboard non risponde");
+      setCls($("conn"), "on", false); setCls($("conn"), "off", true); setText($("connTxt"), T("connDown"));
     }
   }
   setTimeout(tick, Math.max(200, POLL_MS - (performance.now() - t0)));
@@ -314,12 +515,13 @@ function ingest(d) {
   drawChart();
   if (newEv.length) addEvents(newEv);
   if (d.live_request) { S.lastLive = d.live_request; S.lr = d.live_request_mtime; renderPrompt(d.live_request); }
+  S.lastStatus = d;
   renderResponse(d);
 }
 
 // ---------- fascia di stato ----------
-const PHASES = [[/read|prompt|prefill/i, "lettura prompt"], [/think/i, "ragionamento"], [/answer|content|writ/i, "risposta"], [/tool/i, "chiamata strumento"]];
-function phaseName(p) { for (const [re, n] of PHASES) if (re.test(p || "")) return n; return p || "generazione"; }
+const PHASES = [[/read|prompt|prefill/i, "phaseRead"], [/think/i, "phaseThink"], [/answer|content|writ/i, "phaseAnswer"], [/tool/i, "phaseTool"]];
+function phaseName(p) { for (const [re, k] of PHASES) if (re.test(p || "")) return T(k); return p || T("genWord"); }
 function lastFreezeReserve() {
   for (let i = S.events.length - 1; i >= 0; i--) if (S.events[i].event === "freeze" && S.events[i].response) return S.events[i].response;
   return RESERVE_DEFAULT;
@@ -332,11 +534,11 @@ function renderStatus(d) {
   // --- memoria ---
   const phys = busy ? (st.prompt_tokens ?? lv.prompt_tokens) : (lastPt ? (lastPt.phys ?? lastPt.phys_est) : null);
   const reserve = lastFreezeReserve();
-  let lvl = -1, lab = "nessun dato";
+  let lvl = -1, lab = T("memNone");
   if (phys != null) {
     const f = phys / ctx;
-    if (phys + reserve > ctx) { lvl = 3; lab = "il prossimo turno non entra"; }
-    else if (f > .8) { lvl = 2; lab = "alta"; } else if (f >= .6) { lvl = 1; lab = "attenzione"; } else { lvl = 0; lab = "ok"; }
+    if (phys + reserve > ctx) { lvl = 3; lab = T("memOver"); }
+    else if (f > .8) { lvl = 2; lab = T("memHigh"); } else if (f >= .6) { lvl = 1; lab = T("memWarn"); } else { lvl = 0; lab = T("memOk"); }
   }
   const dot = $("memDot"); for (let i = 0; i < 4; i++) setCls(dot, "s" + i, i === lvl);
   setText($("memState"), lab);
@@ -345,24 +547,24 @@ function renderStatus(d) {
   setStyle($("gF"), "width", fw.toFixed(1) + "%");
   setStyle($("gR"), "left", fw.toFixed(1) + "%");
   setStyle($("gR"), "width", Math.max(0, Math.min(100 - fw, 100 * reserve / ctx)).toFixed(1) + "%");
-  setText($("memSub"), `riserva per la risposta ${kfmt(reserve)} · soglie 60% e 80%`);
+  setText($("memSub"), `${T("memRes")} ${kfmt(reserve)} · ${T("memTh")}`);
   // --- fase ---
-  let ph = "inattivo", phSub = "", prog = 0;
-  if (!d.status) { ph = "Strata non risponde"; phSub = (d.errors && d.errors.status) || ""; }
+  let ph = T("phaseIdleWord"), phSub = "", prog = 0;
+  if (!d.status) { ph = T("phaseDead"); phSub = (d.errors && d.errors.status) || ""; }
   else if (busy) {
     ph = phaseName(phase);
     const el = st.elapsed_s ?? lv.elapsed_s;
     if (reading) {
       const pr = lv.prompt_read, ptot = lv.prompt_total || st.prompt_tokens;
       prog = pr != null && ptot ? pr / ptot : 0;
-      phSub = `da ${el != null ? nf0.format(el) : "—"} s · ${pr != null ? kfmt(pr) + " di " + kfmt(ptot) : kfmt(st.prompt_tokens) + " token"}`;
+      phSub = `${F("since", el != null ? nf0.format(el) : "—")} · ${pr != null ? kfmt(pr) + T("ofWord") + kfmt(ptot) : kfmt(st.prompt_tokens) + " " + T("tokWord")}`;
     } else {
       const g = st.generated ?? lv.generated, mx = st.max_tokens ?? lv.max_tokens;
       prog = mx ? (g || 0) / mx : 0;
-      phSub = `da ${el != null ? nf0.format(el) : "—"} s · ${full(g)} / ${full(mx)} token`;
+      phSub = `${F("since", el != null ? nf0.format(el) : "—")} · ${full(g)} / ${full(mx)} ${T("tokWord")}`;
     }
-    if (st.queued) phSub += ` · in coda ${st.queued}`;
-  } else if (lastPt) phSub = `ultima richiesta alle ${hhmmss(lastPt.ts)}`;
+    if (st.queued) phSub += ` · ${F("queued", st.queued)}`;
+  } else if (lastPt) phSub = F("lastReqAt", hhmmss(lastPt.ts));
   setText($("phase"), ph);
   setText($("phaseSub"), phSub);
   setStyle($("phaseProg"), "width", (100 * Math.min(1, prog)).toFixed(1) + "%");
@@ -374,12 +576,12 @@ function renderStatus(d) {
   if (S.tps.length) S.tpsShown = S.tps.reduce((a, [, x]) => a + x, 0) / S.tps.length;
   setHTML($("tps"), `${S.tpsShown != null ? nf0.format(S.tpsShown) : "—"}<small> tok/s</small>`);
   setCls($("tps"), "stale", !gen);
-  setText($("tpsSub"), `${gen ? "in generazione" : "fermo"} · prefill ${lv.prefill_tok_s_mean != null ? kfmt(lv.prefill_tok_s_mean) : "—"} tok/s`);
+  setText($("tpsSub"), `${gen ? T("genWord") : T("idleWord")} · prefill ${lv.prefill_tok_s_mean != null ? kfmt(lv.prefill_tok_s_mean) : "—"} tok/s`);
   // --- storia virtuale ---
   const vt = lastPt ? lastPt.virtual : null, vp = lastPt ? (lastPt.phys ?? lastPt.phys_est) : null;
   setText($("virt"), kfmt(vt));
-  setText($("virtSub"), vt != null && vp ? `${nf1.format(vt / vp)}× il contesto fisico${lastPt.virtual_src === "stima" ? " · stima" : ""}` : "");
-  setText($("lgEst"), lastPt && lastPt.virtual_src === "stima" ? "Qui è stimata dall'archivio del proxy." : "");
+  setText($("virtSub"), vt != null && vp ? `${F("virtRatio", nf1.format(vt / vp))}${lastPt.virtual_src === "stima" ? T("srcEst") : ""}` : "");
+  setText($("lgEst"), lastPt && lastPt.virtual_src === "stima" ? T("lgEstTxt") : "");
   // --- fatti secondari ---
   const reqs = m.requests || [], r = reqs[0] && reqs[1] && reqs[1].time > reqs[0].time ? reqs[reqs.length - 1] : (reqs[0] || {});
   setText($("fReu"), r.prompt_tokens ? `${kfmt(r.reused)} (${pct(r.reused || 0, r.prompt_tokens)})` : "—");
@@ -387,7 +589,7 @@ function renderStatus(d) {
   setText($("fDec"), r.decode_tok_s != null ? `${nf0.format(r.decode_tok_s)} tok/s` : "—");
   setText($("fDr"), r.drafts_offered ? nf0.format(100 * r.drafts_accepted / r.drafts_offered) + "%" : "—");
   const tt = m.totals || {};
-  setText($("fTot"), tt.requests != null ? `${full(tt.requests)} richieste` : "—");
+  setText($("fTot"), tt.requests != null ? `${full(tt.requests)} ${T("reqWord")}` : "—");
   setText($("fTr"), tt.prompt_tokens ? pct(tt.reused, tt.prompt_tokens) : "—");
   {   // token di cache invalidati dal proxy (card t_00c5aef6): ultima richiesta + somma + mini grafico
     const iv = S.points.filter(p => (!S.conv || p.conv === S.conv) && !p.round && p.inval != null);
@@ -449,15 +651,15 @@ function drawChart() {
   drawnKey = key;
   const [g, w, h] = sizeCanvas(cv); sizeCanvas(ov);
   const {pts, per, segs} = chartModel();
-  const L = M.L, R = M.R, T = M.T, PW = w - L - R, PB = T + M.plotH;
+  const L = M.L, R = M.R, TP = M.T, PW = w - L - R, PB = TP + M.plotH;
   g.clearRect(0, 0, w, h);
   g.font = "11px " + getComputedStyle(document.body).getPropertyValue("--mono");
   g.textBaseline = "middle";
-  if (!pts.length) { g.fillStyle = "#8b939e"; g.fillText("nessuna richiesta nel giornale", L + 10, T + 40); G = null; return; }
+  if (!pts.length) { g.fillStyle = "#8b939e"; g.fillText(T("noChart"), L + 10, TP + 40); G = null; return; }
   // dominio y stabile: gradini da 50K
   const vmaxRaw = Math.max(W * 1.08, ...pts.map(p => Math.max(p.phys ?? p.phys_est ?? 0, p.virtual ?? 0)));
   const vmax = Math.ceil(vmaxRaw / 50000) * 50000;
-  const Y = v => T + M.plotH * (1 - v / vmax);
+  const Y = v => TP + M.plotH * (1 - v / vmax);
   // dominio x stabile: cresce a gradini (richieste: 25; orario: 5 min)
   const n = pts.length, t0 = pts[0].ts;
   let X, xTicks = [];
@@ -476,22 +678,22 @@ function drawChart() {
   segs.forEach((s, k) => {
     if (s.i1 <= s.i0) return;
     const xa = k === 0 ? L : (X(s.i0 - 1) + X(s.i0)) / 2, xb = s.i1 >= n ? L + PW : (X(s.i1 - 1) + X(s.i1)) / 2;
-    g.fillStyle = k % 2 ? "#1c222b" : "#14171c"; g.fillRect(xa, T, xb - xa, M.plotH);
+    g.fillStyle = k % 2 ? "#1c222b" : "#14171c"; g.fillRect(xa, TP, xb - xa, M.plotH);
     g.textAlign = "left";
     if (k > 0) {
-      g.strokeStyle = "#4a525d"; g.lineWidth = 1; g.beginPath(); g.moveTo(xa + .5, T - 14); g.lineTo(xa + .5, PB); g.stroke();
-      g.fillStyle = "#dfe3e8"; g.save(); g.translate(xa + .5, T - 14); g.rotate(Math.PI / 4); g.fillRect(-4.5, -4.5, 9, 9); g.restore();
+      g.strokeStyle = "#4a525d"; g.lineWidth = 1; g.beginPath(); g.moveTo(xa + .5, TP - 14); g.lineTo(xa + .5, PB); g.stroke();
+      g.fillStyle = "#dfe3e8"; g.save(); g.translate(xa + .5, TP - 14); g.rotate(Math.PI / 4); g.fillRect(-4.5, -4.5, 9, 9); g.restore();
     }
     if (xb - xa > 60) {
-      g.fillStyle = "#dfe3e8"; g.fillText(`seg ${s.seg}`, xa + (k ? 12 : 6), T - 14);
-      g.fillStyle = "#8b939e"; g.fillText(k ? `da #${s.i0 + 1}` : "", xa + 66, T - 14);
+      g.fillStyle = "#dfe3e8"; g.fillText(`seg ${s.seg}`, xa + (k ? 12 : 6), TP - 14);
+      g.fillStyle = "#8b939e"; g.fillText(k ? `#${s.i0 + 1}` : "", xa + 66, TP - 14);
     }
   });
   // griglia y
   g.strokeStyle = "#232830"; g.lineWidth = 1; g.fillStyle = "#5d6570"; g.textAlign = "right";
   const ys = vmax > 300000 ? 100000 : 50000;
   for (let v = 0; v <= vmax; v += ys) { const y = Math.round(Y(v)) + .5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + PW, y); g.stroke(); g.fillText(kAxis(v), L - 8, y); }
-  g.save(); g.translate(14, T + M.plotH / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillStyle = "#5d6570"; g.fillText("token", 0, 0); g.restore();
+  g.save(); g.translate(14, TP + M.plotH / 2); g.rotate(-Math.PI / 2); g.textAlign = "center"; g.fillStyle = "#5d6570"; g.fillText("token", 0, 0); g.restore();
   // contesto fisico: area piena
   const pv = p => p.phys ?? p.phys_est;
   g.beginPath(); let open = false, xFirst = 0, xLast = 0;
@@ -513,7 +715,7 @@ function drawChart() {
   // limite
   const yl = Math.round(Y(W)) + .5;
   g.strokeStyle = "#e5584f"; g.lineWidth = 1.6; g.setLineDash([7, 4]); g.beginPath(); g.moveTo(L, yl); g.lineTo(L + PW, yl); g.stroke(); g.setLineDash([]);
-  g.textAlign = "right"; const lt = "limite del modello 131.072"; const ltw = g.measureText(lt).width;
+  g.textAlign = "right"; const lt = `${T("limitLbl")} ${full(W)}`; const ltw = g.measureText(lt).width;
   g.fillStyle = "#14171c"; g.fillRect(L + PW - ltw - 12, yl - 18, ltw + 10, 15); g.fillStyle = "#ff7a70"; g.fillText(lt, L + PW - 7, yl - 10);
   // mask: freccia di calo + "−NK" (etichette che non si sovrappongono)
   let lastLab = -1e9;
@@ -550,19 +752,19 @@ function drawChart() {
   g.strokeStyle = "#232830"; g.fillStyle = "#5d6570"; g.textAlign = "right";
   for (let v = 0; v <= rtop; v += rs) { const y = Math.round(RB - M.readH * v / rtop) + .5; g.beginPath(); g.moveTo(L, y); g.lineTo(L + PW, y); g.stroke(); g.fillText(kAxis(v), L - 8, y); }
   g.strokeStyle = "#262b33"; g.beginPath(); g.moveTo(0, RT - 20.5); g.lineTo(w, RT - 20.5); g.stroke();
-  g.textAlign = "left"; g.fillStyle = "#8b939e"; g.fillText("token riletti per richiesta (il resto viene dalla cache)", L, RT - 9);
+  g.textAlign = "left"; g.fillStyle = "#8b939e"; g.fillText(T("readLbl"), L, RT - 9);
   const bw = Math.max(1, Math.min(8, (S.ax === "t" ? PW / Math.max(n, 1) : X(1) - X(0)) - 1));
   g.fillStyle = "rgba(95,195,214,.55)";
   pts.forEach((p, i) => { const v = p.read || 0; if (!v) return; const hh = M.readH * v / rtop; g.fillRect(X(i) - bw / 2, RB - hh, bw, hh); });
-  G = {pts, per, segs, X, Y, L, R, T, PB, RT, RB, PW, n, h};
+  G = {pts, per, segs, X, Y, L, R, T: TP, PB, RT, RB, PW, n, h};
   // riepilogo
   const tr = pts.reduce((a, p) => a + (p.read || 0), 0), tu = pts.reduce((a, p) => a + (p.reused || 0), 0);
-  setText($("rsum"), `${full(n)} richieste · riletti ${kfmt(tr)} · riusati ${kfmt(tu)} (${pct(tu, tu + tr)} dalla cache)`);
+  setText($("rsum"), `${full(n)} ${T("reqWord")} · ${T("reread")} ${kfmt(tr)} · ${T("reused")} ${kfmt(tu)} (${pct(tu, tu + tr)} ${T("cacheWord")})`);
   if (hoverI != null) drawHover(hoverI);
 }
 // sovrapposizione per il mouse: canvas separato, il grafico non si ridisegna
 let hoverI = null;
-const EVN = {mask: "mask", recall: "recall", recall_dropped: "recall scartato", freeze: "congelamento", notes: "note", seal: "sigillo", save: "salvataggio", switch: "cambio segmento", branch: "branch", new_conversation: "nuova conversazione", autosave: "autosalvataggio", autorestore: "ripristino automatico", autosave_prune: "pulizia salvataggi", strata_state_lost: "stato di Strata perso"};
+const EVN = {mask: "mask", recall: "recall", recall_dropped: "evnDropped", freeze: "evnFreeze", notes: "evnNotes", seal: "evnSeal", save: "evnSave", switch: "evnSwitch", branch: "branch", new_conversation: "evnNewConv", autosave: "evnAutosave", autorestore: "evnAutorestore", autosave_prune: "evnPrune", strata_state_lost: "evnLost"};
 function drawHover(i) {
   const [g, w, h] = sizeCanvas(ov); g.clearRect(0, 0, w, h);
   if (!G || i == null || i >= G.pts.length) { tip.style.display = "none"; return; }
@@ -574,26 +776,26 @@ function drawHover(i) {
   const evs = G.per[i]; const cnt = {};
   let maskTxt = [];
   for (const e of evs) { if (e.event === "mask") maskTxt.push("−" + kfmt(e.tokens_saved)); else cnt[e.event] = (cnt[e.event] || 0) + 1; }
-  const evParts = [...maskTxt.map(t => "mask " + t), ...Object.entries(cnt).map(([k, c]) => (c > 1 ? c + " × " : "") + (EVN[k] || k))];
+  const evParts = [...maskTxt.map(t => "mask " + t), ...Object.entries(cnt).map(([k, c]) => (c > 1 ? c + " × " : "") + (T(EVN[k]) || EVN[k] || k))];
   const ph = p.phys ?? p.phys_est;
   const row = (a, b) => `<div class="r"><span>${a}</span><span class="num">${b}</span></div>`;
-  tip.innerHTML = `<div class="h">Richiesta #${G.pts.indexOf(p) + 1} · ${hhmmss(p.ts)} · seg ${seg ? seg.seg : 0} · round ${p.round ?? 0}</div>` +
-    row("contesto fisico", `${full(ph)} (${pct(ph || 0, W)})`) +
-    row("storia virtuale", `${full(p.virtual)}${p.virtual_src === "stima" ? " stima" : ""}`) +
-    row("riusati dalla cache", full(p.reused)) +
-    row("riletti", `${full(p.read)} · ${secs(p.prompt_ms)}`) +
-    row("risposta", `${full(p.out)} tok · ${secs(p.ms)} · ${esc(p.finish || "")}`) +
-    `<div class="ev">${evParts.length ? "eventi prima: " + esc(evParts.join(" · ")) : '<span class="dim">nessun evento del proxy</span>'}</div>` +
+  tip.innerHTML = `<div class="h">${F("tipReq", G.pts.indexOf(p) + 1)} · ${hhmmss(p.ts)} · seg ${seg ? seg.seg : 0} · round ${p.round ?? 0}</div>` +
+    row(T("tipPhys"), `${full(ph)} (${pct(ph || 0, W)})`) +
+    row(T("histLbl"), `${full(p.virtual)}${p.virtual_src === "stima" ? " " + T("estWord") : ""}`) +
+    row(`${T("reused")} ${T("cacheWord")}`, full(p.reused)) +
+    row(T("reread"), `${full(p.read)} · ${secs(p.prompt_ms)}`) +
+    row(T("respLabel"), `${full(p.out)} tok · ${secs(p.ms)} · ${esc(p.finish || "")}`) +
+    `<div class="ev">${evParts.length ? T("tipEvents") + esc(evParts.join(" · ")) : '<span class="dim">' + T("tipNoEv") + "</span>"}</div>` +
     (seg && seg.i0 === i && seg.grp.length ? `<div class="ev">${esc(segText(seg))}</div>` : "");
   tip.style.display = "block";
   const tw = 300; tip.style.left = (x + 14 + tw > w ? x - tw - 14 : x + 14) + "px";
 }
 function segText(s) {
-  const out = [`inizio seg ${s.seg}:`];
+  const out = [F("segStart", s.seg)];
   for (const e of s.grp) {
-    if (e.event === "freeze") out.push(`congelato a ${kfmt(e.est_tokens)}`);
-    if (e.event === "notes") out.push(`note ${full(e.tokens)} tok in ${secs(e.ms)}`);
-    if (e.event === "save" && e.result) out.push(`salvato ${nf1.format(e.result.n_written / 2 ** 30)} GiB`);
+    if (e.event === "freeze") out.push(F("frozen", kfmt(e.est_tokens)));
+    if (e.event === "notes") out.push(T("notesLine").replace("{x}", full(e.tokens)).replace("{y}", secs(e.ms)));
+    if (e.event === "save" && e.result) out.push(F("savedLine", nf1.format(e.result.n_written / 2 ** 30)));
   }
   return out.join(" · ");
 }
@@ -624,21 +826,21 @@ function evDetail(e) {
   const f = (k, l) => e[k] != null ? `${l || k} ${typeof e[k] === "number" ? full(e[k]) : typeof e[k] === "object" ? JSON.stringify(e[k]) : e[k]}` : null;
   let p;
   switch (e.event) {
-    case "mask": p = [`−${kfmt(e.tokens_saved)}`, `${kfmt(e.est_before)} → ${kfmt(e.est_after)}`, f("count", "messaggi"), f("first_index", "da indice"), f("reread_est", "rilettura stimata")]; break;
+    case "mask": p = [`−${kfmt(e.tokens_saved)}`, `${kfmt(e.est_before)} → ${kfmt(e.est_after)}`, f("count", T("msgWord")), f("first_index", T("idxWord")), f("reread_est", T("rereadEst"))]; break;
     case "recall": { let q = e.args; try { q = JSON.parse(e.args).query ?? e.args; } catch (_) {} p = [`«${q}»`, f("tokens", "tok"), e.ms != null ? nf1.format(e.ms) + " ms" : null]; break; }
-    case "recall_dropped": p = [f("count", "scartati"), f("round")]; break;
-    case "freeze": p = [f("seg"), `stima ${kfmt(e.est_tokens)}`, f("cut_index", "taglio"), f("response", "riserva")]; break;
+    case "recall_dropped": p = [f("count", T("evDropped")), f("round")]; break;
+    case "freeze": p = [f("seg"), `${T("estWord")} ${kfmt(e.est_tokens)}`, f("cut_index", T("cutWord")), f("response", T("resWord"))]; break;
     case "notes": p = [f("seg"), f("tokens", "tok"), secs(e.ms), e.timings ? nf1.format(e.timings.predicted_per_second) + " tok/s" : null]; break;
-    case "seal": p = [secs(e.ms), f("cached", "in cache"), e.timings ? `riletti ${full(e.timings.prompt_n)}` : null]; break;
+    case "seal": p = [secs(e.ms), f("cached", T("evCache")), e.timings ? `${T("evRead")} ${full(e.timings.prompt_n)}` : null]; break;
     case "save": p = [f("file"), secs(e.ms), e.result ? `${nf1.format(e.result.n_written / 2 ** 30)} GiB` : null]; break;
-    case "switch": p = [f("seg"), f("cut_index", "taglio"), f("notes_msg_tokens", "note tok")]; break;
-    case "branch": p = [f("known", "noti"), f("messages", "messaggi")]; break;
-    case "new_conversation": p = [f("messages", "messaggi")]; break;
-    case "request": p = [`fisico ${kfmt(e.prompt_tokens)}`, `riletti ${full(e.prompt_read)}`, e.invalidated_suffix_tokens ? `invalidati ${full(e.invalidated_suffix_tokens)} (${e.invalidated_cause})` : null, `round ${e.round ?? 0}`, f("messages", "msg"), `out ${full(e.completion_tokens)}`, secs(e.ms), e.finish]; break;
-    case "autosave": p = [f("file"), `${kfmt(e.tokens)} tok`, e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null, secs(e.ms), e.idle_s != null ? `fermo da ${full(e.idle_s)} s` : null]; break;
-    case "autorestore": p = [f("file"), `${kfmt(e.tokens)} tok ripristinati`, `guadagno ${kfmt(e.gain_tokens)}`, secs(e.ms), e.reason === "strata_restart" ? "dopo riavvio/perdita di Strata" : "Strata aveva un'altra conversazione"]; break;
-    case "autosave_prune": p = [f("file"), e.reason === "superseded" ? "superato" : "oltre i limiti", e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null]; break;
-    case "strata_state_lost": p = [f("reason", "motivo"), e.tokens ? `${kfmt(e.tokens)} tok persi in Strata` : null]; break;
+    case "switch": p = [f("seg"), f("cut_index", T("cutWord")), f("notes_msg_tokens", T("evNoteTok"))]; break;
+    case "branch": p = [f("known", T("evKnown")), f("messages", T("msgWord"))]; break;
+    case "new_conversation": p = [f("messages", T("msgWord"))]; break;
+    case "request": p = [`${T("evPhys")} ${kfmt(e.prompt_tokens)}`, `${T("evRead")} ${full(e.prompt_read)}`, e.invalidated_suffix_tokens ? `${T("evInv")} ${full(e.invalidated_suffix_tokens)} (${e.invalidated_cause})` : null, `round ${e.round ?? 0}`, f("messages", "msg"), `out ${full(e.completion_tokens)}`, secs(e.ms), e.finish]; break;
+    case "autosave": p = [f("file"), `${kfmt(e.tokens)} tok`, e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null, secs(e.ms), e.idle_s != null ? F("idleSince", full(e.idle_s)) : null]; break;
+    case "autorestore": p = [f("file"), `${kfmt(e.tokens)} ${T("evRestored")}`, `${T("evGain")} ${kfmt(e.gain_tokens)}`, secs(e.ms), e.reason === "strata_restart" ? T("evRestart") : T("evOtherConv")]; break;
+    case "autosave_prune": p = [f("file"), e.reason === "superseded" ? T("evSuperseded") : T("evOverLimits"), e.bytes ? `${nf1.format(e.bytes / 2 ** 30)} GiB` : null]; break;
+    case "strata_state_lost": p = [f("reason", T("evReason")), e.tokens ? `${kfmt(e.tokens)} ${T("evLost")}` : null]; break;
     default: { const {ts, event, conv, ...rest} = e; p = [JSON.stringify(rest).slice(0, 400)]; }
   }
   return p.filter(Boolean).join(" · ");
@@ -676,7 +878,7 @@ const SG = /(\[strata-context:[^\]]*\])/g;
 function hl(s) { return esc(s).replace(PH, '<mark class="ph">$1</mark>').replace(SG, '<mark class="sg">$1</mark>'); }
 function msgText(m) {
   let out = "";
-  if (typeof m.reasoning_content === "string" && m.reasoning_content) out += "‹ragionamento› " + m.reasoning_content + "\n\n";
+  if (typeof m.reasoning_content === "string" && m.reasoning_content) out += T("reasonPrefix") + m.reasoning_content + "\n\n";
   const c = m.content;
   if (typeof c === "string") out += c; else if (Array.isArray(c)) out += c.map(p => p.type === "text" ? p.text : `[${p.type}]`).join("\n");
   for (const tc of m.tool_calls || []) { const fn = tc.function || {}; out += `\n→ ${fn.name}(${typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments)})`; }
@@ -690,25 +892,25 @@ async function copyText(s, btn) {
     const ta = document.createElement("textarea"); ta.value = s; ta.style.position = "fixed"; ta.style.opacity = "0";
     document.body.appendChild(ta); ta.select(); try { ok = document.execCommand("copy"); } catch (e2) {} ta.remove();
   }
-  if (btn) { const o = btn.textContent; btn.textContent = ok ? "copiato ✓" : "errore"; setCls(btn, "ok", ok);
+  if (btn) { const o = btn.textContent; btn.textContent = ok ? T("copyOk") : T("copyErr"); setCls(btn, "ok", ok);
     setTimeout(() => { btn.textContent = o; setCls(btn, "ok", false); }, 1400); }
 }
 function respText(lr) {
   const r = (lr || {}).response; if (!r) return "";
-  return (r.reasoning_content ? "‹ragionamento› " + r.reasoning_content + "\n\n" : "") + (r.content || "") +
+  return (r.reasoning_content ? T("reasonPrefix") + r.reasoning_content + "\n\n" : "") + (r.content || "") +
     (r.tool_calls || []).map(tc => `\n→ ${(tc.function || {}).name}(${(tc.function || {}).arguments})`).join("");
 }
 function stamp(ts) { const d = ts ? new Date(ts * 1000) : new Date(), p = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`; }
 function promptMarkdown(lr) {
   const msgs = lr.messages || [];
-  let md = `# Prompt fisico — conv ${lr.conv || "—"} · seg ${lr.seg ?? "—"} · round ${lr.round ?? 0}\n\n` +
-    `- ora: ${new Date((lr.ts || 0) * 1000).toLocaleString()}\n- messaggi: ${msgs.length}\n` +
-    `- token stimati: ${lr.est_tokens ?? "—"}${lr.prompt_tokens ? ` · reali: ${lr.prompt_tokens}` : ""}\n` +
-    (Array.isArray(lr.tools) ? `- strumenti: ${lr.tools.map(t => typeof t === "string" ? t : ((t.function || t).name)).join(", ")}\n` : "") + "\n";
+  let md = `${T("mdHeader")} conv ${lr.conv || "—"} · seg ${lr.seg ?? "—"} · round ${lr.round ?? 0}\n\n` +
+    `- ${T("mdTime")}: ${new Date((lr.ts || 0) * 1000).toLocaleString(loc)}\n- ${T("mdMsgs")}: ${msgs.length}\n` +
+    `- ${T("mdEst")}: ${lr.est_tokens ?? "—"}${lr.prompt_tokens ? ` · ${T("mdReal")}: ${lr.prompt_tokens}` : ""}\n` +
+    (Array.isArray(lr.tools) ? `- ${T("mdTools")}: ${lr.tools.map(t => typeof t === "string" ? t : ((t.function || t).name)).join(", ")}\n` : "") + "\n";
   msgs.forEach((m, j) => { md += `## #${j} ${m.role}${m.name ? " (" + m.name + ")" : ""}\n\n~~~~text\n${msgText(m)}\n~~~~\n\n`; });
   const r = respText(lr);
-  if (r) md += `## Risposta${lr.response && lr.response.done === false ? " (in corso)" : ""}\n\n~~~~text\n${r}\n~~~~\n`;
+  if (r) md += `## ${T("respLabel")}${lr.response && lr.response.done === false ? " (" + T("respRun") + ")" : ""}\n\n~~~~text\n${r}\n~~~~\n`;
   return md;
 }
 function download(name, data, type) {
@@ -716,14 +918,14 @@ function download(name, data, type) {
   a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
 }
 function onClick(id, handler) { const el = $(id); if (el) el.addEventListener("click", handler); }
-function needLive(btn) { if (S.lastLive) return true; if (btn) { const o = btn.textContent; btn.textContent = "nessun prompt"; setTimeout(() => btn.textContent = o, 1400); } return false; }
+function needLive(btn) { if (S.lastLive) return true; if (btn) { const o = btn.textContent; btn.textContent = T("noPrompt"); setTimeout(() => btn.textContent = o, 1400); } return false; }
 onClick("copyResp", ev => copyText($("resp").textContent || "", ev.target));
 onClick("copyAll", ev => { if (needLive(ev.target)) copyText(promptMarkdown(S.lastLive), ev.target); });
 onClick("expMd", ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.md`, promptMarkdown(S.lastLive), "text/markdown;charset=utf-8"); });
 onClick("expJson", ev => { if (needLive(ev.target)) download(`prompt-${S.lastLive.conv || "conv"}-${stamp(S.lastLive.ts)}.json`, JSON.stringify(S.lastLive, null, 2), "application/json"); });
 function exportHistory(fmt, btn) {
   const conv = S.conv || (S.lastLive || {}).conv;
-  if (!conv) { const o = btn.textContent; btn.textContent = "nessuna conversazione"; setTimeout(() => btn.textContent = o, 1400); return; }
+  if (!conv) { const o = btn.textContent; btn.textContent = T("noConv"); setTimeout(() => btn.textContent = o, 1400); return; }
   const a = document.createElement("a"); a.href = `/api/export?conv=${encodeURIComponent(conv)}&fmt=${fmt}`;
   document.body.appendChild(a); a.click(); a.remove();
 }
@@ -754,18 +956,18 @@ function renderPrompt(lr) {
   while (box.children.length > msgs.length) box.lastChild.remove();
   if (atBottom) box.scrollTop = box.scrollHeight;
   setText($("lrinfo"), `${hhmmss(lr.ts)} · conv ${lr.conv || "—"} · seg ${lr.seg ?? "—"} · round ${lr.round ?? 0}`);
-  setText($("phcount"), `${full(msgs.length)} msg · ${full(nph)} segnaposto · stima ${kfmt(lr.est_tokens)}${lr.prompt_tokens ? " · reali " + kfmt(lr.prompt_tokens) : ""}`);
+  setText($("phcount"), `${full(msgs.length)} ${T("msgWord")} · ${full(nph)} ${T("evPlaceholders")} · ${T("estWord")} ${kfmt(lr.est_tokens)}${lr.prompt_tokens ? " · " + T("evReal") + " " + kfmt(lr.prompt_tokens) : ""}`);
 }
 function renderResponse(d) {
   const lr = S.lastLive, st = d.status || {};
   let txt = null, info = "";
   if (lr && lr.response && (lr.response.content || lr.response.reasoning_content || lr.response.tool_calls)) {
     const r = lr.response;
-    txt = (r.reasoning_content ? "‹ragionamento› " + r.reasoning_content + "\n\n" : "") + (r.content || "") +
+    txt = (r.reasoning_content ? T("reasonPrefix") + r.reasoning_content + "\n\n" : "") + (r.content || "") +
           (r.tool_calls || []).map(tc => `\n→ ${(tc.function || {}).name}(${(tc.function || {}).arguments})`).join("");
-    info = `proxy · ${r.done ? "completa" : "in corso"}${r.finish_reason ? " · " + r.finish_reason : ""}${r.completion_tokens != null ? " · " + r.completion_tokens + " tok" : ""}`;
+    info = `proxy · ${r.done ? T("respDone") : T("respRun")}${r.finish_reason ? " · " + r.finish_reason : ""}${r.completion_tokens != null ? " · " + r.completion_tokens + " tok" : ""}`;
   }
-  if (st.busy && st.tail && (!lr || !lr.response || lr.response.done)) { txt = "… " + st.tail; info = `coda live da Strata · ${phaseName(st.phase)}`; }
+  if (st.busy && st.tail && (!lr || !lr.response || lr.response.done)) { txt = "… " + st.tail; info = `${T("liveQueue")} · ${phaseName(st.phase)}`; }
   if (txt == null) return;
   const el = $("resp"), atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
   setHTML(el, hl(txt)); setText($("respinfo"), info);
@@ -790,27 +992,28 @@ function renderMarks() {
   if (d.error) { setHTML(box, `<div class="empty">${esc(typeof d.error === "string" ? d.error : d.error.message)}</div>`); return; }
   const pinned = new Map(), dropped = new Set((d.drops || []).map(x => x.index));
   for (const p of d.pins || []) if (p.active) { if (!pinned.has(p.index)) pinned.set(p.index, []); pinned.get(p.index).push(p); }
-  setText($("mkinfo"), `${(d.pins || []).filter(p => p.active).length} punti fermi · ${kfmt(d.pins_tokens)} / ${kfmt(d.pins_max_tokens)} token${d.over_limit ? " · OLTRE IL TETTO" : ""} · ${dropped.size} usa e getta`);
+  setText($("mkinfo"), `${(d.pins || []).filter(p => p.active).length} ${T("pins")} · ${kfmt(d.pins_tokens)} / ${kfmt(d.pins_max_tokens)} ${T("tokWord")}${d.over_limit ? T("overLimit") : ""} · ${dropped.size} ${T("dropWord")}`);
   let h = "";
   for (const u of (d.users || []).slice().reverse()) {
     const ps = pinned.get(u.index) || [];
     h += `<div class="msg"><div class="hd"><span class="num dim" style="width:44px">#${u.index}</span>` +
-         `<button data-a="pin" data-i="${u.index}" title="fissa il messaggio come punto fermo">📌</button>` +
-         `<button data-a="${dropped.has(u.index) ? "undrop" : "drop"}" data-i="${u.index}" title="scambio usa e getta">${dropped.has(u.index) ? "↩︎🗑" : "🗑"}</button>` +
+         `<button data-a="pin" data-i="${u.index}" title="${esc(T("pinTitle"))}">📌</button>` +
+         `<button data-a="${dropped.has(u.index) ? "undrop" : "drop"}" data-i="${u.index}" title="${esc(T("dropTitle"))}">${dropped.has(u.index) ? "↩︎🗑" : "🗑"}</button>` +
          `<span class="pv">${esc(u.text.replace(/\s+/g, " ").slice(0, 160))}</span></div>` +
-         ps.map(p => `<div class="mu" style="padding-left:50px">📌 ${esc(p.text.slice(0, 200))} <button data-a="unpin" data-id="${p.id}">togli</button> <button data-a="update_pin" data-id="${p.id}">modifica</button></div>`).join("") +
+         ps.map(p => `<div class="mu" style="padding-left:50px">📌 ${esc(p.text.slice(0, 200))} <button data-a="unpin" data-id="${p.id}">${T("unpinBtn")}</button> <button data-a="update_pin" data-id="${p.id}">${T("editBtn")}</button></div>`).join("") +
          `</div>`;
   }
-  setHTML(box, h || `<div class="empty">nessun messaggio utente archiviato</div>`);
+  setHTML(box, h || `<div class="empty">${T("noUsers")}</div>`);
 }
 $("marks").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b) return;
   const a = b.dataset.a;
-  if (a === "update_pin") { const t = prompt("nuovo testo del punto fermo"); if (t) markAction({action: a, id: +b.dataset.id, text: t}); return; }
+  if (a === "update_pin") { const t = prompt(T("pinPrompt")); if (t) markAction({action: a, id: +b.dataset.id, text: t}); return; }
   if (a === "unpin") return markAction({action: a, id: +b.dataset.id});
   return markAction({action: a, index: +b.dataset.i});
 });
 setInterval(() => loadMarks(false), 2000);
+setLang(lang);
 tick();
 </script>
 </body>
