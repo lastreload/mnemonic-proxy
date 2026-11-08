@@ -274,10 +274,20 @@ class ExitCodeDocTests(unittest.TestCase):
             self.assertIn("%s (exit %d)" % (word, code), out.getvalue())
 
     def test_the_readme_documents_all_three(self):
-        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
-            txt = f.read()
+        """The three outcomes must be documented where `check` is introduced.
+
+        0.3.25: that is `docs/install.md` now, not the landing page; the test reads every
+        documentation page so it keeps working wherever the Install section lives.
+        """
+        import glob
+        pages = [os.path.join(ROOT, "README.md")] + sorted(glob.glob(os.path.join(ROOT, "docs", "*.md")))
+        texts = []
+        for path in pages:
+            with open(path, encoding="utf-8") as f:
+                texts.append(f.read())
+        txt = "\n".join(texts)
         for word in ("READY` (exit 0)", "READY with warnings` (exit 2", "NOT READY` (exit 1"):
-            self.assertIn(word, txt, "the README does not document %r" % word)
+            self.assertIn(word, txt, "the documentation does not document %r" % word)
 
 
 if __name__ == "__main__":

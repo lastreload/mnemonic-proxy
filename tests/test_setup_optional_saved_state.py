@@ -251,19 +251,25 @@ class TestStartupSaysSavedStateIsOptional(StrataBase):
 
 
 class TestReadmeMinimalStrataPath(unittest.TestCase):
-    """The README must offer the shortest possible Strata setup, with no saved state."""
+    """The documentation must offer the shortest possible Strata setup, with no saved state.
 
+    0.3.25: the Install section moved out of the README into `docs/install.md`, text and
+    heading unchanged. Only the file this suite reads changed.
+    """
+
+    PAGE = os.path.join("docs", "install.md")
     HEADING = "### Strata in two commands"
     OPTIONAL = "**Saved state (optional"
 
     @classmethod
     def setUpClass(cls):
-        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, cls.PAGE), encoding="utf-8") as f:
             cls.text = f.read()
 
     def section(self):
         """The minimal-path section, from its heading to the next heading of the same level."""
-        self.assertIn(self.HEADING, self.text, "the README has no minimal Strata section")
+        self.assertIn(self.HEADING, self.text,
+                      "%s has no minimal Strata section" % self.PAGE)
         start = self.text.index(self.HEADING)
         rest = self.text[start + len(self.HEADING):]
         end = rest.find("\n**Your engine.**")
@@ -292,7 +298,7 @@ class TestReadmeMinimalStrataPath(unittest.TestCase):
         self.assertIn("fast resume", later)
 
     def test_the_minimal_command_line_really_starts_the_proxy(self):
-        """The documented line, taken from the README, run against the Strata fake engine."""
+        """The documented line, taken from the page itself, run against the Strata fake engine."""
         import importlib.util
         spec = importlib.util.spec_from_file_location(
             "readme_blocks_optional", os.path.join(ROOT, "tools", "readme_blocks.py"))
@@ -300,7 +306,7 @@ class TestReadmeMinimalStrataPath(unittest.TestCase):
         sys.modules["readme_blocks_optional"] = blocks
         spec.loader.exec_module(blocks)
         start = self.text.index(self.HEADING)
-        block = next(b for b in blocks.load(os.path.join(ROOT, "README.md"))
+        block = next(b for b in blocks.load(os.path.join(ROOT, self.PAGE))
                      if b.lang == "sh" and b.label == "ci"
                      and "mnemonic-proxy --upstream" in b.text
                      and self.text.index(b.text) > start)

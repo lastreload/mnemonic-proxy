@@ -205,7 +205,7 @@ footer b{color:var(--cy)}
     <tr><td>pi 0.87.1</td><td class="y">3 / 3, all via <code>recall</code></td><td class="y">231K virtual, 6 segment switches: right</td></tr>
     <tr><td>omp 18.10.1 (oh-my-pi)</td><td class="y">4 / 4, all with <code>recall</code> ¹</td><td class="y">82K virtual, 2 segment switches: right</td></tr>
   </table>
-  <p class="cap">¹ With omp the model repeated some of the values in its own one-line answers, so in two episodes recall was strictly needed only for part of them. Across 18 real sessions the need is rare: 5 spontaneous recalls against 108 after a question about the past; when a file can be re-read, the model re-reads it. One model, one run of each long session, scaled-down thresholds (32K window) for the long ones. Details in the <a href="https://github.com/lastreload/mnemonic-proxy#does-the-model-recall-on-its-own">README</a>.</p>
+  <p class="cap">¹ With omp the model repeated some of the values in its own one-line answers, so in two episodes recall was strictly needed only for part of them. Across 18 real sessions the need is rare: 5 spontaneous recalls against 108 after a question about the past; when a file can be re-read, the model re-reads it. One model, one run of each long session, scaled-down thresholds (32K window) for the long ones. Details in the <a href="https://github.com/lastreload/mnemonic-proxy/blob/main/docs/benchmarks.md#does-the-model-recall-on-its-own">benchmarks</a>.</p>
 </section>
 
 <section id="users">
@@ -233,7 +233,7 @@ footer b{color:var(--cy)}
         <tr><td>tokens read by the engine</td><td class="y">167K</td><td>267K</td></tr>
         <tr><td>DeepSeek V4 Flash Q2 (official ds4)</td><td class="y">16 / 16, 0 re-reads</td><td>not run</td></tr>
       </table>
-      <p class="cap">A 29-step, 4-hour run gave 29/29 vs 10/29 and 1 vs 38 re-reads, but it is not a clean quality result: with the client's 4,096 max output tokens Qwen3.8's reasoning was cut before acting and unanswered steps piled up. <b>Give reasoning models room</b> (8192+ output tokens). Details in the <a href="https://github.com/lastreload/mnemonic-proxy#long-sessions-on-ds4-proxy-vs-pis-own-compaction">README</a>.</p>
+      <p class="cap">A 29-step, 4-hour run gave 29/29 vs 10/29 and 1 vs 38 re-reads, but it is not a clean quality result: with the client's 4,096 max output tokens Qwen3.8's reasoning was cut before acting and unanswered steps piled up. <b>Give reasoning models room</b> (8192+ output tokens). Details in the <a href="https://github.com/lastreload/mnemonic-proxy/blob/main/docs/engines.md#long-sessions-on-ds4-proxy-vs-pis-own-compaction">engines</a>.</p>
     </div>
   </div>
 </section>
@@ -253,7 +253,7 @@ footer b{color:var(--cy)}
 <span class="p">$</span> ANTHROPIC_BASE_URL=http://127.0.0.1:8096 claude          <span class="c"># Anthropic Messages</span>
 <span class="p">$</span> codex -c model_providers.local.base_url=http://127.0.0.1:8096/v1 \
         -c model_providers.local.wire_api=responses        <span class="c"># Responses</span></pre>
-  <p class="sub" style="margin-top:18px">Every engine (Strata, llama-server, llama-server in router mode, ds4-server, any OpenAI-compatible server), every agent and every OS, with the config file to copy: <a href="https://github.com/lastreload/mnemonic-proxy#install">Install</a> in the README (agents: <a href="https://github.com/lastreload/mnemonic-proxy#connect-your-agent">Connect your agent</a>). <b>llama-server router mode</b> (several models, loaded on demand; since 0.3.7): the window is read from each model's own context before the prompt is built, and saved state is kept per model.</p>
+  <p class="sub" style="margin-top:18px">Every engine (Strata, llama-server, llama-server in router mode, ds4-server, any OpenAI-compatible server), every agent and every OS, with the config file to copy: <a href="https://github.com/lastreload/mnemonic-proxy/blob/main/docs/install.md#install">Install</a> in the documentation (agents: <a href="https://github.com/lastreload/mnemonic-proxy/blob/main/docs/agents.md#connect-your-agent">Connect your agent</a>). <b>llama-server router mode</b> (several models, loaded on demand; since 0.3.7): the window is read from each model's own context before the prompt is built, and saved state is kept per model.</p>
   <p class="sub" style="margin-top:18px">The recommended README and ds4 example configs keep <code>auto_recall: false</code>: retrieval is requested by the model. The 100-question AgentLongBench confirmation run logged 379 model-requested <code>recall</code> calls and zero <code>auto_recall</code> events. Automatic hints are opt-in: <code>auto_recall_hint: true</code> only selects hint mode and also requires <code>auto_recall: true</code>; it does not enable retrieval by itself.</p>
   <table style="margin-top:26px">
     <tr><th>client \ engine</th><th>Strata</th><th>llama-server</th><th>ds4-server</th><th>any OpenAI-compatible</th></tr>

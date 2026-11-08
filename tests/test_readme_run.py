@@ -1,13 +1,16 @@
 """Level 2 of the README tests: the `ci` blocks are really executed.
 
-Every command line comes from the README itself (the blocks labeled
-`<!-- readme-test: ci -->`), not from a copy kept here. Only the parts that cannot be
-hard-coded in a document are substituted at run time:
+Every command line comes from the documentation itself (the blocks labeled
+`<!-- readme-test: ci -->` in `README.md` and in `docs/*.md`), not from a copy kept here.
+Since 0.3.25 the landing page is short and most of the executable examples live in
+`docs/install.md` and `docs/agents.md`; the harness reads the whole set through
+`tools/readme_blocks.doc_files()`, so each block is executed where it now lives.
+Only the parts that cannot be hard-coded in a document are substituted at run time:
 
   --upstream  -> the fake engine started by the test (`ctxproxy.fake_engine`)
   --port      -> a free port
   --data      -> a temporary folder
-  --config    -> a file written from the README's own recommended configuration block
+  --config    -> a file written from the documentation's own recommended configuration block
   --db        -> the archive the demo leaves behind with `--keep`
 
 What is asserted, per the card:
@@ -109,20 +112,24 @@ def readme_text():
 
 
 def ci_commands():
-    """argv lists of our own programs, taken from the `ci` blocks of the README."""
+    """argv lists of our own programs, taken from the `ci` blocks of the documentation.
+
+    Returned as (page, line, argv): after the split the same kind of block can come from
+    `README.md` or from a page in `docs/`, and a failure must say which.
+    """
     out = []
-    for b in blocks_mod.load(README):
+    for b in blocks_mod.load_all(REPO):
         if b.label != "ci" or b.lang in ("json", "yaml", "toml"):
             continue
         for argv in cli.commands(b.text):
             if cli.program(argv) is not None:
-                out.append((b.line, argv))
+                out.append((b.path, b.line, argv))
     return out
 
 
 def pick(kind, predicate=None):
-    """One README command line of a given kind (server / check / demo / forget / mcp)."""
-    for line, argv in ci_commands():
+    """One documented command line of a given kind (server / check / demo / forget / mcp)."""
+    for page, line, argv in ci_commands():
         prog = cli.program(argv)
         rest = argv[1:]
         if prog == "server" and rest and rest[0] == "-m":
@@ -133,8 +140,8 @@ def pick(kind, predicate=None):
             continue
         if predicate and not predicate(argv):
             continue
-        return line, argv
-    raise AssertionError("no README `ci` block runs `%s`" % kind)
+        return "%s:%d" % (page, line), argv
+    raise AssertionError("no `ci` block of the documentation runs `%s`" % kind)
 
 
 def substitute(argv, *, upstream=None, port=None, data=None, config=None, db=None, extra=()):
@@ -156,11 +163,11 @@ def substitute(argv, *, upstream=None, port=None, data=None, config=None, db=Non
 
 
 def readme_config():
-    """The proxy configuration the README recommends, as a dict."""
-    for b in blocks_mod.load(README):
+    """The proxy configuration the documentation recommends, as a dict."""
+    for b in blocks_mod.load_all(REPO):
         if b.lang == "json" and b.config_kind == "proxy":
             return json.loads(b.text)
-    raise AssertionError("the README has no `config: proxy` JSON block")
+    raise AssertionError("the documentation has no `config: proxy` JSON block")
 
 
 def http_get(url, timeout=5):
@@ -242,18 +249,31 @@ class ReadmeRunTests(unittest.TestCase):
     # ---------------------------------------------------------------- demo
 
     def test_every_demo_command_prints_PASS(self):
-        """`mnemonic-proxy demo` of the first screen, the Install block and T0."""
+        """`mnemonic-proxy demo` wherever the documentation runs it: the Install block and T0.
+
+        0.3.25: this used to require three blocks — the README's first screen, Install and T0.
+        The first screen is now the short landing page, which names the demo in prose
+        (`uvx mnemonic-proxy demo`) instead of carrying a fourth copy of the same command, so
+        two executed blocks is the real number. The landing page's mention is asserted below,
+        in `test_the_landing_page_still_offers_the_demo`, so the entry point is not lost.
+        """
         seen = 0
-        for line, argv in ci_commands():
+        for page, line, argv in ci_commands():
             if cli.program(argv) != "server" or "demo" not in argv:
                 continue
             seen += 1
-            with self.subTest(readme_line=line):
-                d = self.workdir("demo-%d" % line)
+            with self.subTest(page=page, line=line):
+                d = self.workdir("demo-%s-%d" % (os.path.basename(page), line))
                 p = run(self.proxy + argv[argv.index("demo"):], d)
                 self.assertEqual(0, p.returncode, p.stdout + p.stderr)
                 self.assertIn("PASS", p.stdout + p.stderr)
-        self.assertGreaterEqual(seen, 3, "the README should run the demo on its first screen, in Install and in T0")
+        self.assertGreaterEqual(seen, 2,
+                                "the documentation should run the demo in Install and in T0")
+
+    def test_the_landing_page_still_offers_the_demo(self):
+        """The one-minute entry point must stay on the first page, in prose or in a block."""
+        text = readme_text()
+        self.assertIn("mnemonic-proxy demo", text)
 
     def test_demo_keep_leaves_a_usable_archive(self):
         d = self.workdir("demo-keep")
@@ -272,13 +292,13 @@ class ReadmeRunTests(unittest.TestCase):
         the automatic configuration got switched off for the first Windows user.
         """
         seen = 0
-        for line, argv in ci_commands():
+        for page, line, argv in ci_commands():
             rest = argv[1:]
             if cli.program(argv) != "server" or not rest or rest[0] != "init-config":
                 continue
             seen += 1
-            with self.subTest(readme_line=line):
-                d = self.workdir("init-config-%d" % line)
+            with self.subTest(page=page, line=line):
+                d = self.workdir("init-config-%s-%d" % (os.path.basename(page), line))
                 p = run(self.proxy + rest, d)
                 self.assertEqual(0, p.returncode, p.stdout + p.stderr)
                 written = [os.path.join(dirpath, n) for dirpath, _, names in os.walk(d) for n in names]
@@ -308,14 +328,15 @@ class ReadmeRunTests(unittest.TestCase):
                         self.assertTrue(os.access(launchers[0], os.X_OK), launchers[0])
                         sh = run(["/bin/sh", "-n", launchers[0]], d)
                         self.assertEqual(0, sh.returncode, sh.stdout + sh.stderr)
-        self.assertGreaterEqual(seen, 2, "the README should run init-config in Install and for saved state")
+        self.assertGreaterEqual(seen, 2,
+                                "the documentation should run init-config in Install and for saved state")
 
     # ---------------------------------------------------------------- check
 
     def test_check_is_READY_against_the_fake_engine(self):
-        line, argv = pick("check")
+        where, argv = pick("check")
         for flavor in self.flavors:
-            with self.subTest(flavor=flavor, readme_line=line):
+            with self.subTest(flavor=flavor, documented_at=where):
                 d = self.workdir("check-%s" % flavor)
                 eng = Engine(flavor, d)
                 self.addCleanup(eng.stop)
@@ -330,7 +351,7 @@ class ReadmeRunTests(unittest.TestCase):
                 self.assertIn(p.returncode, (0, 2), "%d\n%s" % (p.returncode, text))
 
     def test_check_says_NOT_READY_and_how_to_fix_it_without_an_engine(self):
-        line, argv = pick("check")
+        where, argv = pick("check")
         d = self.workdir("check-no-engine")
         cmd = substitute(argv, upstream="http://127.0.0.1:%d" % free_port(),
                          port=str(free_port()), data=os.path.join(d, "data"),
@@ -357,9 +378,9 @@ class ReadmeRunTests(unittest.TestCase):
     # ---------------------------------------------------------------- the proxy itself
 
     def test_the_proxy_answers_a_chat_completions_request(self):
-        line, argv = pick("server")
+        where, argv = pick("server")
         for flavor in self.flavors:
-            with self.subTest(flavor=flavor, readme_line=line):
+            with self.subTest(flavor=flavor, documented_at=where):
                 d = self.workdir("serve-%s" % flavor)
                 eng = Engine(flavor, d)
                 self.addCleanup(eng.stop)
@@ -399,7 +420,7 @@ class ReadmeRunTests(unittest.TestCase):
     # ---------------------------------------------------------------- forget, mcp
 
     def test_forget_list_runs_on_the_archive_the_demo_left(self):
-        line, argv = pick("forget", lambda a: "--list" in a)
+        where, argv = pick("forget", lambda a: "--list" in a)
         d = self.workdir("forget")
         data = os.path.join(d, "data")
         self.assertEqual(0, run(self.proxy + ["demo", "--keep", data], d).returncode)
@@ -408,7 +429,7 @@ class ReadmeRunTests(unittest.TestCase):
         self.assertIn("slot_dir", p.stdout)
 
     def test_mcp_server_answers_initialize_and_lists_its_tools(self):
-        line, argv = pick("mcp", lambda a: "--http" not in a)
+        where, argv = pick("mcp", lambda a: "--http" not in a)
         d = self.workdir("mcp")
         data = os.path.join(d, "data")
         self.assertEqual(0, run(self.proxy + ["demo", "--keep", data], d).returncode)
@@ -430,8 +451,14 @@ class ReadmeRunTests(unittest.TestCase):
 
     # ---------------------------------------------------------------- the harness itself
 
-    def test_the_readme_has_ci_blocks_to_run(self):
+    def test_the_documentation_has_ci_blocks_to_run(self):
         self.assertGreaterEqual(len(ci_commands()), 6)
+
+    def test_the_ci_blocks_come_from_more_than_one_page(self):
+        """After the split the harness must really read docs/, not just README.md."""
+        pages = {page for page, _line, _argv in ci_commands()}
+        self.assertIn("README.md", pages)
+        self.assertTrue([p for p in pages if p.startswith("docs/")], pages)
 
     def test_substitution_only_touches_values(self):
         argv = ["mnemonic-proxy", "check", "--upstream", "http://127.0.0.1:8095", "--data", "./data"]

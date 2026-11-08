@@ -10,6 +10,7 @@ Use a new profile: do not experiment in your normal assistant's profile.
 These commands apply only to `mnemonic-test`; they do not change the sticky
 active profile or copy any existing credentials, memories, or skills.
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes profile create mnemonic-test --no-alias --no-skills
 hermes -p mnemonic-test config set model.provider custom
@@ -31,6 +32,7 @@ Start the proxy as in the README, with a separate data directory if another
 proxy is already running. For exact counts, install the optional tokenizer
 support and pass the model's actual tokenizer file:
 
+<!-- readme-test: real-engine -->
 ```sh
 pip install 'mnemonic-proxy[exact]'
 mnemonic-proxy --upstream http://127.0.0.1:8095 \
@@ -45,6 +47,7 @@ window must never be larger than the engine's actual context capacity.
 
 Then run Hermes:
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes -p mnemonic-test chat
 ```
@@ -126,6 +129,7 @@ through an SSH tunnel. This is not a claim about every Hermes or model version.
 
 For the reduced-window test the proxy config was:
 
+<!-- readme-test: illustrative; config: partial -->
 ```json
 {
   "window": 32768,
@@ -184,6 +188,7 @@ your normal profile.
 
 Stop your test proxy and SSH tunnel, and remove only the disposable profile:
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes profile delete mnemonic-test
 ```
