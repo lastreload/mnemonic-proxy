@@ -1,0 +1,11 @@
+.git
+.gitignore
+data
+bench
+docs
+tests
+tools
+__pycache__
+*.pyc
+.venv
+# examples/ stays: the wheel maps it to ctxproxy.examples (pyproject [tool.setuptools.package-dir])

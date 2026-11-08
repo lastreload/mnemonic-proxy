@@ -617,6 +617,34 @@ output safety net, but cannot make an already oversized prompt fit. `window_marg
 Disable the agent's own auto-compaction in every client ([Connect your agent](agents.md#connect-your-agent)), otherwise two context managers fight over the same
 history.
 
+### In one container (Docker)
+
+`Dockerfile` runs the proxy and the dashboard together in one image; the archive lives in `/data`.
+
+<!-- readme-test: illustrative -->
+```sh
+docker build -t mnemonic-proxy .
+docker run --network=host -v ./data:/data -e UPSTREAM=http://127.0.0.1:8095 -e API_KEY=<engine key> mnemonic-proxy
+```
+
+`--network=host` (Linux) is what makes the dashboard reachable from a browser: it keeps its loopback-only bind, so
+`-p` cannot forward it. With `-p 127.0.0.1:8096:8096` instead you get the proxy on the host and the dashboard only
+inside the container. The engine is expected outside the container (use `host.docker.internal` on macOS/Windows).
+
+| env | default | |
+|---|---|---|
+| `UPSTREAM` | `http://127.0.0.1:8095` | the engine; also what the dashboard reads |
+| `API_KEY` | empty | key sent upstream, written to `/data/.api_key` (`0600`) and forwarded to the dashboard |
+| `CLIENT_KEY` | empty | key clients must send, written to `/data/.client_key` (`0600`) and read by the proxy with `--client-key-file`, which activates the check; defaults to `API_KEY` |
+| `PROXY_HOST` / `PROXY_PORT` | `0.0.0.0` / `8096` | published, authenticated |
+| `DASH_HOST` / `DASH_PORT` | `127.0.0.1` / `8097` | loopback only, never published |
+| `DATA` | `/data` | archive, journal, and the key files (`0600`) the two processes read |
+| `PROXY_ARGS` | empty | extra proxy flags, split on spaces (`--config …`, `--tokenizer …`, `--mode off`) |
+
+Both keys are written to files in `DATA` rather than passed as arguments, so they never appear in the process list,
+and the key file lands next to the archive: mount `DATA` as a volume you own (`-v ./data:/data`) and keep it private,
+or pass `-e DATA=/tmp/scratch` if you want nothing persisted.
+
 ## Platforms
 
 - **Linux**: the reference. Every tested combination below ran on Linux.
