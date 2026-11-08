@@ -126,8 +126,9 @@ jobs:
           grep -q PASS uvx.txt
 
   # README level 2: the blocks labeled `<!-- readme-test: ci -->` are executed for real,
-  # from the built wheel in a clean venv, with no source tree on the import path. Levels 1 (static)
-  # and 3 (exhaustiveness) are part of the `test` job's unit-test suite.
+  # from README.md and from docs/*.md (since 0.3.25 most of them live in docs/install.md),
+  # out of the built wheel in a clean venv, with no source tree on the import path. Levels 1
+  # (static) and 3 (exhaustiveness) are part of the `test` job's unit-test suite.
   readme-run:
     needs: package
     runs-on: ubuntu-24.04
@@ -153,8 +154,9 @@ jobs:
       - name: run the README's `ci` blocks against the fake engine
         run: |
           stage="$RUNNER_TEMP/stage"
-          mkdir -p "$stage/tests" "$stage/tools"
+          mkdir -p "$stage/tests" "$stage/tools" "$stage/docs"
           cp README.md "$stage/"
+          cp docs/*.md "$stage/docs/"
           cp tools/readme_blocks.py tools/readme_cli.py "$stage/tools/"
           cp tests/__init__.py tests/test_readme_run.py "$stage/tests/"
           cd "$stage"

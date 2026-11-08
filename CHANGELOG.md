@@ -2,6 +2,24 @@
 
 ## 0.3.25 — unreleased
 
+- **Docs**: the README is now a 133-line landing page and everything else moved, text unchanged, into
+  `docs/`: [install](docs/install.md), [agents](docs/agents.md), [engines](docs/engines.md),
+  [configuration](docs/configuration.md), [how it works](docs/how-it-works.md),
+  [benchmarks](docs/benchmarks.md), [limits](docs/limits.md), [security](docs/security.md),
+  [troubleshooting](docs/troubleshooting.md), [tools](docs/tools.md), [development](docs/development.md) and
+  [credits](docs/credits.md). The old 2,020-line page had everything a reader could want and nothing they
+  could find: a first-time reader met the install lines, the AgentLongBench tables and the 60-field
+  configuration reference on the same scroll. Only link targets changed in the moved text; headings keep
+  their anchors, so a `#…` link that used to point into the README now points into the page that holds it.
+  `tools/docs_coverage_check.py` checks line by line that nothing was lost (lines 1-66, the old opening,
+  are the part the new page replaces on purpose).
+- **Docs tests**: the three levels of the README tests now cover `README.md` **and** `docs/*.md`
+  (`docs/dev-notes/` excluded), through the single definition in `tools/readme_blocks.doc_files()`.
+  Internal links are resolved across pages, not only inside one file (`tools/readme_blocks.py --links`),
+  every page must be reachable from the landing page, and the exhaustiveness level looks for a subcommand,
+  option or `Config` field in any page rather than in the README alone. `docs/hermes-agent.md` and
+  `docs/manual-forget.md` entered the tested set and their blocks carry `readme-test` labels now.
+  The `readme-run` CI job and `tools/readme_run.sh` stage `docs/*.md` next to `README.md`.
 - **Docs**: the README tells readers who already run an engine and an agent where to go, right after the demo:
   the per-agent table (address to use, setting that turns the agent's own auto-compaction off) now sits under its
   own heading, [Connect your agent](README.md#connect-your-agent), right after the install lines instead of after

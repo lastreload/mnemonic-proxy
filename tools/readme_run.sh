@@ -6,8 +6,9 @@
 #   tools/readme_run.sh --source     # same tests against the working tree (fast, no build)
 #
 # Level 1 (static) and level 3 (exhaustiveness) run from the repository, because they read
-# the README and the code. Level 2 runs from a staging folder that contains only the README,
-# tools/ and the two README test files, so `import ctxproxy` can only resolve to the wheel.
+# the documentation and the code. Level 2 runs from a staging folder that contains only the
+# documentation (README.md and docs/*.md), tools/ and the two README test files, so
+# `import ctxproxy` can only resolve to the wheel.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -39,8 +40,9 @@ echo "   $wheel"
 "$work/venv/bin/pip" install --quiet "$wheel"
 
 stage="$work/stage"
-mkdir -p "$stage/tests" "$stage/tools"
+mkdir -p "$stage/tests" "$stage/tools" "$stage/docs"
 cp README.md "$stage/"
+cp docs/*.md "$stage/docs/"
 cp tools/readme_blocks.py tools/readme_cli.py "$stage/tools/"
 cp tests/__init__.py tests/test_readme_run.py "$stage/tests/"
 
