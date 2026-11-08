@@ -14,13 +14,16 @@
 
 Mnemonic Proxy lets a coding agent work for hours with a local model, even when the model's context window is small.
 
-It sits between your agent and your model server. Old tool outputs leave the prompt, so the window does not fill up.
-They are not summarized and not thrown away: every message stays on disk, word for word, and the model can search it
-and read it back with a `recall` tool.
+Without it, a long session ends in auto-compaction: the agent keeps working from a summary of a summary, slowly
+forgets the details, and redoes work or research it had already done.
+
+Mnemonic Proxy works differently. It sits between your agent and your model server. Old tool outputs leave the
+prompt, so the window does not fill up. They are not summarized and not thrown away: every message stays on disk,
+word for word, and the model can read it back with a `recall` tool when it needs it.
 
 It is for you if you run a local model server (Strata, llama-server, Ollama, LM Studio, ds4-server or any
-OpenAI-compatible server) and a coding agent (Claude Code, Codex, opencode, pi, Hermes, Continue), and long sessions
-end in auto-compaction that forgets the details you needed.
+OpenAI-compatible server) and a coding agent (Claude Code, Codex, opencode, pi, Hermes, Continue), and you are tired
+of auto-compaction.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/replay.gif" alt="Replay: a question answered from three hours earlier with one recall call" width="100%">
