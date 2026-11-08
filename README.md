@@ -32,6 +32,15 @@ of auto-compaction.
 <p align="center"><sub>A real session, three hours in: one recall call brings back the first version of a code block,
 exactly as it was written.</sub></p>
 
+<details>
+<summary>Johnny's payload</summary>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/lastreload/mnemonic-proxy/main/docs/assets/hero.jpg" alt="Mnemonic Proxy" width="100%">
+</p>
+
+</details>
+
 ## What it does for you
 
 Measured on our hardware, single runs ([details](docs/benchmarks.md)):
