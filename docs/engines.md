@@ -216,6 +216,7 @@ a code written only in file 1.
 | segments | 2 switches; both times the model answered the notes request with a tool call instead of notes (`finish_reason: tool_calls`), so the proxy used its fallback note ("use recall") |
 | answers | the sum of the 12 totals right (82,885); the code from file 1 quoted exactly, with no new `read_file` |
 | streaming, `/v1/messages`, `/v1/responses` | 499 chunks; HTTP 200; `completed` |
+| pause and resume (separate run) | four conversations of about 9.7K tokens each, through the proxy, in the order A, B, A, C, D, A: every cold one took 10.6–14.5 s, every return to A 0.44–0.91 s with 9.7K tokens cached. llama-server's log shows A brought back from its RAM prompt cache (`found better prompt with f_keep = 1.000`, 33 ms), about 520 MiB per conversation against the 8192 MiB default of `--cache-ram`. It lasts as long as Unsloth runs |
 
 The empty notes do not come from Unsloth: with the proxy pointed straight at Unsloth's private `llama-server` (same
 process, same model) the notes request got the same `tool_calls` answer. Not shown: an agent CLI on Unsloth, long
