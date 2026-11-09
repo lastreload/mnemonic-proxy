@@ -214,9 +214,10 @@ The agent talks to the proxy as usual (`http://127.0.0.1:8096/v1`) and does not 
   an idle model (off by default) or makes room for an image/video model, and restores when the same model loads
   again; a restart still re-reads the whole conversation
   ([unsloth#9037](https://github.com/unslothai/unsloth/issues/9037), open). The proxy runs in base mode: masking,
-  archive, `recall`, segment switches, streaming and all three APIs worked. While Unsloth keeps running, a
-  conversation you come back to is taken from llama-server's RAM prompt cache instead of being read again (0.4–0.9 s
-  instead of 11–14 s for 9.7K tokens, [measured](engines.md#unsloth-measured)); it is lost when Unsloth restarts.
+  archive, `recall`, segment switches, streaming and all three APIs worked. If you stop the agent and come back
+  while Unsloth is still running, the session is taken from llama-server's cache instead of being read again
+  (0.4–0.9 s instead of 11–14 s for 9.7K tokens, [measured](engines.md#unsloth-measured)). After a restart of
+  Unsloth the prompt is read again: at most one window (about 39 s for 28K tokens on our machine).
 - **Unsloth's own tools.** We tested with `--disable-tools`. On `127.0.0.1` Unsloth turns its server-side tools (web
   search, code execution) on by default; that mode has not been tested with the proxy.
 - `check` before 0.3.25 shows `/v1/models 401` on the "engine reachable" line even with `--api-key`: that probe did
