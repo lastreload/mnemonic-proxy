@@ -207,9 +207,15 @@ The agent talks to the proxy as usual (`http://127.0.0.1:8096/v1`) and does not 
 - **The window.** Unsloth answers llama-server's `/props` and `/slots`, so the proxy recognises it as llama-server
   and reads the context from it. Set `--context-length` yourself (32768, at least 16384): without it Unsloth picks
   one for the model, and its default `auto` GPU memory mode may shrink it to fit the GPU.
-- **No saved state.** Unsloth starts `llama-server` with `--slot-save-path`, but its API does not pass on the
-  save/restore calls (`POST /slots/0?action=…` answers 404). The proxy runs in base mode: masking, archive,
-  `recall`, segment switches, streaming and all three APIs worked.
+- **No saved state, by design.** Unsloth starts `llama-server` with `--slot-save-path` but keeps slot save/restore
+  for itself: its API forwards `GET /slots` and answers 404 to `POST /slots/0?action=…`, and `--slot-save-path` is
+  refused as an extra argument ("Studio manages that itself",
+  [unsloth#11705](https://github.com/unslothai/unsloth/issues/11705)). Unsloth's own save only runs when it unloads
+  an idle model (off by default) or makes room for an image/video model, and restores when the same model loads
+  again; a restart still re-reads the whole conversation
+  ([unsloth#9037](https://github.com/unslothai/unsloth/issues/9037), open). The proxy runs in base mode: masking,
+  archive, `recall`, segment switches, streaming and all three APIs worked, and the prompt prefix is reused from the
+  engine's cache while Unsloth keeps running.
 - **Unsloth's own tools.** We tested with `--disable-tools`. On `127.0.0.1` Unsloth turns its server-side tools (web
   search, code execution) on by default; that mode has not been tested with the proxy.
 - `check` before 0.3.25 shows `/v1/models 401` on the "engine reachable" line even with `--api-key`: that probe did
