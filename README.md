@@ -21,8 +21,8 @@ Mnemonic Proxy works differently. It sits between your agent and your model serv
 prompt, so the window does not fill up. They are not summarized and not thrown away: every message stays on disk,
 word for word, and the model can read it back with a `recall` tool when it needs it.
 
-It is for you if you run a local model server (Strata, llama-server, Ollama, LM Studio, ds4-server or any
-OpenAI-compatible server) and a coding agent (Claude Code, Codex, opencode, pi, Hermes, Continue), and you are tired
+It is for you if you run a local model server (Strata, llama-server, Ollama, LM Studio, Unsloth, ds4-server or
+any OpenAI-compatible server) and a coding agent (Claude Code, Codex, opencode, pi, Hermes, Continue), and you are tired
 of auto-compaction.
 
 <p align="center">
@@ -118,7 +118,7 @@ plain text and holds everything the agent saw, secrets included: protect the `da
 
 - [Install and platforms](docs/install.md): Linux, macOS, Windows, WSL, a one-click launcher
 - [Agents](docs/agents.md): full setup for each agent, tested versions
-- [Engines](docs/engines.md): Strata, llama-server, ds4-server, Ollama, LM Studio, saved state
+- [Engines](docs/engines.md): Strata, llama-server, ds4-server, Ollama, LM Studio, Unsloth, saved state
 - [Configuration](docs/configuration.md): every option, and what the automatic configuration picks
 - [How it works](docs/how-it-works.md): the long version, step by step
 - [Benchmarks](docs/benchmarks.md): the long session, AgentLongBench, recall, saved state

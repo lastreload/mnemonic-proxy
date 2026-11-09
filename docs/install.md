@@ -147,6 +147,7 @@ shortest Strata path is [above](#strata-in-two-commands)).
 | llama-server, router mode (several models) | `llama-server --models-preset preset.ini --models-max 1 --port 8095`; preset: `[*]` with `slot-save-path` and `parallel = 1`, a `ctx-size` (`c`) ≥ 16384 per model | `--engine llama-server-router --slot-dir ./slots` + `preset.router.example.ini` | yes, per model |
 | ds4-server | `ds4-server -m MODEL.gguf --ctx 65536 --kv-disk-dir ./kv --port 8110` | none (`--full` = `config.ds4.json`) | kept by ds4 itself |
 | Ollama, LM Studio | engine context set to 32768 (see below); `--tokenizer` recommended | none: the window is read from the engine | no (base mode) |
+| Unsloth (`unsloth run`) | `unsloth run --model MODEL --context-length 32768 --api-only -p 8888 --disable-tools` (see below); it prints an `sk-unsloth-…` API key | none: the window is read from the engine; `--upstream http://127.0.0.1:8888 --api-key sk-unsloth-…` | no (base mode) |
 | any OpenAI-compatible (vLLM, online APIs) | — | `--engine openai-32k` at 32K (just `{"window": 32768}`); at 131072 none is needed | no (base mode) |
 
 The proxy reads the window from Strata, llama-server (`n_ctx`, per model in router mode), ds4-server (`--ctx`),
@@ -185,6 +186,34 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
   prompt of 0.9× the window and fails with "engine context smaller than window" if it does not come back whole.
 - Ollama ignores an integrated GPU by default and runs on the CPU (much slower); `OLLAMA_IGPU_ENABLE=1` makes it use
   it. With it, Ollama chose a default context of 262144 from the shared memory: set `OLLAMA_CONTEXT_LENGTH` anyway.
+
+**Unsloth** (tested on Linux with Unsloth 2026.11.3, details in [Tested combinations](engines.md#unsloth-measured)).
+`unsloth run` starts llama.cpp's `llama-server` on a private port and serves it through Unsloth's own API, which
+needs an API key. Point the proxy at Unsloth's port (8888 by default), not at the private `llama-server` port: that
+one changes at every start and has a different key.
+
+<!-- readme-test: real-engine -->
+```sh
+unsloth run --model /path/to/model.gguf --context-length 32768 --api-only -p 8888 --disable-tools
+# --model also takes a Hugging Face repo, e.g. unsloth/<model>-GGUF:UD-Q4_K_XL
+# when the model is loaded it prints:  API Key: sk-unsloth-...
+mnemonic-proxy check --upstream http://127.0.0.1:8888 --api-key sk-unsloth-...
+mnemonic-proxy --upstream http://127.0.0.1:8888 --api-key sk-unsloth-... --data ./data
+```
+
+The agent talks to the proxy as usual (`http://127.0.0.1:8096/v1`) and does not need the key. What to know:
+- **The API key.** `unsloth run` prints it once the model is loaded; the web UI also creates keys (Settings → API).
+  Without it Unsloth answers 401 to every request. The proxy sends it as `Authorization: Bearer`.
+- **The window.** Unsloth answers llama-server's `/props` and `/slots`, so the proxy recognises it as llama-server
+  and reads the context from it. Set `--context-length` yourself (32768, at least 16384): without it Unsloth picks
+  one for the model, and its default `auto` GPU memory mode may shrink it to fit the GPU.
+- **No saved state.** Unsloth starts `llama-server` with `--slot-save-path`, but its API does not pass on the
+  save/restore calls (`POST /slots/0?action=…` answers 404). The proxy runs in base mode: masking, archive,
+  `recall`, segment switches, streaming and all three APIs worked.
+- **Unsloth's own tools.** We tested with `--disable-tools`. On `127.0.0.1` Unsloth turns its server-side tools (web
+  search, code execution) on by default; that mode has not been tested with the proxy.
+- `check` before 0.3.25 shows `/v1/models 401` on the "engine reachable" line even with `--api-key`: that probe did
+  not send the key. Detection did, so nothing else is affected.
 
 **Your OS.**
 - **Linux**: the reference; the commands on this page, and all the measured sessions.
