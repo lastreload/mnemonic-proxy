@@ -106,6 +106,14 @@ produced no summary message and no compaction event in opencode's database. Note
 the `usage` the proxy returns — the **physical** prompt (max 108K here), not the real history (1.17 M tokens at the
 end) — so it would rarely trigger compaction anyway; turn it off regardless, so only one context manager is at work.
 
+**Timeouts off, for a local engine only**: `false` disables opencode's waits (current opencode docs: 5 minutes for
+the response headers, 15 minutes between streamed chunks, then up to three retries). With a local engine a slow
+answer is normal, not a failure: reading a 105K-token prompt cold, then about 2 minutes of handoff notes at a
+segment switch, then a long answer can go past those limits, and a retry starts the same work again. In front of a
+hosted API, keep finite timeouts instead (for example `"chunkTimeout": 120000`): there a silent connection is a fault,
+and with `false` the session waits with no error. The proxy's own wait for the engine is fixed at one hour of
+silence, so it is not a substitute. Thanks to u/FallElectronic3774 for pointing this out.
+
 Limits found:
 
 - Use the **`provider`** key with **`npm`**, not the newer plural `providers` + `package`: with `providers` the
