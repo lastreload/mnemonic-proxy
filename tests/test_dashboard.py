@@ -23,3 +23,11 @@ class DashboardTests(unittest.TestCase):
         self.assertTrue(refs)
         self.assertEqual(refs - set(parser.ids), set())
         self.assertEqual(len(parser.ids), len(set(parser.ids)), "duplicate HTML IDs")
+
+    def test_the_three_language_dicts_have_the_same_keys(self):
+        html = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
+        dicts = {lang: set(re.findall(r'[,{]\s*(\w+):"', body))
+                 for lang, body in re.findall(r'I18N\.(\w+)=(\{.*?\});', html, re.S)}
+        self.assertEqual(set(dicts), {"it", "en", "fr"})
+        self.assertEqual(dicts["it"], dicts["en"], "I18N.en keys differ from I18N.it")
+        self.assertEqual(dicts["it"], dicts["fr"], "I18N.fr keys differ from I18N.it")
