@@ -314,6 +314,7 @@ measurements, and changing them is rarely necessary.
 | `recall_removal` | "value" | what the recall loop gives up first when space runs out: `value` \| `reasoning` \| `age` |
 | `final_drop_internal_tools` | true | a final call made for lack of space goes without the proxy's own tools |
 | `notes_thinking` | "auto" | thinking while writing handoff notes: `auto` (on when the engine leaves room) \| `off` \| `on` |
+| `notes_tool_choice` | "auto" | `tool_choice` of the handoff-notes request: `none` forbids a tool call and keeps the tools in the request, `keep` sends nothing; `auto` = `none` on llama-server (prefix unchanged), `keep` on Strata and ds4 (Strata offers no tools with `none`, so the whole segment would be read again) |
 
 </details>
 
