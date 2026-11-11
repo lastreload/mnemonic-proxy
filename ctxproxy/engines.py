@@ -366,11 +366,12 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         cfg.mask_tool_args = False
         warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
                     "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
-    # 0.3.27: tool_choice "none" on the handoff notes request only where it keeps the prompt prefix. llama-server
-    # keeps the tools in the template (verified through Unsloth: prefix still cached); Strata offers no tools at all
-    # with "none", so its system prompt would change and the whole segment would be read again.
+    # 0.3.27: no tool_choice on the handoff notes request by default, on any engine. With "none" both Strata
+    # (serve/server.py) and llama-server (measured through Unsloth: an 11,717-token prompt became 11,462 and was read
+    # again, 13.2 s instead of 1.5 s) drop the tools from the template, so the whole segment would be read again
+    # before the notes. A model that still answers with a call is handled by the recovery in Manager.handoff_text.
     if str(getattr(cfg, "notes_tool_choice", "auto")) == "auto":
-        cfg.notes_tool_choice = "none" if engine.kind == "llama.cpp" else "keep"
+        cfg.notes_tool_choice = "keep"
     if engine.kind == "strata" and engine.n_ctx and cfg.window > engine.n_ctx and "window" in explicit:
         warn.append("config window %d exceeds engine n_ctx %d: using the engine window" % (cfg.window, engine.n_ctx))
         explicit.discard("window")

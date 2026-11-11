@@ -4,14 +4,16 @@
 
 - **Handoff notes that come back as a tool call are no longer lost.** With Qwen3.6 on Unsloth the model answered
   the notes request twice in a row with a tool call and no text, and the new segment started with the empty
-  fallback. Now (1) on llama-server the notes request carries `tool_choice: "none"`, with the tools still in it so
-  the prompt prefix is unchanged (replaying the two failed requests this way gave notes 2/2, prefix cached); on
-  Strata nothing is sent, because Strata offers no tools at all with `"none"` and the whole segment would be read
-  again (`notes_tool_choice`, `auto` by default); (2) when there is still no text, the model's reasoning and the
-  call it attempted become the notes, marked as rebuilt by the proxy, and the empty fallback is used only when
-  there is nothing at all. A reasoning block left inside the content (`<think>…</think>`) is no longer copied
-  into the notes. The `notes` journal event carries `handoff_status`: `clean`, `recovered` or `fallback`.
-  Analysis and the minimal cascade proposed by an external review agent. Test: `tests/test_notes_handoff.py`.
+  fallback. Now, when there is no text, the model's reasoning and the call it attempted become the notes, marked
+  as rebuilt by the proxy; the empty fallback is used only when there is nothing at all. On a real Unsloth session
+  (Qwen3.6-35B-A3B, 32K) one of four switches came back this way (reasoning ran to the token limit) and the new
+  segment started from the model's own account of what it had done. A reasoning block left inside the content
+  (`<think>…</think>`) is no longer copied into the notes. The `notes` journal event carries `handoff_status`:
+  `clean`, `recovered` or `fallback`. New option `notes_tool_choice` (`auto` = send nothing): `tool_choice: "none"`
+  was considered and measured, but both Strata and llama-server then drop the tools from the template, so the
+  segment is read again before the notes (Unsloth: 11,717 -> 11,462 tokens, cached 0, 13.2 s instead of 1.5 s);
+  it stays available as `"none"`. Analysis and the minimal cascade proposed by an external review agent.
+  Test: `tests/test_notes_handoff.py`.
 ## 0.3.26 — 2026-11-11
 
 - **Dashboard: Strata's API key** (`--api-key-file`): when Strata requires a key, the dashboard sends it as a

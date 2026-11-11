@@ -4,9 +4,9 @@ the reasoning / the attempted call instead of the empty fallback.
 
 Seen with Qwen3.6 on Unsloth (llama-server): asked for the notes, the model answered twice in a row with a tool call
 and no text, so the new segment started with "(notes not available ...)". Replaying the same request with
-tool_choice "none" gave notes 2/2 with the prefix still cached. Strata, on the other hand, offers no tools at all when
-tool_choice is "none": the system prompt changes and the whole segment would be read again, so there "auto" sends
-nothing and relies on the recovery.
+tool_choice "none" gave notes, but a later measurement showed the price: with "none" llama-server (like Strata) drops
+the tools from the template, the prompt changes and the whole segment is read again. So "auto" sends nothing on any
+engine and relies on the recovery; "none" stays available on purpose.
 
     python3 -m unittest -v tests.test_notes_handoff
 """
@@ -110,13 +110,11 @@ class TestAutoPerEngine(unittest.TestCase):
                       log=None)
         return cfg.notes_tool_choice
 
-    def test_llama_server_gets_none(self):
-        self.assertEqual(self.resolve("llama.cpp"), "none")
-
-    def test_strata_and_ds4_send_nothing(self):
-        # Strata drops the tools from the template when tool_choice is "none": the prefix would change.
-        self.assertEqual(self.resolve("strata"), "keep")
-        self.assertEqual(self.resolve("ds4"), "keep")
+    def test_auto_sends_nothing_on_every_engine(self):
+        # Strata and llama-server both drop the tools from the template with "none": the prefix would change and the
+        # segment would be read again (Unsloth: 11,717 -> 11,462 tokens, cached 0, 13.2 s instead of 1.5 s).
+        for kind in ("llama.cpp", "strata", "ds4", "openai"):
+            self.assertEqual(self.resolve(kind), "keep", kind)
 
     def test_written_value_wins(self):
         self.assertEqual(self.resolve("strata", "none"), "none")

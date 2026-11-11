@@ -333,9 +333,9 @@ class Config:
     recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
     final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
     notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
-    # 0.3.27 handoff notes: tool_choice of the notes request. "none" keeps the tools in the request and forbids a call
-    # (llama-server: same prompt prefix, verified on Unsloth); "keep" sends none (Strata offers no tools at all with
-    # "none": its system prompt would change and the whole segment would be read again). "auto" -> engines.apply.
+    # 0.3.27 handoff notes: tool_choice of the notes request. "none" forbids a call but, on Strata and on llama-server,
+    # also drops the tools from the template: the prompt changes and the whole segment is read again first. "keep"
+    # (what "auto" resolves to) sends nothing and relies on the recovery of the notes from the reasoning / the call.
     notes_tool_choice: str = "auto"
     # 0.3.23 automatic configuration (autoconfig.py): the options that depend on the engine and on the machine
     # are chosen at startup from harmless reads (engine version/window/saved state, RAM, optional VRAM) and
