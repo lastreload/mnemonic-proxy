@@ -2,11 +2,20 @@
 
 ## 0.3.26 — unreleased
 
+- **A `window` below the engine's n_ctx scales the thresholds** (found on Strata 0.2.13). With an engine that
+  reports its context (Strata, llama-server, ds4) and a smaller `window` written in the config, the window was
+  used but the thresholds stayed at their 131K defaults: `mask_trigger` 80000 above a 32768 window, `tail_max`
+  24000, `reserve` 8192. Ordinary masking never ran and each new segment started already too full: in an agent
+  session on Strata 0.2.13 with `{"window": 32768}`, ten segment switches in a row, one per request (about 30 s of
+  handoff notes each). The 0.3.24 scaling covered only engines that report no context; it now covers both. Fields
+  written in the config still win. Test: `tests/test_explicit_window_scaling.py` (fails before the fix: no
+  ordinary mask, the current output hidden on every request).
 - **DeepSeek Harness**: tested (`dsh` 0.2.2-rc.1, headless profile, in front of Unsloth with Qwen3.6-35B-A3B and a
   64K window): a custom `openai-completions` provider pointed at the proxy, dsh's compaction and tool-result pruning
   off. 7 requests, 0 errors, exact answers after masking, the hidden code brought back with `recall` in the next turn.
   Setup and numbers in [DeepSeek Harness](docs/agents.md#deepseek-harness-chat-completions). Asked for by
   u/Due-Advantage-9777.
+
 ## 0.3.25 — 2026-11-11
 
 - **Dashboard**: the strings #74 left untranslated (the error chip, the `chars` / `placeholder` labels of the

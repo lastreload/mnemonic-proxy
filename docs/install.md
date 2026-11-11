@@ -155,6 +155,9 @@ Ollama and LM Studio (the context of the loaded model, 0.3.8), and scales its th
 written in the config. From any other engine it cannot: write the engine's real context in `window`, and since
 0.3.24 the thresholds scale from it exactly as they would from an engine-reported one (so
 `{"window": 32768}` is a complete 32K configuration — `config.openai-32k.json` spells the same numbers out).
+A `window` written below the engine's own context (for example `{"window": 32768}` in front of a Strata started
+with 131072) scales the thresholds the same way since 0.3.26; before, they stayed at their 131K values and every
+request switched segment.
 Details per engine: [Engines](engines.md#engines).
 
 **Ollama and LM Studio** (tested on Linux, small model, details in [Tested combinations](engines.md#tested-combinations)). Both
