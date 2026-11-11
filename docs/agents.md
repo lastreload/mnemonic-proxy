@@ -10,6 +10,7 @@ otherwise two context managers fight over the same history:
 | pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](install.md#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
 | opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
 | Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](hermes-agent.md) |
+| DeepSeek Harness (`dsh`) | `baseURL: http://127.0.0.1:8096/v1` (`api: openai-completions`) | `compaction-basic` and `tool-result-pruner`: `disabled: true` | [DeepSeek Harness](#deepseek-harness-chat-completions) |
 | Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
 | Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
@@ -129,6 +130,79 @@ Limits found:
 - `recall` never appears in opencode's tool list: the proxy injects it and answers it in its own internal rounds.
 - The model re-reads a lot (415 `reread` events, often `read … limit=60`); in one turn that became a ~20 minute
   read loop before it wrote the file. That is the model, not the proxy.
+
+## DeepSeek Harness (Chat Completions)
+
+Tested with DeepSeek Harness (`dsh`) **0.2.2-rc.1** (Node 24), in front of Unsloth with Qwen3.6-35B-A3B and a 64K
+window; numbers [below](#deepseek-harness-measured). `dsh` takes a custom OpenAI-compatible provider in the patch layer
+of a profile, `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (the profile folder appears after the first
+`dsh --profile <profile>`). This is the file we used for the `headless` profile:
+
+<!-- readme-test: real-engine; config: client -->
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      mnemonic:
+        displayName: mnemonic-proxy
+        apiKeyEnv: MNEMONIC_PROXY_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8096/v1
+        streamIdleTimeoutMs: 1800000
+        models:
+          - id: Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL
+            name: Qwen3.6-35B-A3B via mnemonic-proxy
+            contextWindow: 1000000
+            maxTokens: 8192
+- id: agent-default-model
+  config:
+    provider: mnemonic
+    model: Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL
+- id: compaction-basic
+  disabled: true
+- id: tool-result-pruner
+  disabled: true
+```
+
+The model `id` is the one your engine reports at `/v1/models`. `apiKeyEnv` names the environment variable dsh reads
+the key from; we set it to any value (the proxy does not check it, and passes its own `--api-key` to the engine). Then:
+
+<!-- readme-test: real-engine -->
+```bash
+MNEMONIC_PROXY_KEY=local dsh --profile headless "…"
+MNEMONIC_PROXY_KEY=local dsh --profile headless --session-id session-… "…"   # continue the same session
+```
+
+`dsh --profile headless --dump-config` shows the composed profile: both entries must carry `disabled: true`.
+
+- **Two context managers off.** `compaction-basic` is dsh's own compaction and `tool-result-pruner` cuts tool
+  outputs over 8,192 characters to a head and a tail; with both on, dsh and the proxy would shrink the same history.
+  With them off, dsh prints `warning: 1 entry did not activate` (`command-compact`, waiting for the compaction
+  service): expected, `/compact` is simply not there.
+- **`contextWindow` above the real window.** The agent's history can grow past the engine's window; the proxy keeps
+  the prompt inside the real one, which it reads from the engine. We did not test what dsh does with a value equal to
+  the engine's window.
+- **`streamIdleTimeoutMs`.** dsh gives up after 5 minutes without a streamed chunk (default 300000). A cold
+  long prompt or the handoff notes of a segment switch can be silent for longer on a local engine; 30 minutes here.
+  In front of a hosted API keep a finite value of a few minutes, [as for opencode](#opencode-chat-completions).
+- **Side requests.** dsh asks the model for a session title in a separate, short request; the proxy files it as its
+  own conversation, next to the agent's.
+
+### DeepSeek Harness, measured
+
+`dsh --profile headless --json` on AI395 (Radeon 8060S, Vulkan), Unsloth 2026.11.3 with Qwen3.6-35B-A3B
+`UD-Q4_K_XL` and `--context-length 65536`, mnemonic-proxy 0.3.25 from PyPI. Task: read 12 files of about 3,000
+tokens each one per tool call, add up the numbers in each, give the grand total; then, in the same session
+(`--session-id`), give the code written on line 71 of the first file without reading it again.
+
+| | |
+|---|---|
+| answers | grand total **82,885** (exact); code **`AMBER-7731-KESTREL`** (exact), taken back with `recall` |
+| requests | 7 to the engine, 0 errors; 17 `read` calls, all with results |
+| history archived | 68,653 tokens; peak prompt 57,243 (window 65,536); dsh's system prompt and tools alone ≈ 19,200 |
+| masks / `recall` | 2 masks (47,309 tokens hidden) / 6 `recall`, 24-344 ms each |
+| segment switches | none (the task stayed inside one segment) |
+| wall time | 5 min 49 s for both turns |
 
 ## Claude Code (Anthropic Messages)
 
