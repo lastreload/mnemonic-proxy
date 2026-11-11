@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.26 — unreleased
+
 ## 0.3.25 — 2026-11-11
 
 - **Dashboard**: the strings #74 left untranslated (the error chip, the `chars` / `placeholder` labels of the
