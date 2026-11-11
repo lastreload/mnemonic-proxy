@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.3.27 — unreleased
+
 ## 0.3.26 — 2026-11-11
 
 - **Dashboard: Strata's API key** (`--api-key-file`): when Strata requires a key, the dashboard sends it as a
