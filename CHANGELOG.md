@@ -1,7 +1,14 @@
 # Changelog
 
-## 0.3.25 — unreleased
+## 0.3.25 — 2026-11-11
 
+- **Dashboard**: the strings #74 left untranslated (the error chip, the `chars` / `placeholder` labels of the
+  live-prompt header, the copy button's tooltip) go through the language switch; the automatic language is
+  French or Italian when the browser asks for it and English otherwise; `<html lang>` follows the choice. Test:
+  the three language tables have the same keys. By LawiK974 (#78).
+- **Docs, opencode**: why the example turns opencode's timeouts off, and that this is for a local engine only;
+  in front of a hosted API keep them finite, since a silent connection would stall the session with no error.
+  Pointed out by u/FallElectronic3774 (#77).
 - **Unsloth**: tested in front of `unsloth run` (Unsloth 2026.11.3, Qwen3.6-35B-A3B, 32K window): recognised as
   llama-server through Unsloth's API, window read from it, masking, `recall`, segment switches, streaming and the
   three APIs work; no saved state (the API does not pass on slot save/restore). Setup in
@@ -9,7 +16,7 @@
 - **`check` sends `--api-key` on every probe**: the "engine reachable" line asked `/health` and `/v1/models`
   without it, so an engine with authentication (Unsloth) showed `/v1/models 401` there. Detection already sent the
   key. Test: `tests/test_check_api_key.py`.
-- **Docs**: the README is now a 133-line landing page and everything else moved, text unchanged, into
+- **Docs**: the README is now a short landing page and everything else moved, text unchanged, into
   `docs/`: [install](docs/install.md), [agents](docs/agents.md), [engines](docs/engines.md),
   [configuration](docs/configuration.md), [how it works](docs/how-it-works.md),
   [benchmarks](docs/benchmarks.md), [limits](docs/limits.md), [security](docs/security.md),
