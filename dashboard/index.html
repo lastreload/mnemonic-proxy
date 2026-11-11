@@ -329,7 +329,8 @@ I18N.it={app:"Contesto virtuale",connWait:"connessione…",connLive:"in diretta"
  evnNewConv:"nuova conversazione",evnAutosave:"autosalvataggio",evnAutorestore:"ripristino automatico",evnPrune:"pulizia salvataggi",evnLost:"stato di Strata perso",
  tipReq:"Richiesta #{x}",tipPhys:"contesto fisico",tipEvents:"eventi prima: ",tipNoEv:"nessun evento del proxy",
  copyOk:"copiato ✓",copyErr:"errore",reasonPrefix:"‹ragionamento› ",mdHeader:"# Prompt fisico —",
- mdTime:"ora",mdMsgs:"messaggi",mdEst:"token stimati",mdReal:"reali",mdTools:"strumenti"};
+ mdTime:"ora",mdMsgs:"messaggi",mdEst:"token stimati",mdReal:"reali",mdTools:"strumenti",
+ evErr:"errori",carWord:"car.",phWord:"segnaposto",copyMsgTip:"copia questo messaggio"};
 I18N.en={app:"Virtual context",connWait:"connecting…",connLive:"live",connPoll:"polled",connDead:"no connection",
  langLabel:"language",convLabel:"conversation",pause:"pause",langAuto:"automatic",
  lblMem:"Memory · physical context",lblPhase:"Phase",lblSpeed:"Speed (2 s average)",lblVirt:"Virtual history",lblActions:"Actions",
@@ -384,7 +385,8 @@ I18N.en={app:"Virtual context",connWait:"connecting…",connLive:"live",connPoll
  evnNewConv:"new conversation",evnAutosave:"autosave",evnAutorestore:"auto-restore",evnPrune:"save pruning",evnLost:"Strata state lost",
  tipReq:"Request #{x}",tipPhys:"physical context",tipEvents:"events before: ",tipNoEv:"no proxy events",
  copyOk:"copied ✓",copyErr:"error",reasonPrefix:"‹reasoning› ",mdHeader:"# Physical prompt —",
- mdTime:"time",mdMsgs:"messages",mdEst:"estimated tokens",mdReal:"actual",mdTools:"tools"};
+ mdTime:"time",mdMsgs:"messages",mdEst:"estimated tokens",mdReal:"actual",mdTools:"tools",
+ evErr:"errors",carWord:"chars",phWord:"placeholder",copyMsgTip:"copy this message"};
 I18N.fr={app:"Contexte virtuel",connWait:"connexion…",connLive:"en direct",connPoll:"par intervalles",connDead:"aucune liaison",
  langLabel:"langue",convLabel:"conversation",pause:"pause",langAuto:"automatique",
  lblMem:"Mémoire · contexte physique",lblPhase:"Phase",lblSpeed:"Vitesse (moyenne 2 s)",lblVirt:"Histoire virtuelle",lblActions:"Actions",
@@ -439,14 +441,17 @@ I18N.fr={app:"Contexte virtuel",connWait:"connexion…",connLive:"en direct",con
  evnNewConv:"nouvelle conversation",evnAutosave:"sauvegarde auto",evnAutorestore:"restauration auto",evnPrune:"nettoyage des sauvegardes",evnLost:"état Strata perdu",
  tipReq:"Requête #{x}",tipPhys:"contexte physique",tipEvents:"événements avant : ",tipNoEv:"aucun événement du proxy",
  copyOk:"copié ✓",copyErr:"erreur",reasonPrefix:"‹raisonnement› ",mdHeader:"# Prompt physique —",
- mdTime:"heure",mdMsgs:"messages",mdEst:"tokens estimés",mdReal:"réels",mdTools:"outils"};
-const AUTO_LANG=(navigator.language||"it").toLowerCase().startsWith("fr")?"fr":
-                (navigator.language||"it").toLowerCase().startsWith("en")?"en":"it";
+ mdTime:"heure",mdMsgs:"messages",mdEst:"tokens estimés",mdReal:"réels",mdTools:"outils",
+ evErr:"erreurs",carWord:"car.",phWord:"marqueur",copyMsgTip:"copier ce message"};
+// lingue supportate: fr/it espliciti, tutto il resto inglese (README e client sono in inglese)
+const AUTO_LANG=(navigator.language||"en").toLowerCase().startsWith("fr")?"fr":
+                (navigator.language||"en").toLowerCase().startsWith("it")?"it":"en";
 let lang=localStorage.getItem("mnem-lang")||"auto";
 const T=k=>(I18N[lang==="auto"?AUTO_LANG:lang]||I18N.it)[k]||I18N.it[k];
 const F=(k,x)=>T(k).replace("{x}",x);
 function applyLang(){
   document.title=T("app");
+  document.documentElement.lang=lang=="auto"?AUTO_LANG:lang;
   const L=I18N[lang==="auto"?AUTO_LANG:lang]||I18N.it;
   for(const el of document.querySelectorAll("[data-i18n]"))el.textContent=L[el.dataset.i18n]||I18N.it[el.dataset.i18n];
   for(const el of document.querySelectorAll("[data-i18n-html]"))el.innerHTML=L[el.dataset.i18nHtml]||I18N.it[el.dataset.i18nHtml];
@@ -459,6 +464,8 @@ function setLang(v){
   langSel.options[0].textContent=T("langAuto");
   setLocale(lang==="auto"?AUTO_LANG:lang);
   applyLang();
+  // i chip sono costruiti una volta sola: vanno rinominati a mano
+  for (const t of EVTYPES) chipEls[t].firstChild.textContent = t === "errori" ? T("evErr") : t;
   if(S.lastStatus)renderStatus(S.lastStatus);
   drawChart();
   $("evtb").textContent="";addEvents(S.events);applyConvFilter();
@@ -815,7 +822,7 @@ const evOn = Object.fromEntries(EVTYPES.map(t => [t, t !== "request"]));
 const counts = {}; const chipEls = {};
 for (const t of EVTYPES) {
   const c = document.createElement("span"); c.className = "chip" + (evOn[t] ? " on" : ""); c.tabIndex = 0;
-  c.innerHTML = `<span>${t === "errori" ? "errori" : t}</span><span class="num">0</span>`;
+  c.innerHTML = `<span>${t === "errori" ? T("evErr") : t}</span><span class="num">0</span>`;
   c.addEventListener("click", () => { evOn[t] = !evOn[t]; setCls(c, "on", evOn[t]); setCls($("evtb"), "fl-off-" + t, !evOn[t]); });
   c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); c.click(); } });
   chipEls[t] = c; $("chips").appendChild(c);
@@ -946,7 +953,7 @@ function renderPrompt(lr) {
     const n = document.createElement("div");
     n.className = "msg" + (j >= msgs.length - 3 || (ph && t.length < 400) ? "" : " c");
     n._key = key; n._nph = ph; n._ph = ph > 0;
-    n.innerHTML = `<div class="hd"><span class="num dim" style="width:34px">#${j}</span><span class="role">${esc(m.role)}</span><span class="num" style="width:78px">${full(t.length)} car.</span>${ph ? `<mark class="ph">${ph} segnaposto</mark>` : ""}<span class="pv">${esc(t.slice(0, 120).replace(/\s+/g, " "))}</span><button class="cpy" title="copia questo messaggio">copia</button></div><pre>${hl(t)}</pre>`;
+    n.innerHTML = `<div class="hd"><span class="num dim" style="width:34px">#${j}</span><span class="role">${esc(m.role)}</span><span class="num" style="width:78px">${full(t.length)} ${T("carWord")}</span>${ph ? `<mark class="ph">${ph} ${T("phWord")}</mark>` : ""}<span class="pv">${esc(t.slice(0, 120).replace(/\s+/g, " "))}</span><button class="cpy" title="${T("copyMsgTip")}">${T("copyBtn")}</button></div><pre>${hl(t)}</pre>`;
     n._txt = t;
     n.firstChild.addEventListener("click", () => n.classList.toggle("c"));
     n.querySelector(".cpy").addEventListener("click", ev => { ev.stopPropagation(); copyText(n._txt, ev.target); });
