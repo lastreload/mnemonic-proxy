@@ -3,6 +3,9 @@ import re
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+from dashboard.ctxdash import http_json
 
 
 class IdParser(HTMLParser):
@@ -15,6 +18,19 @@ class IdParser(HTMLParser):
 
 
 class DashboardTests(unittest.TestCase):
+    @patch("dashboard.ctxdash.urllib.request.urlopen")
+    def test_strata_api_key_is_sent_as_bearer(self, urlopen):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
+        urlopen.return_value = response
+
+        data, error = http_json("http://127.0.0.1:5000/status", api_key="test-key")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        self.assertEqual(data, {"ok": True})
+        self.assertIsNone(error)
+
     def test_literal_id_references_exist(self):
         html = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")
         parser = IdParser()

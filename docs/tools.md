@@ -57,6 +57,9 @@ Italian.
 python3 mnemonic-proxy/dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 --proxy http://127.0.0.1:8096 --port 8097
 ```
 
+If Strata requires an API key, add `--api-key-file` with the host path to its key file. The dashboard reads the key
+locally and sends it only to Strata.
+
 Read-only, on `127.0.0.1:8097`: engine status, physical vs. virtual context over time, masking/segment/recall events,
 and the live physical prompt (with `live_dump: true`).
 
