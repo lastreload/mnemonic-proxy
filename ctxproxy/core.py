@@ -333,6 +333,10 @@ class Config:
     recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
     final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
     notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
+    # 0.3.27 handoff notes: tool_choice of the notes request. "none" forbids a call but, on Strata and on llama-server,
+    # also drops the tools from the template: the prompt changes and the whole segment is read again first. "keep"
+    # (what "auto" resolves to) sends nothing and relies on the recovery of the notes from the reasoning / the call.
+    notes_tool_choice: str = "auto"
     # 0.3.23 automatic configuration (autoconfig.py): the options that depend on the engine and on the machine
     # are chosen at startup from harmless reads (engine version/window/saved state, RAM, optional VRAM) and
     # printed with their reason by `check --explain-config` and by the startup banner. A field written in the
@@ -2179,6 +2183,47 @@ class Manager:
                                 ids=[r[3] for r in rows][:50], pieces=pieces)
 
     # ---------- segmenti ----------
+    def handoff_text(self, msg: dict) -> tuple[str, str]:
+        """Text of the handoff notes from the engine's reply -> (notes, status): clean | recovered | fallback.
+
+        0.3.27: a model that answers the notes request with a tool call and no text (Qwen3.6 on Unsloth, twice in a
+        row) left the new segment with the empty fallback. Its reasoning and the call it attempted are what it was
+        about to do: they become the notes, marked as recovered, instead of being thrown away."""
+        content = msg.get("content") or ""
+        content = content if isinstance(content, str) else ""
+        think = ""
+        if "</think>" in content:                   # engines that leave the reasoning inside the content
+            think, content = content.rsplit("</think>", 1)
+            think = think.replace("<think>", "")
+        content = content.strip()
+        calls = msg.get("tool_calls") or []
+        if content and not calls:
+            return content, "clean"
+        reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or think or "")
+        reasoning = reasoning.strip() if isinstance(reasoning, str) else ""
+        intents = []
+        for c in calls:
+            f = c.get("function") or {}
+            a = f.get("arguments")
+            a = a if isinstance(a, str) else json.dumps(a, ensure_ascii=False)
+            a = re.sub(r"\s+", " ", a or "").strip()
+            intents.append("- %s(%s)" % (f.get("name") or "?", a[:300] + ("\u2026" if len(a) > 300 else "")))
+        if not (content or reasoning or intents):
+            return "", "fallback"
+        cap = max(1000, int(self.cfg.notes_max_tokens) * 3)      # characters, about the notes' own token budget
+        parts = [self.L("[note ricostruite dal proxy: il modello non ha scritto le note in testo]",
+                        "[notes rebuilt by the proxy: the model did not write the notes as text]")]
+        if content:
+            parts.append(content)
+        if reasoning:
+            r = reasoning if len(reasoning) <= cap else "\u2026" + reasoning[-cap:]
+            parts.append(self.L("Ragionamento al momento del cambio di segmento:\n",
+                                "Reasoning at the segment switch:\n") + r)
+        if intents:
+            parts.append(self.L("Azione che stava per eseguire (non eseguita):\n",
+                                "Action it was about to take (not executed):\n") + "\n".join(intents))
+        return "\n\n".join(parts), "recovered"
+
     def choose_cut(self, msgs, origin, per, start):
         """Indice client c da cui parte la coda di B. Preferenza: prima di un messaggio user umano con coda
         <= tail_max; altrimenti confine di gruppo (assistant dopo tool/user: chiamate e risultati completi).
@@ -2246,9 +2291,11 @@ class Manager:
                                        window=cfg.window, cut_index=c, cut_kind=kind))
         # 1) note di passaggio in coda ad A (stesso system/tool/reasoning: il prefisso resta in cache)
         t0 = time.time()
-        notes, usage, finish, timings = "", {}, None, None
+        notes, usage, finish, timings, status = "", {}, None, None, "fallback"
         instr = {"role": "user", "content": self.L(NOTES_INSTRUCTION, NOTES_INSTRUCTION_EN).replace("{rn}", self.rn)}
         nbody = {**params, "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False}
+        if str(getattr(cfg, "notes_tool_choice", "auto")) == "none":
+            nbody["tool_choice"] = "none"
         nt = str(getattr(cfg, "notes_thinking", "auto") or "auto")
         if nt == "off":
             ctk = params.get("chat_template_kwargs") if isinstance(params.get("chat_template_kwargs"), dict) else {}
@@ -2265,13 +2312,16 @@ class Manager:
                                            of=len(phys)))
         try:
             r = labeled_chat(upstream, {**nbody, "messages": src + [instr]}, "notes")
-            notes = (r["choices"][0]["message"].get("content") or "").strip()
+            notes, status = self.handoff_text(r["choices"][0].get("message") or {})
             usage = r.get("usage") or {}
             finish, timings = r["choices"][0].get("finish_reason"), r.get("timings")
         except Exception as e:  # noqa: BLE001
             events.append(self.journal.log("notes_error", conv=conv, error=str(e)[:300]))
+        if not notes:
+            status = "fallback"
         events.append(self.journal.log("notes", conv=conv, seg=seg + 1, ms=round((time.time() - t0) * 1000),
                                        tokens=self.tc.count(notes), usage=usage, finish=finish, timings=timings,
+                                       handoff_status=status,
                                        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens")))
         if not notes:
             notes = self.L("(note non disponibili: usa %s per ricostruire i dettagli)",

@@ -314,6 +314,7 @@ measurements, and changing them is rarely necessary.
 | `recall_removal` | "value" | what the recall loop gives up first when space runs out: `value` \| `reasoning` \| `age` |
 | `final_drop_internal_tools` | true | a final call made for lack of space goes without the proxy's own tools |
 | `notes_thinking` | "auto" | thinking while writing handoff notes: `auto` (on when the engine leaves room) \| `off` \| `on` |
+| `notes_tool_choice` | "auto" | `tool_choice` of the handoff-notes request: `none` forbids a tool call, `keep` sends nothing. `auto` = `keep` on every engine: with `none` both Strata and llama-server drop the tools from the template, so the whole segment is read again before the notes (measured through Unsloth: 13.2 s instead of 1.5 s on 11.7K tokens). A call that comes back anyway is turned into rebuilt notes |
 
 </details>
 

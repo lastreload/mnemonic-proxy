@@ -14,6 +14,8 @@ Archived content stays verbatim; the model writes handoff notes at segment switc
 3. **Segment — handoff notes.** When even the masked window fills up, the model writes its own notes, the segment is
    sealed and a fresh one starts. Pinned lines (`!!` or `📌`) survive every switch; lines starting with `🗑` (or `~`)
    mark a message as disposable once answered.
+   If the model answers the notes request with a tool call and no text, its reasoning and the call it was about to
+   make become the notes, marked as rebuilt by the proxy (journal: `handoff_status` clean / recovered / fallback).
    *A copy is labelled a copy.* Several of these blocks — handoff notes, the verbatim first request, the 📌 block,
    an automatic-recall insertion — are themselves `role:"user"` messages, so a client's own control frame carried
    inside them would read as a fresh delivery. Clients mark out-of-band messages with frames the model is told to
