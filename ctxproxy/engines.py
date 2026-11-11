@@ -379,16 +379,20 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         warn.append("window from engine n_ctx: %d (was %d); thresholds scaled x%.3f" % (cfg.window, old, ratio))
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
-    elif not engine.n_ctx and "window" in explicit and 0 < int(cfg.window or 0) < BASE_WINDOW:
+    elif "window" in explicit and 0 < int(cfg.window or 0) < BASE_WINDOW:
         # 0.3.24: a plain OpenAI-compatible engine reports no context, so `window` has to be written — and
         # until now the %d-sized defaults stayed behind it, so a 32K setup had to repeat every single
         # threshold by hand (examples/config.openai-32k.json, whose values ARE this scaling). Scale them
         # here exactly as the engine-n_ctx branch above, so `{"window": 32768}` is a complete 32K config.
+        # 0.3.26: also when the engine does report an n_ctx bigger than the written window (Strata 0.2.13 with
+        # 131072 and {"window": 32768}): the 131K thresholds stayed behind it (mask_trigger 80000 above the
+        # window, reserve 8192) and every request switched segment.
         ratio = int(cfg.window) / float(BASE_WINDOW)
         scaled = _scale(cfg, explicit, ratio)
         if scaled:
-            warn.append("window %d written in the config and the engine reports none; thresholds scaled "
-                        "x%.3f from the %d defaults" % (cfg.window, ratio, BASE_WINDOW))
+            warn.append("window %d written in the config (%s); thresholds scaled x%.3f from the %d defaults"
+                        % (cfg.window, "engine n_ctx %d" % engine.n_ctx if engine.n_ctx else "the engine reports none",
+                           ratio, BASE_WINDOW))
             if journal is not None:
                 journal.log("config_window", window=cfg.window, scaled=scaled)
     # una risposta minima che da sola riempie (quasi) la finestra fa scattare un cambio di segmento a ogni richiesta
