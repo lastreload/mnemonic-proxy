@@ -2,6 +2,11 @@
 
 ## 0.3.26 — unreleased
 
+- **DeepSeek Harness**: tested (`dsh` 0.2.2-rc.1, headless profile, in front of Unsloth with Qwen3.6-35B-A3B and a
+  64K window): a custom `openai-completions` provider pointed at the proxy, dsh's compaction and tool-result pruning
+  off. 7 requests, 0 errors, exact answers after masking, the hidden code brought back with `recall` in the next turn.
+  Setup and numbers in [DeepSeek Harness](docs/agents.md#deepseek-harness-chat-completions). Asked for by
+  u/Due-Advantage-9777.
 ## 0.3.25 — 2026-11-11
 
 - **Dashboard**: the strings #74 left untranslated (the error chip, the `chars` / `placeholder` labels of the
