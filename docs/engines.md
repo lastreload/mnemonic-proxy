@@ -79,6 +79,9 @@ that model); to avoid even that, set `mask_anchor`, `slot_save`, `autosave`, `au
   `examples/config.official-strata.json` the one for Strata without `--slot-save-path` (or older than 0.1.40).
 - **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
   handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
+- **Unsloth** (`unsloth run`, Unsloth Studio) — recognised as llama-server through Unsloth's API (`/props`,
+  `/slots`), window read from it, API key passed with `--api-key`. No saved state: the API does not pass on slot
+  save/restore. Setup in [Install](install.md#install), results in [Unsloth, measured](#unsloth-measured).
 - **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — automatic detection, tool-call ids untouched, no
   duplicate saving (ds4 has `--kv-disk-dir`). Tested with pi, see below.
 
@@ -191,6 +194,33 @@ Reports (Italian): [DS4-LONG-RESULT.md](https://github.com/lastreload/mnemonic-p
 `GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/ENGINES-RESULT.md) (Italian).
 
 ## Tested combinations
+
+### Unsloth, measured
+
+**0.3.24, Unsloth 2026.11.3** (2026-11-09): AI395 (Ryzen AI Max+ 395, Radeon 8060S, Vulkan). Unsloth installed with
+its own script (`--no-torch`; prebuilt llama.cpp `b12209`, Vulkan), started with `unsloth run --model
+Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL.gguf --context-length 32768 --api-only -p 8888 --disable-tools` and Unsloth's
+defaults for the rest (4 slots, MTP drafting, reasoning on). Proxy 0.3.24 from PyPI, no config, no `--tokenizer`,
+`--upstream http://127.0.0.1:8888 --api-key …`. Client: a small Python agent loop, not an agent CLI, with the tools
+`list_files`, `read_file` and `calc`. Task: read 12 files of about 3.8K tokens each, add up their totals, then quote
+a code written only in file 1.
+
+| | |
+|---|---|
+| `check` | `READY`: engine detected as llama.cpp, window 32768 read through Unsloth, saved state off |
+| `check --live` | `READY with warnings`: the tool-call probe ran out of its 128 tokens while the model was still reasoning (same answer straight from Unsloth: `finish_reason: length`) |
+| requests | 30 through the proxy, all HTTP 200; 0 `upstream_error`, 0 `proxy_error` |
+| history vs prompt | 73.9K tokens archived; largest prompt 28,358 tokens (window 32,768) |
+| masking | 4 masks, 17 blocks, 64.6K tokens taken out of the prompt; the first was an emergency mask, because the model read all 12 files in one turn (22.8K tokens) |
+| `recall` | 24 calls by the model, served inside the proxy; after the second segment switch it brought file 1 back verbatim by id (3,821 tokens). One `path` call came back empty |
+| segments | 2 switches; both times the model answered the notes request with a tool call instead of notes (`finish_reason: tool_calls`), so the proxy used its fallback note ("use recall") |
+| answers | the sum of the 12 totals right (82,885); the code from file 1 quoted exactly, with no new `read_file` |
+| streaming, `/v1/messages`, `/v1/responses` | 499 chunks; HTTP 200; `completed` |
+| resume after a pause (separate run) | a session of about 9.7K tokens through the proxy: read cold in 10.6 s, the next turn 0.48 s with 9,712 tokens cached. The cache also survived other prompts in between: after three other prompts of the same size (10.8–14.5 s each, the kind of side requests an agent may send) the session came back in 0.44–0.91 s with 9.7K tokens cached, taken from llama-server's RAM prompt cache (`found better prompt with f_keep = 1.000`, 33 ms; about 520 MiB per prompt, `--cache-ram` default 8192 MiB). Lost when Unsloth restarts |
+
+The empty notes do not come from Unsloth: with the proxy pointed straight at Unsloth's private `llama-server` (same
+process, same model) the notes request got the same `tool_calls` answer. Not shown: an agent CLI on Unsloth, long
+sessions, Unsloth's server-side tools, the desktop app, Windows and macOS.
 
 ### opencode on Strata, measured
 

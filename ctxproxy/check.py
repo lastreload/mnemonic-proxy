@@ -55,10 +55,11 @@ class Report:
         return 1 if FAIL in st else 2 if WARN in st else 0
 
 
-def _get(url, timeout=5.0):
-    """-> (status, parsed JSON or text) ; status 0 = not reachable."""
+def _get(url, timeout=5.0, headers=None):
+    """-> (status, parsed JSON or text) ; status 0 = not reachable.  `headers`: e.g. the engine's API key, so that
+    an engine with authentication (Unsloth, a gateway) answers /v1/models instead of 401."""
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers or {}), timeout=timeout) as r:
             data, st = r.read(), r.status
     except urllib.error.HTTPError as e:
         data, st = e.read(), e.code
@@ -158,8 +159,9 @@ def run_checks(a, raw_cfg: dict, cfg: Config, live: bool = False, config_error=N
                 "pick a free --port (and the same port in the client's base URL)")
     # --- upstream
     up = Upstream(a.upstream, a.api_key, timeout=10)
-    st_h, h = _get(up.base + "/health", 5)
-    st_m, models = _get(up.base + "/v1/models", 5)
+    auth = {"Authorization": "Bearer " + a.api_key} if a.api_key else None
+    st_h, h = _get(up.base + "/health", 5, auth)
+    st_m, models = _get(up.base + "/v1/models", 5, auth)
     if st_h == 0 and st_m == 0:
         rep.add(FAIL, "engine reachable", "%s does not answer (%s)" % (a.upstream, h),
                 "start the engine first (llama-server ... --port N) and pass the same URL to --upstream")
