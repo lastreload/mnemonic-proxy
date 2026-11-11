@@ -1,7 +1,10 @@
 # Changelog
 
-## 0.3.26 — unreleased
+## 0.3.26 — 2026-11-11
 
+- **Dashboard: Strata's API key** (`--api-key-file`): when Strata requires a key, the dashboard sends it as a
+  Bearer header to `/status` and `/metrics`, which otherwise answered with an error. The key is read from a file,
+  never from the command line; a missing or empty file stops the start with a clear error. By LawiK974 (#83).
 - **A `window` below the engine's n_ctx scales the thresholds** (found on Strata 0.2.13). With an engine that
   reports its context (Strata, llama-server, ds4) and a smaller `window` written in the config, the window was
   used but the thresholds stayed at their 131K defaults: `mask_trigger` 80000 above a 32768 window, `tail_max`
