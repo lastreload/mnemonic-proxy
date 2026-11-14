@@ -1464,6 +1464,13 @@ class Manager:
         elif known < len(hs) - 1 and known >= 0 and self.store.has_successor(conv, known):
             # un messaggio in posizione known+1 era già stato visto, ma diverso: modifica/rigenerazione = ramo
             events.append(self.journal.log("branch", conv=conv, known=known, messages=len(msgs)))
+        # Persist first-use defaults before the chain makes this conversation discoverable.
+        # If archiving/counting/scanning fails, a retry must not mistake our own partial
+        # conversation for a pre-0.3.1 archive and inject legacy Italian instructions.
+        names = self.tool_names(conv, client_tools, legacy=existed)
+        self.rn, self.tn = names["recall"], names["tools"]
+        self.lang = self.prompt_lang(conv, existed)
+        self.rich = self.receipt_detail(conv, existed)
         self.store.add_chain(conv, hs)
         now = time.time()
         rows = [(rid_for(i, m), conv, i, m.get("role"), m.get("name") or m.get("tool_call_id"),
@@ -1483,10 +1490,6 @@ class Manager:
         events.extend(self._scan_marks(conv, msgs, hs))
         events.extend(self._scan_fileops(conv, msgs))
 
-        names = self.tool_names(conv, client_tools, legacy=existed)
-        self.rn, self.tn = names["recall"], names["tools"]
-        self.lang = self.prompt_lang(conv, existed)
-        self.rich = self.receipt_detail(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
         base_tools: list = []

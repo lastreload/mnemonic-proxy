@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.3.27 — unreleased
+## 0.3.27 — 2026-11-14
+
+- **New conversations keep their configured defaults after an interrupted first preparation.** Language, tool
+  names and receipt format are now saved before the conversation's chain becomes discoverable. Previously, an
+  interruption in that window could make a new English conversation resume with legacy Italian instructions and
+  tool names. Existing conversations and archived text are unchanged; already misclassified archives are not
+  migrated. Regression tests capture the HTTP payload after an injected failure and database reopen, and cover
+  language hints, legacy compatibility and segment handoff. This fixes a reproduced interruption path related
+  to #88, not a confirmed cause of the reporter's model switching language. Test: `tests/test_language_recovery.py`.
+
 
 - **Handoff notes that come back as a tool call are no longer lost.** With Qwen3.6 on Unsloth the model answered
   the notes request twice in a row with a tool call and no text, and the new segment started with the empty
