@@ -3,8 +3,12 @@
 
 New conversations use `Config.prompt_language` (default "en"). The choice is stored per conversation on first use
 (kv `prompt_language:<conv>`), so the physical prompt stays identical across requests and restarts. A conversation
-that already has data in the archive but no stored language was born before 0.3.1 and keeps Italian: its stable
+that already has a chain in the archive but no stored language is treated as pre-0.3.1 and keeps Italian: its stable
 prefix (archive, session files, KV cache) stays valid byte for byte.
+
+First-use language, tool names and receipt format are persisted before the chain makes a new conversation
+recognizable. Otherwise an interrupted first preparation could make its retry look like a legacy conversation.
+Existing archives without those keys keep the legacy behavior; their provenance cannot be inferred safely.
 
 Recognition of the proxy's own markers (placeholders, receipts, guard, notes request...) accepts BOTH languages in
 every conversation: an Italian marker inside an English conversation (or the reverse) is still recognized.
