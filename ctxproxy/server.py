@@ -310,6 +310,7 @@ class Proxy:
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
+            deliver = None            # #90: turno misto servito senza rilanciare il modello (vedi sotto)
             if guard_on and final and not others and tries < FINAL_ATTEMPTS \
                     and not (msg.get("content") or "").strip():
                 # 0.3.5: the final round (no internal tools offered) returned ONLY internal calls - the model saw
@@ -346,19 +347,41 @@ class Proxy:
                     phys = phys0 + clean(loop)
                     continue
             if others or rnd > self.cfg.max_recall_rounds or final:
-                # chiamate miste (o troppi giri, o giro finale per spazio): al client vanno solo le sue; la recall
-                # non eseguita sparisce.
-                msg["tool_calls"] = others or None
-                if not others:
-                    msg.pop("tool_calls", None)
-                    resp["choices"][0]["finish_reason"] = "stop"
-                self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
-                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final,
-                                 retry=made > 0, retry_no_room=tries > made, attempts=made, thinking_off=no_think)
-                break
+                # chiamate miste (o troppi giri, o giro finale per spazio).
+                # fix #90: in un turno misto le chiamate di PAGINAZIONE (caricatore `tools` e chiamata a uno
+                # strumento del catalogo non ancora caricato) non si scartano: sono letture di definizioni, senza
+                # effetti collaterali. Si eseguono qui, al client vanno solo le sue chiamate e il modello NON
+                # viene rilanciato in questo turno (riemetterebbe azioni che il client ha già ricevuto): trova le
+                # definizioni al turno dopo, reinserite con gli altri eventi interni. Fuori dai giri interni
+                # disponibili (tetto giri, giro finale per spazio) resta lo scarto di prima.
+                load = [c for c in mine if c not in blocked
+                        and (c.get("function") or {}).get("name") not in p.recall_aliases] \
+                    if others and not (rnd > self.cfg.max_recall_rounds or final) else []
+                if not load:
+                    # la recall non eseguita sparisce (invariato: vedi test_mixed_calls_*)
+                    msg["tool_calls"] = others or None
+                    if not others:
+                        msg.pop("tool_calls", None)
+                        resp["choices"][0]["finish_reason"] = "stop"
+                    self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
+                                     names=sorted({(c.get("function") or {}).get("name") for c in mine}),
+                                     final=final, retry=made > 0, retry_no_room=tries > made, attempts=made,
+                                     thinking_off=no_think)
+                    break
+                deliver = others
+                if len(load) < len(mine):
+                    # recall o chiamate bloccate dal receipt_guard nello stesso turno: scartate come prima
+                    self.journal.log("recall_dropped", conv=p.conv, count=len(mine) - len(load), mixed=True,
+                                     round=rnd, names=sorted({(c.get("function") or {}).get("name") for c in mine
+                                                              if c not in load}),
+                                     final=final, retry=made > 0, retry_no_room=tries > made, attempts=made,
+                                     thinking_off=no_think)
+                mine = load
+                n_strip = len(strip_c)
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
-            amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
-            if msg.get("reasoning_content"):
+            amsg = {"role": "assistant", "content": "" if deliver is not None else (msg.get("content") or ""),
+                    "tool_calls": mine}
+            if msg.get("reasoning_content") and deliver is None:
                 amsg["reasoning_content"] = msg["reasoning_content"]
             new = [amsg]
             if emit:
@@ -423,7 +446,8 @@ class Proxy:
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     done.append(c)
                     if emit:
-                        info = "\n[%s: definizioni caricate]\n" % cname
+                        info = ("\n[%s: definizioni caricate]\n" if p.lang == "it" else
+                                "\n[%s: definitions loaded]\n") % cname
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_r[-1] += info
                     continue
@@ -506,6 +530,13 @@ class Proxy:
             else:
                 phys += new
                 internal += new
+            if deliver is not None:
+                # fix #90: al client solo le sue chiamate, intatte; testo e ragionamento di questo giro restano
+                # suoi (non ne teniamo copia interna, quindi niente strip: altrimenti andrebbero persi).
+                msg["tool_calls"] = deliver
+                del strip_c[n_strip:]
+                del strip_r[n_strip:]
+                break
         if guard_on:
             internal = clean(loop)
         # controllo post-risposta (K) e pulizia del ragionamento di T/K (answerfix.py)
