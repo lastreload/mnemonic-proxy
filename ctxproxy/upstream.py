@@ -10,6 +10,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from .nativetools import wire_body
 from .savedstate import SavedState
 
 
@@ -144,7 +145,8 @@ class Upstream:
         self.saved_state.select(body.get("model"))
         body = self._guard(self._model({**self.extra_body,
                                         **{k: v for k, v in body.items() if k not in ("stream", "stream_options")}}))
-        r = self._chat_once_with_context_retry(body, lambda b: self.post_json("/v1/chat/completions", b))
+        r = self._chat_once_with_context_retry(wire_body(body),
+                                               lambda b: self.post_json("/v1/chat/completions", b))
         self._watch(self._count(), r.get("usage") if isinstance(r, dict) else None)
         return r
 
@@ -154,7 +156,7 @@ class Upstream:
         self.saved_state.select(body.get("model"))
         body = self._guard(self._model({**self.extra_body, **body, "stream": True,
                                         "stream_options": {"include_usage": True}}))
-        sc = self._chat_once_with_context_retry(body, lambda b: StreamCall(self, b))
+        sc = self._chat_once_with_context_retry(wire_body(body), lambda b: StreamCall(self, b))
         if self.truncwatch is not None:
             sc.est = self._count()
         return sc

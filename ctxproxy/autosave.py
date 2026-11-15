@@ -26,8 +26,8 @@ import threading
 import time
 
 from .core import H
-from .render import (LITERAL_MARKER, VISION, image_hashes, quote_markers, render_pieces, stamp_images,
-                     template_kwargs, volatile_pictures)
+from .render import (LITERAL_MARKER, VISION, image_hashes, prompt_tools, quote_markers, render_pieces,
+                     stamp_images, template_kwargs, volatile_pictures)
 from .savedstate import SavedStateUnavailable, state_available
 from .upstream import UpstreamError
 
@@ -53,7 +53,7 @@ def prompt_text(body: dict) -> str | None:
         # Una citazione del marcatore nel testo non è un'immagine: senza piegarla prima di firmare, la firma sotto
         # si sposterebbe e un'immagine reale resterebbe nominata dall'hash di un'altra.
         src = quote_markers(msgs)
-        pieces = render_pieces(src, body.get("tools") or None, template_kwargs(body), add_generation_prompt=False)
+        pieces = render_pieces(src, prompt_tools(body), template_kwargs(body), add_generation_prompt=False)
         text = "".join(t for _, t in pieces)
         hashes = [h for i, _ in pieces if i is not None for h in image_hashes(src[i].get("content"))]
         if not hashes:

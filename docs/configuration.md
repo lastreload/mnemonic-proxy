@@ -186,6 +186,8 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 | `answer_thinking_after_recall`, `answer_thinking_budget` | false, 512 | turn thinking on only for the answer that follows a recall (fixes answers cut in the middle of a value) | default (experimental) |
 | `truncation_guard` | false | replay once, with thinking, a short answer that ends on a prefix of a recalled token | default (experimental) |
 | `tools_paging`, `tools_core` | false, read/bash/edit/write/grep/find/ls + read_file/write_file/patch/search_files/terminal | tools on demand: only core tools + `recall` + `tools` in the prompt. The second group is Hermes' base names (0.3.24): without them the whole Hermes tool list went to the catalog and only `recall` and `tools` stayed in the head. A name the client does not have changes nothing | **true** (opt-in: it changes the prompt) |
+| `tools_paging_native_schemas` | false | with `tools_paging` on, put the **full schema** of every tool already loaded back into the request's `tools` array. For engines whose native tool-call grammar and parser are built only from that array (llama.cpp): without it a loaded tool can be described in the prompt and still be impossible to call, and the model keeps calling the `tools` loader instead (issue #90, measured with Qwen3.5-9B on llama.cpp b11723). Cost: the `<tools>` block sits at the head of the prompt, so the first load of a schema re-reads the cached prefix once; the schema then also appears twice (head + loader result). Not needed in front of Strata | default (opt-in: it changes the prompt and the cached prefix) |
+| `tools_paging_native_split`, `tools_paging_native_split_build`, `tools_paging_native_split_template_sha256` | false, "31288c9c6", "" | with `tools_paging` on, the variant of the line above that does **not** invalidate the cached prefix: the visible catalog goes to `chat_template_kwargs.tools` in canonical form (the template renders it with precedence over `tools`, `common/chat.cpp:894-902`) and the request's `tools` array carries catalog **plus** loaded schemas, i.e. grammar and parser only. The rendered prompt stays byte-identical, so a new load no longer re-reads the head. Opt-in **and** gated — see [Native tool-call split](#native-tool-call-split-experimental-llamacpp) for the gate, the pins, the diagnostics and the limits | default (opt-in, experimental: it changes the request sent to the engine) |
 | `typed_receipts`, `receipt_guard` | true, true | typed one-line receipts for hidden outputs; block write/edit/shell calls (pi, Claude Code, Codex names) that copy a receipt or the shortened form of an old argument | default |
 | `pins_max_tokens` | 8192 | cap of the carried-over 📌 block | default |
 | `autosave`, `autosave_idle_s`, `autosave_keep`, `autosave_max_gb`, `autosave_min_free_gb` | false, 180, 10, 25, 8 | save engine state when the conversation is idle (saved state) | **chosen automatically**, 180, 10, 25, 8 |
@@ -221,6 +223,94 @@ this documentation correction does not enable automatic retrieval or change thei
 
 On a generic OpenAI engine drop the saved-state fields (`mask_anchor`, `slot_dir`, `slot_save`,
 `seal_experimental`, `autosave`, `kv_archive`); the proxy turns them off anyway, with a warning.
+
+## Native tool-call split (experimental, llama.cpp)
+
+**The problem.** With `tools_paging` on, a tool whose definition the model loaded at runtime is
+described in the **prompt text** (the loader's result), but llama.cpp builds the tool-call grammar
+and parser only from the request's `tools` array: the loaded tool is readable and still not
+callable, so the model keeps calling the `tools` loader instead. Putting the loaded schemas back
+into `tools` (`tools_paging_native_schemas`) fixes the call and costs the cache: that array is
+rendered at the **head** of the prompt, so every new load changes the head and the engine re-reads
+the whole cached prefix.
+
+**The split.** `tools_paging_native_split` sends the two lists separately:
+
+| list | content | field | read by |
+|---|---|---|---|
+| rendered catalog | the turn's visible tools, canonical form, **stable for the whole turn** | `chat_template_kwargs.tools` | the template → prompt text, token counts, cached prefix |
+| grammar array | catalog **plus** the full schemas of the tools already loaded in the physical prompt | `tools` | the native grammar and parser of tool calls |
+
+llama.cpp renders `chat_template_kwargs.tools` with precedence over `tools`
+(`common/chat.cpp:894-902`), so the prompt head stops moving while the grammar grows. The proxy's
+own token count, window guard and state signature read the rendered list, never the grammar one.
+
+<!-- readme-test: illustrative; config: proxy -->
+```json
+{
+  "tools_paging": true,
+  "tools_paging_native_split": true,
+  "tools_paging_native_split_build": "31288c9c6",
+  "tools_paging_native_split_template_sha256": ""
+}
+```
+
+Restart the proxy after the change (the options are read at startup) and keep
+`tools_paging_native_schemas` **off**: see the conflict rules below.
+
+**Engine setup.** llama-server started with `--jinja` and a chat template whose tool-call format
+uses the dedicated handler (`<tool_call>` + `<function=` + `<parameter=`, and not a template that
+builds the function name inside the tag). Qualified here: llama.cpp **build 11723, revision
+`31288c9c6`**, with Qwen3.5-9B-Q8 and the template whose sha256 is
+`7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67`.
+
+**The gate.** The mode is opt-in and, once on, still qualified per engine (engine kind + URL,
+evaluated once):
+
+- engine detected as `llama.cpp`;
+- `/props` answers with a `build_info` that **contains** `tools_paging_native_split_build` — by
+  default the measured revision `31288c9c6`, because grammar and parser were qualified on that
+  source, not on "some llama.cpp". Set it to another string to pin another build you qualified
+  yourself, or to `""` to drop the pin entirely (then the verification is yours);
+- `/props` answers with a `chat_template` that carries the three dedicated-handler markers and not
+  the exclusion marker; set `tools_paging_native_split_template_sha256` (a full sha256 or a
+  prefix) to pin the exact template as well.
+
+`/apply-template` is not used as proof: it returns only the prompt, so the grammar and parser side
+is verified out of band, once per engine source, and the gate checks the necessary conditions it
+can observe. **Qualified is not the same as necessary**: these checks say "this is the engine the
+mode was measured against", they do not prove that another llama.cpp build would break.
+
+**Diagnostics.** One journal line per engine, `native_split_gate`, with `ok`, the reason and the
+details (`build_info`, markers found, `template_sha256`, the pins asked for). When it does not
+qualify the proxy logs one warning and keeps the standard behaviour — loaded tools described in
+the prompt, native call not admitted — and **never** falls back to `tools_paging_native_schemas`.
+
+**Conflicts and how to switch the mode off.**
+
+- A client that sends its own `chat_template_kwargs.tools` keeps it: the proxy does not overwrite
+  it, the split is skipped for that request (`native_split_skip`, journalled once) and no schema is
+  promoted. In that round the model cannot call a loaded tool: if your client sets that field, use
+  `tools_paging_native_schemas` instead, or stop sending it.
+- Both options on at once is not a sum: the split wins and the old promotion stays off for the
+  rendered catalog (promoting schemas there would put back exactly the head that invalidates the
+  prefix), journalled once as `native_split_overrides_schemas`. With the gate closed the explicit
+  `tools_paging_native_schemas` behaviour is kept, so neither direction is a surprise.
+- To go back, set `tools_paging_native_split` to `false` and restart: the request goes out exactly
+  as before (no `chat_template_kwargs.tools` added, `tools` as the pager built it).
+
+**What stays the same, and what the model sees.** With the mode on, the visible catalog and the
+messages do not change: the rendered list is the same canonical catalog in every round, including
+round 0, rounds with `tool_choice: none` and the final round, so segment switches, counters and the
+state signature stay consistent. A tool the client revokes still changes the rendered list (and the
+conversation identity): loads are hidden from the prompt head, revocations are not. The price,
+declared: in the final round the model still **reads** the proxy's internal tools in the text
+(grammar excludes them, so it cannot call them), and the loaded schema is in the grammar array only.
+
+**Limits.** Measured on one engine, one model, one template and single runs — see
+[What we have not proven](limits.md). This is an experimental compatibility mode for llama.cpp, not
+a general speed-up: nothing changes in front of Strata, which does not need it, and the cold prefill
+of a first turn is unaffected.
 
 ## Every command-line option
 

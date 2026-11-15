@@ -31,3 +31,12 @@
   `/models` at every request), `check --live`. A client that goes away while a model loads frees the proxy only when
   the load ends (the proxy does not stop a load in progress).
 - Numbers come from single runs on one machine and one kind of workload; treat them as indicative.
+- The native tool-call split (`tools_paging_native_split`, 0.3.29) is qualified on **one** engine source
+  (llama.cpp build 11723, revision `31288c9c6`), one model (Qwen3.5-9B-Q8), one chat template and single runs: two
+  consecutive definition loads kept the cached prefix (133 and 425 tokens read, prompt processing 362 ms and 841 ms)
+  where the schema promotion re-read the head (37,124 and 38,020 tokens, 49.0 s and 50.3 s of prompt processing —
+  that is prompt-processing cost, not total request latency). No repetitions, no medians, nothing about other builds,
+  templates, models or clients, and no general speed-up claim. The grammar and parser side is not observable from
+  the engine's endpoints: it was qualified out of band against the engine's own source, so the gate checks necessary
+  conditions, not sufficient ones.
+- Issue #90's reporter case is not reproduced: his model and his version were never measured here.
