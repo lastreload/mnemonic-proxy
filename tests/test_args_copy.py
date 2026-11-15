@@ -34,10 +34,13 @@ def masked_value(name, key, value):
 
 class TestGuardUnit(unittest.TestCase):
     def test_masked_value_is_recognised(self):
-        # pi (write/edit), Claude Code (Write/Edit/MultiEdit), Codex (apply_patch, exec_command)
+        # pi (write/edit), Claude Code (Write/Edit/MultiEdit), Codex (apply_patch, exec_command),
+        # Cline (editor/write_to_file/run_commands: prima non erano in GUARD_NAMES, quindi con quel client
+        # la guardia non scattava mai)
         for name, key in (("write", "content"), ("Write", "content"), ("edit", "newText"), ("Edit", "new_string"),
                           ("MultiEdit", "edits"), ("apply_patch", "input"), ("exec_command", "cmd"),
-                          ("Bash", "command")):
+                          ("Bash", "command"), ("editor", "new_text"), ("write_to_file", "content"),
+                          ("run_commands", "commands")):
             v = masked_value(name, key, SRC)
             self.assertNotEqual(v, SRC)
             self.assertTrue(receipt_contaminated(name, json.dumps({"path": "a.py", key: v})), name)
@@ -50,6 +53,8 @@ class TestGuardUnit(unittest.TestCase):
 
     def test_real_code_passes(self):
         self.assertFalse(receipt_contaminated("Write", json.dumps({"path": "a.py", "content": SRC})))
+        self.assertFalse(receipt_contaminated("editor", json.dumps({"path": "a.py", "new_text": SRC})))
+
         self.assertFalse(receipt_contaminated("Write", json.dumps({"content": "print('attendere\u2026')\n"})))
         self.assertFalse(receipt_contaminated("Read", json.dumps({"path": masked_value("Write", "content", SRC)})))
 
@@ -104,6 +109,49 @@ class TestCopiedArgsProxy(Base):
         names = [tc["function"]["name"] for ch in chunks if ch for c in ch.get("choices") or []
                  for tc in (c.get("delta") or {}).get("tool_calls") or [] if (tc.get("function") or {}).get("name")]
         self.assertEqual(names, ["Read"])
+
+
+class TestCopiedArgsProxyCline(Base):
+    """The call a Cline session made in the field (12/11 01:22): the model copies the shortened argument of an old
+    `editor` call into a new one, because it saw the `…` line in its own history.
+
+    With Cline's tool names in GUARD_NAMES the proxy blocks it before the client sees it; on 0.3.26 the same call was
+    forwarded, so the `…` would have been written to the file.
+    """
+
+    cfg_over = {"mask_reasoning": True, "mask_tool_args": True, "min_batch_tokens": 2000, "mask_trigger": 6000,
+                "mask_target": 3000, "keep_recent_tokens": 1500}
+
+    def policy(self, body):
+        last = body["messages"][-1]
+        if last.get("role") == "user" and "riscrivi" in str(last.get("content")):
+            old = next(m for m in body["messages"] if m.get("role") == "assistant" and m.get("tool_calls")
+                       and m["tool_calls"][0]["id"] == "e1")
+            seen = json.loads(old["tool_calls"][0]["function"]["arguments"])["new_text"]
+            self.copied = seen
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [wcall("e99", "editor", path="f1.py", new_text=seen)]}
+        if last.get("role") == "tool" and last.get("tool_call_id") == "e99":
+            self.guard_msg = last["content"]
+            return {"role": "assistant", "content": "",
+                    "tool_calls": [wcall("r1", "run_commands", commands=["sed -n 1,5p f1.py"])]}
+        return {"role": "assistant", "content": "ok"}
+
+    def test_copied_placeholder_in_a_cline_editor_call_is_blocked(self):
+        h = [SYSTEM, {"role": "user", "content": "scrivi i file"}]
+        for k in range(1, 18):
+            cid = "e%d" % k
+            h += [{"role": "assistant", "content": "",
+                   "tool_calls": [wcall(cid, "editor", path="f%d.py" % k, new_text=SRC)]},
+                  {"role": "tool", "tool_call_id": cid, "content": "Inserted content"}]
+            self.send(h)
+        self.assertTrue(self.events("mask"))
+        r, _ = self.send(h + [{"role": "user", "content": "riscrivi f1.py"}])
+        self.assertNotEqual(self.copied, SRC, "the old argument must be shortened in the physical prompt")
+        m = r["choices"][0]["message"]
+        self.assertEqual([c["function"]["name"] for c in m["tool_calls"]], ["run_commands"])
+        self.assertIn("recall", self.guard_msg)
+        self.assertEqual(len(self.events("receipt_guard")), 1)
 
 
 if __name__ == "__main__":
