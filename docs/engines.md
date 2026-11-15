@@ -17,6 +17,9 @@ against a mock engine and with short real client runs, not yet on long real sess
   before a switch, autosave/autorestore, `kv_archive`). The window comes from the server's `n_ctx` unless `window` is
   set; with `--parallel N` the proxy pins one slot (`slot_id`, default 0). Without `--slot-save-path` the proxy runs
   in base mode.
+  With the tool pager on, making a tool loaded at runtime callable here needs one of the two opt-in
+  modes in [Native tool-call split](configuration.md#native-tool-call-split-experimental-llamacpp): llama.cpp builds
+  the tool-call grammar only from the request's `tools` array.
 - **llama.cpp in router mode** (0.3.7, llama-server started without `-m`, models from `--models-preset` or
   `--models-dir`, loaded on demand) — detected automatically. The client's `model` picks the model; the proxy reads
   that model's n_ctx (its slot, `GET /slots?model=…`, loading the model if needed) **before** building the prompt, so
@@ -43,6 +46,20 @@ against a mock engine and with short real client runs, not yet on long real sess
   must be trusted: the hashes detect corruption, not tampering. Our measurements are from the session-files build
   (0.1.38 + PR #668, `8d8f664`); on 0.1.40 the proxy ran the AgentLongBench benchmark and the recall tests, but
   restore times were not re-measured there (see [Saved state, measured](benchmarks.md#saved-state-measured)).
+  `setup.sh` and `run-strata-proxy.sh` in the repository root (a venv, then the proxy in front of a running
+  Strata, `slot_dir` read from the Strata config) were contributed and are covered by unit tests; they are not yet
+  tested by the maintainer on a real Strata install.
+
+  `examples/config.example.json` is the configuration used with session files;
+  `examples/config.official-strata.json` the one for Strata without `--slot-save-path` (or older than 0.1.40).
+- **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
+  handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
+- **Unsloth** (`unsloth run`, Unsloth Studio) — recognised as llama-server through Unsloth's API (`/props`,
+  `/slots`), window read from it, API key passed with `--api-key`. No saved state: the API does not pass on slot
+  save/restore. Setup in [Install](install.md#install), results in [Unsloth, measured](#unsloth-measured).
+- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — automatic detection, tool-call ids untouched, no
+  duplicate saving (ds4 has `--kv-disk-dir`). Tested with pi, see below.
+
 **Saved state that the engine does not support.** After a reply that means "not supported", the proxy stops
 saved-state work for that model only (anchors and their one-token calls, segment seal/save, SAVE/RESTORE,
 autosave/autorestore, kv_archive). Masking, the text archive, `recall` and notes keep working.
@@ -71,19 +88,8 @@ recognises that 501 as permanent and suspends saved state for that model on the 
 releases** the first SAVE to a `strata-poly` model still ends the engine (the proxy then suspends saved state for
 that model); to avoid even that, set `mask_anchor`, `slot_save`, `autosave`, `autorestore`, `seal_experimental` and
 `kv_archive` to `false` for that model.
-  `setup.sh` and `run-strata-proxy.sh` in the repository root (a venv, then the proxy in front of a running
-  Strata, `slot_dir` read from the Strata config) were contributed and are covered by unit tests; they are not yet
-  tested by the maintainer on a real Strata install.
 
-  `examples/config.example.json` is the configuration used with session files;
-  `examples/config.official-strata.json` the one for Strata without `--slot-save-path` (or older than 0.1.40).
-- **Generic OpenAI-compatible** (vLLM, online APIs, …) — base mode: masking, archive + `recall`, segments with
-  handoff notes, 📌/🗑, streaming. No engine state, no saved files. Not tested on vLLM itself.
-- **Unsloth** (`unsloth run`, Unsloth Studio) — recognised as llama-server through Unsloth's API (`/props`,
-  `/slots`), window read from it, API key passed with `--api-key`. No saved state: the API does not pass on slot
-  save/restore. Setup in [Install](install.md#install), results in [Unsloth, measured](#unsloth-measured).
-- **ds4-server** ([antirez/ds4](https://github.com/antirez/ds4)) — automatic detection, tool-call ids untouched, no
-  duplicate saving (ds4 has `--kv-disk-dir`). Tested with pi, see below.
+`GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/ENGINES-RESULT.md) (Italian).
 
 ### ds4-server
 
@@ -190,8 +196,6 @@ the run used `DS4_CUDA_NO_Q8_F16_CACHE=1`.
 Reports (Italian): [DS4-LONG-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/DS4-LONG-RESULT.md) (16 steps, Qwen3.8),
 [DS4-LONG2-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/DS4-LONG2-RESULT.md) (29 steps, Qwen3.8),
 [DS4-FLASH-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/DS4-FLASH-RESULT.md) (16 steps, DeepSeek V4 Flash).
-
-`GET /v1/strata/engine` shows what was detected. Measurements: [docs/dev-notes/ENGINES-RESULT.md](https://github.com/lastreload/mnemonic-proxy/blob/main/docs/dev-notes/ENGINES-RESULT.md) (Italian).
 
 ## Tested combinations
 

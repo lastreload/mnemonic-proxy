@@ -30,6 +30,10 @@ Archived content stays verbatim; the model writes handoff notes at segment switc
    blocks: −36% disk on our sessions, sha256-verified before every restore.
 6. **Lean — tools on demand.** Agents ship tens of thousands of tokens of tool definitions. The proxy keeps the core
    ones and loads the rest by name: 25.6K → 6.2K tokens on every request.
+   On llama.cpp the native tool-call grammar is built only from the request's `tools` array, so making a tool
+   loaded at runtime callable there needs one of the two opt-in modes described in
+   [Native tool-call split](configuration.md#native-tool-call-split-experimental-llamacpp), which is also where
+   the cache cost of each is stated.
 
 > "In the courier business you don't read the payload. You carry it, and you give it back exactly as it was." — the
 > design rule. Hidden content is never paraphrased; it is either in the prompt or retrievable verbatim.
