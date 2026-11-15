@@ -11,6 +11,15 @@
   Saved engine state files (`slot_dir`) and `kv-archive/` hold the conversation's tokens.
 - The proxy binds to `127.0.0.1` by default and has no authentication; do not expose it (`--host`) on a shared
   network. The MCP server's HTTP mode also binds to `127.0.0.1`.
+- **Requiring a key** (`--client-key-file`) closes that hole: every request must then
+  carry the client key as `Authorization: Bearer <key>` (what the OpenAI clients send) or `x-api-key` (what the
+  Anthropic ones send), compared in constant time, and anything else gets HTTP 401 on every path, including `/health`
+  and the `/v1/strata/*` ones. Both keys are read from files (`--client-key-file` for the client key,
+  `--api-key-file` for the engine key), so neither is in the command line or the process list, and the two can be
+  different secrets: handing clients the engine key would let them reach the engine directly, bypassing the proxy.
+  Outside this machine the proxy starts open and logs a warning; add `--client-key-file` to close it. The dashboard
+  reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy), so its 📌 / 🗑 calls
+  keep working against a proxy that requires a key.
 - Protect the folders: `chmod 700 ./data /path/to/slots`.
 - **Forget one conversation:** stop the proxy, then run:
 

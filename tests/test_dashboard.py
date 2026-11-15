@@ -5,7 +5,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from dashboard.ctxdash import http_json
+from dashboard.ctxdash import http_json, proxy_call
 
 
 class IdParser(HTMLParser):
@@ -19,17 +19,29 @@ class IdParser(HTMLParser):
 
 class DashboardTests(unittest.TestCase):
     @patch("dashboard.ctxdash.urllib.request.urlopen")
-    def test_strata_api_key_is_sent_as_bearer(self, urlopen):
+    def test_proxy_key_is_sent_as_bearer(self, urlopen):
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"ok": true}'
+        response.__enter__.return_value.status = 200
+        urlopen.return_value = response
+
+        self.assertEqual(proxy_call("http://127.0.0.1:8096/v1/strata/marks/x", api_key="test-key"),
+                         (200, b'{"ok": true}'))
+        self.assertEqual(urlopen.call_args.args[0].get_header("Authorization"), "Bearer test-key")
+
+        proxy_call("http://127.0.0.1:8096/health")
+        self.assertIsNone(urlopen.call_args.args[0].get_header("Authorization"))
+
+    @patch("dashboard.ctxdash.urllib.request.urlopen")
+    def test_strata_key_is_sent_as_bearer(self, urlopen):
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b'{"ok": true}'
         urlopen.return_value = response
 
-        data, error = http_json("http://127.0.0.1:5000/status", api_key="test-key")
-
-        request = urlopen.call_args.args[0]
-        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        data, error = http_json("http://127.0.0.1:8095/status", api_key="test-key")
         self.assertEqual(data, {"ok": True})
         self.assertIsNone(error)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Authorization"), "Bearer test-key")
 
     def test_literal_id_references_exist(self):
         html = (Path(__file__).resolve().parents[1] / "dashboard" / "index.html").read_text(encoding="utf-8")

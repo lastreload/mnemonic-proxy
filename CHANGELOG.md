@@ -199,6 +199,21 @@
   off. 7 requests, 0 errors, exact answers after masking, the hidden code brought back with `recall` in the next turn.
   Setup and numbers in [DeepSeek Harness](docs/agents.md#deepseek-harness-chat-completions). Asked for by
   u/Due-Advantage-9777.
+- **Security: the proxy can sit behind an API key** (`--client-key-file`). Before this the only guard on the HTTP port
+  was the bind address: `--api-key` is the key the proxy *sends upstream*, nothing checked what the client sent, so a
+  proxy on an address others can reach (`--host 0.0.0.0`, or behind a tunnel or a reverse proxy) let anyone read and
+  write the archive and reach the engine. Setting `--client-key-file` activates the check: a request must carry the
+  client key as `Authorization: Bearer <key>` (what the OpenAI clients send) or `x-api-key` (what the Anthropic ones
+  send), compared in constant time, and anything else gets HTTP 401 on every path, including `/health` and the
+  `/v1/strata/*` ones. The key is read from a file, so it stays out of the command line and the process list, and it
+  can be a different secret from `--api-key`: giving clients the engine key would let them bypass the proxy and hit
+  the engine directly. `--host 0.0.0.0` without a client key starts as before, logging a warning that points at
+  `--client-key-file`.
+- `--api-key-file` reads the key sent to the engine from a file (it overrides `--api-key`), so neither key appears in
+  the command line; an unreadable or empty key file is a startup error instead of a silent open request.
+- The dashboard reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy, which
+  defaults to `--api-key-file`), so its 📌 / 🗑 calls keep working against a proxy that requires a key and `--api-key-file`
+  is now sent to Strata itself (`/status`, `/metrics`).
 
 ## 0.3.25 — 2026-11-11
 

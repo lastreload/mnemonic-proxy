@@ -226,6 +226,9 @@ claude
 `POST /v1/messages` (streaming and not) and `POST /v1/messages/count_tokens` are supported. Thinking blocks get a
 local placeholder signature: a session started through the proxy cannot be continued on Anthropic's API.
 
+With `--client-key-file` the proxy checks the key a client sends, so `ANTHROPIC_AUTH_TOKEN` has to be the key read from
+`--client-key-file` ([Security & privacy](security.md#security--privacy)).
+
 ## Codex (OpenAI Responses)
 
 Codex 0.160 speaks only the Responses API (`wire_api = "chat"` is rejected). In `~/.codex/config.toml` (or a separate

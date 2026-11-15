@@ -329,6 +329,8 @@ and is not listed here.
 | | `--mode tools\|off` | `tools` = managed context (default); `off` = plain pass-through, nothing archived or masked, useful to compare a session with and without the proxy. Since 0.3.32 the streaming path of `off` is a pass-through too: no call is held, inspected or dropped, so it delivers exactly what the non-streaming path delivers |
 | | `--tokenizer PATH` | Hugging Face tokenizer or Strata pack, as a file **or** a folder (the format is read from the `tokenizer.json` structure), for exact token counts; needs `pip install 'mnemonic-proxy[exact]'` |
 | | `--api-key KEY` | key sent to the upstream engine |
+| | `--api-key-file FILE` | file holding the key sent to the upstream engine; keeps it out of the command line, overrides `--api-key` |
+| | `--client-key-file FILE` | file holding the key clients must send (`Authorization: Bearer` or `x-api-key`); setting it activates the check, keeps the key out of the command line, and it can be a different secret from `--api-key` ([Security & privacy](security.md#security--privacy)) |
 | | `--engine auto\|strata\|llama.cpp\|ds4\|openai` | force the engine type instead of detecting it |
 | | `--version` | print the version and exit |
 | `mnemonic-proxy demo` | `--keep DIR` | keep the demo's archive in `DIR` (`archive.sqlite`, `journal.jsonl`) instead of a temporary folder, to look at it afterwards or to point `mnemonic-mcp --db` at it |

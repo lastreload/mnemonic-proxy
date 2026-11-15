@@ -27,7 +27,7 @@ def http_json(url: str, timeout: float = 2.0, api_key: str = ""):
     try:
         req = urllib.request.Request(url)
         if api_key:
-            req.add_header("Authorization", "Bearer " + api_key)
+            req.add_header("Authorization", "Bearer " + api_key)   # Strata may require a key
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read().decode("utf-8")), None
     except Exception as e:  # noqa: BLE001
@@ -130,9 +130,10 @@ class VirtualEstimator:
 
 
 class State:
-    def __init__(self, strata: str, data: str, api_key: str = ""):
+    def __init__(self, strata: str, data: str, api_key: str = "", proxy_key: str = ""):
         self.strata, self.data = strata.rstrip("/"), data
-        self.api_key = api_key
+        self.api_key = api_key          # key sent to Strata
+        self.proxy_key = proxy_key or api_key   # key the proxy checks clients against
         self.journal = JournalTail(os.path.join(data, "journal.jsonl"))
         self.virt = VirtualEstimator(os.path.join(data, "archive.sqlite"))
         self.series: list[dict] = []  # un punto per evento "request"
@@ -293,7 +294,7 @@ def make_handler(state: State):
             if path == "/health":
                 return self._send(200, b'{"ok": true}', "application/json")
             if path == "/api/marks" and args.get("conv"):
-                st, data = proxy_call(state.proxy + "/v1/strata/marks/" + args["conv"])
+                st, data = proxy_call(state.proxy + "/v1/strata/marks/" + args["conv"], api_key=state.proxy_key)
                 return self._send(st, data, "application/json")
             if path == "/api/export" and args.get("conv"):
                 conv = urllib.parse.unquote(args["conv"])
@@ -323,14 +324,18 @@ def make_handler(state: State):
             if self.path.split("?")[0] != "/api/marks":
                 return self._send(404, b'{"error": "not found"}', "application/json")
             n = int(self.headers.get("Content-Length") or 0)
-            st, data = proxy_call(state.proxy + "/v1/strata/marks", self.rfile.read(n) if n else b"{}")
+            st, data = proxy_call(state.proxy + "/v1/strata/marks", self.rfile.read(n) if n else b"{}",
+                                  api_key=state.proxy_key)
             self._send(st, data, "application/json")
 
     return H
 
 
-def proxy_call(url: str, body: bytes | None = None):
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"},
+def proxy_call(url: str, body: bytes | None = None, api_key: str = ""):
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key   # the proxy may require a client key
+    req = urllib.request.Request(url, data=body, headers=headers,
                                  method="POST" if body is not None else "GET")
     try:
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -344,7 +349,9 @@ def proxy_call(url: str, body: bytes | None = None):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="dashboard live contesto virtuale (sola lettura)")
     ap.add_argument("--strata", default="http://127.0.0.1:8095")
-    ap.add_argument("--api-key-file", help="file containing Strata's API key")
+    ap.add_argument("--api-key-file", help="file holding Strata's API key (sent to Strata)")
+    ap.add_argument("--proxy-api-key-file", help="file holding the key the proxy checks clients against "
+                                                 "(its --client-key-file); defaults to --api-key-file (📌 / 🗑)")
     ap.add_argument("--data", required=True, help="data_dir del proxy (journal.jsonl, archive.sqlite, live/)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8097)
@@ -352,16 +359,20 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.host not in ("127.0.0.1", "localhost", "::1"):
         ap.error("solo localhost (privacy: il prompt resta sulla macchina)")
-    api_key = ""
-    if a.api_key_file:
+    def read_key(path, label):
+        if not path:
+            return ""
         try:
-            with open(a.api_key_file, encoding="utf-8") as f:
-                api_key = f.read().strip()
-        except (OSError, UnicodeError) as e:
-            ap.error("cannot read --api-key-file: %s" % e)
-        if not api_key:
-            ap.error("--api-key-file is empty")
-    state = State(a.strata, a.data, api_key)
+            with open(path, encoding="utf-8") as f:
+                key = f.read().strip()
+        except OSError as e:
+            ap.error("cannot read %s: %s" % (label, e))
+        if not key:
+            ap.error("%s is empty" % label)
+        return key
+
+    state = State(a.strata, a.data, read_key(a.api_key_file, "--api-key-file"),
+                  read_key(a.proxy_api_key_file, "--proxy-api-key-file"))
     state.proxy = a.proxy.rstrip("/")
     state.refresh()
     srv = ThreadingHTTPServer((a.host, a.port), make_handler(state))
