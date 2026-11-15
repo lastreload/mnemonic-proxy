@@ -1,0 +1,48 @@
+# Lines of the pre-split README (ea640b7) that are deliberately NOT in the documentation any more
+# because they were CORRECTED later, not lost in the split.
+# One per line: <baseline line number>  # why
+#
+# tools/docs_coverage_check.py proves that the 0.3.25 README split lost nothing. A line that a later
+# release rewrote because it was wrong would otherwise be reported as lost, so it is declared here with
+# its reason. Only corrections belong in this file: if a line simply moved to another page, the check
+# already finds it, and nothing should be added for it.
+
+# 0.3.29 documentation follow-up: docs/tools.md said the two Strata tools were both read-only and never
+# wrote to disk. check_kv_archive --restore-check rebuilds each archive in a private temp dir, and
+# measure_restore starts its own proxy, sends real requests and writes its own data and state files.
+1902   # heading renamed: "Archive audit and restore measurement" (the page is not about agent tools)
+1904   # "Both are read-only against the archive": measure_restore is an active benchmark
+1905   # "run them with the Python that has the archive support": the real requirement is Python >= 3.14
+1906   # "(.venv314)": that is the name of our own venv, not a requirement
+1918   # "It never creates the archive directories": it does recreate blocks/ and manifests/ in an existing root
+1919   # "never writes to disk": --restore-check writes the rebuilt .bin files in a private temp dir
+
+# Dashboard: the UI is translated into Italian, English and French (dashboard/index.html I18N + AUTO_LANG),
+# and it has one write path (the pin / dispose buttons, forwarded to POST /v1/strata/marks).
+857    # heading: the "UI in Italian" qualifier was wrong
+859    # "its interface is in Italian"
+860    # idem (continuation line)
+864    # example path relative to the clone's parent; the other examples on the page are relative to its root
+867    # "Read-only, on 127.0.0.1:8097": one write path exists
+868    # reflowed with the corrected sentence above it
+639    # link to the renamed dashboard anchor (docs/install.md)
+1855   # "The dashboard and the MCP server ... are read-only" (docs/security.md)
+1994   # "the dashboard UI" listed as Italian-only (docs/development.md)
+
+# Proxy endpoints: the pass-through is GET and POST only, the client APIs are also served without the /v1
+# prefix and include /v1/messages/count_tokens, and the conversations endpoint returns counters, not messages.
+872    # client API list incomplete, pass-through limits not stated
+873    # reflowed with the corrected paragraph above it
+879    # "one conversation: archived messages, masks, segments": it returns counters and the segment list
+881    # journal: the 200 events are the ones still in memory; the full log is journal.jsonl
+1205   # link to the renamed audit anchor (docs/benchmarks.md)
+
+# Test file names and what the audit test really asserts (docs/development.md).
+1965   # tests/test_kv_archive.py does not exist; the file is tests/test_kvarchive.py
+1967   # "touches nothing": the test asserts the archive is untouched and the temp dir is private
+
+# Issue #19 ("no command to delete a conversation") was closed on 2026-10-27 by `mnemonic-proxy forget`.
+1299   # "is no command yet ... that is tracked in #19": shipped, so the sentence is now past tense
+
+# The client list moved to docs/agents.md in the 0.3.25 split, so "every client below" pointed at nothing.
+672    # "in every client below": replaced by a link to agents.md#connect-your-agent

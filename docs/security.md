@@ -1,7 +1,9 @@
 # Security & privacy
 
 - **Everything stays local.** The proxy talks only to the `--upstream` you give it; no telemetry, no update checks,
-  no other network access. The dashboard and the MCP server bind to `127.0.0.1` and are read-only.
+  no other network access. The dashboard and the MCP server bind to `127.0.0.1`. The MCP server is read-only; the
+  dashboard reads too, except for its 📌 / 🗑 buttons, which it forwards to the proxy
+  ([Tools](tools.md#dashboard-optional-needs-the-git-clone)).
 - **The archive is plaintext.** `data/archive.sqlite` holds everything the agent saw — file contents, command
   outputs, reasoning — secrets included. `data/journal.jsonl` holds request metadata and recall queries;
   tool names and token counts as well (`tool_heads`), but never the text of a tool definition or of the system

@@ -16,9 +16,10 @@ through the context manager offline. `tools/state_e2e.py --server PATH/llama-ser
 checks saved state end to end with a real llama-server on any OS (restart, restore from disk vs re-read, and
 `kv_archive` with `--kv-archive`). CI runs the unit tests on Linux and on native Windows.
 
-The two Strata tools have their own tests: `tests/test_kv_archive.py` and
+The two Strata tools have their own tests: `tests/test_kvarchive.py` and
 `tests/test_check_kv_archive.py` build a real archive with the same in-memory helper (no engine
-needed) and check that the audit detects a corrupt block, exits non-zero, and touches nothing;
+needed) and check that the audit detects a corrupt block, exits non-zero, does not create a missing
+archive, leaves an existing one untouched and keeps `--restore-check` inside a private temp dir;
 `tests/test_measure_restore.py` covers the pure logic (journal filtering, the speed-up from
 `prompt_ms` / `restore_ms`, the CLI guards). The `kv_archive` group needs Python ≥ 3.14.
 
@@ -59,9 +60,14 @@ It stages `README.md` and `docs/*.md` together, as the `readme-run` CI job does.
 `python3 tools/docs_coverage_check.py` is the proof that the 0.3.25 split lost nothing: it reads
 the 2,020-line README as it was before (`git show ea640b7:README.md`) and checks every non-empty
 line of it against the current pages, ignoring heading level, link targets and whitespace. Lines
-1 to 66 — the old opening the new landing page replaces on purpose — are reported separately.
+1 to 66 — the old opening the new landing page replaces on purpose — are reported separately, and
+so are the lines a later release **corrected** because the claim was wrong: those are declared one
+by one, with their reason, in `tools/docs_corrected.txt` (a declaration for a line that is back in
+the documentation fails the check, so the file cannot rot).
 
-Partly in Italian: code comments, the dashboard UI and the developer notes in `docs/dev-notes/`. Since 0.3.1 every
+Partly in Italian: code comments and the developer notes in `docs/dev-notes/`. The dashboard's interface is
+translated into Italian, English and French, chosen from the browser's language and switchable in the page.
+Since 0.3.1 every
 text the proxy writes into the model's prompt — receipts and placeholders of hidden content, the handoff-note
 request, the segment and pinned-points blocks, automatic recall, recall results, guard and limit messages — is in
 English for new conversations (`prompt_language`, default `"en"`). Conversations that already existed before 0.3.1

@@ -125,7 +125,7 @@ plain text and holds everything the agent saw, secrets included: protect the `da
 - [Benchmarks](docs/benchmarks.md): the long session, AgentLongBench, recall, saved state
 - [What we have not proven](docs/limits.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Tools](docs/tools.md): dashboard, MCP server, `forget`, archive audit
+- [Tools](docs/tools.md): archive audit, restore measurement, dashboard, the proxy's own endpoints
 - [Development](docs/development.md): tests, and how this documentation is tested
 - [Credits and license](docs/credits.md): thanks, citation
 

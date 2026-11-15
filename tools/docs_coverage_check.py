@@ -16,10 +16,15 @@ Lines 1 to 66 of the old README are the part the new landing page replaces on pu
 (the old hero, the old summary table, the old "try it in one minute" block). They are
 reported separately, not as a failure.
 
+Lines that a later release CORRECTED (a claim that turned out to be wrong) are not lost
+either: they are declared one by one, with the reason, in `tools/docs_corrected.txt`, and
+reported separately as well. Only corrections belong there — a line that merely moved to
+another page is still found by the comparison.
+
 Usage:
     python3 tools/docs_coverage_check.py                     # baseline from git (ea640b7)
     python3 tools/docs_coverage_check.py --baseline FILE
-    python3 tools/docs_coverage_check.py --verbose           # list the replaced part too
+    python3 tools/docs_coverage_check.py --verbose           # list the replaced and corrected parts too
 
 Exit code 0 when nothing was lost, 1 otherwise. Standard library only.
 """
@@ -34,6 +39,22 @@ import sys
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASELINE_REV = "ea640b73dd3e1f6607477de3fbeef1f1c1bff7d2"   # main before the split
 REPLACED_UNTIL = 66                                          # old landing section, lines 1-66
+CORRECTED_FILE = os.path.join(REPO_ROOT, "tools", "docs_corrected.txt")
+
+
+def corrected_lines(path: str = CORRECTED_FILE) -> dict[int, str]:
+    """{baseline line number: reason} from tools/docs_corrected.txt (empty when absent)."""
+    out: dict[int, str] = {}
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            s = raw.strip()
+            if not s or s.startswith("#"):
+                continue
+            num, _, why = s.partition("#")
+            out[int(num.strip())] = why.strip()
+    return out
 
 
 def baseline_from_git(rev: str = BASELINE_REV) -> str:
@@ -90,6 +111,8 @@ def main(argv=None) -> int:
 
     missing = []
     replaced = []
+    corrected_decl = corrected_lines(CORRECTED_FILE)
+    corrected = []
     checked = 0
     for i, line in enumerate(base_lines, 1):
         n = normalize(line)
@@ -101,7 +124,10 @@ def main(argv=None) -> int:
             continue
         checked += 1
         if n not in index:
-            missing.append((i, line))
+            if i in corrected_decl:
+                corrected.append((i, line, corrected_decl[i]))
+            else:
+                missing.append((i, line))
 
     print("baseline: %d lines (%s)" % (len(base_lines), a.baseline or a.rev[:7]))
     print("documentation: %d pages, %d lines"
@@ -112,12 +138,25 @@ def main(argv=None) -> int:
     if a.verbose:
         for i, line in replaced:
             print("    %4d  %s" % (i, line))
+    print("corrected later (declared in tools/docs_corrected.txt): %d line(s)" % len(corrected))
+    if a.verbose:
+        for i, line, why in corrected:
+            print("    %4d  %s\n          -> %s" % (i, line, why))
+    stale = sorted(set(corrected_decl) - {i for i, _, _ in corrected})
+    if stale:
+        print("\nSTALE %d declaration(s) in tools/docs_corrected.txt (the line is in the docs again): %s"
+              % (len(stale), ", ".join(str(i) for i in stale)))
+        return 1
     if missing:
         print("\nLOST %d line(s):" % len(missing))
         for i, line in missing:
             print("  %4d  %s" % (i, line))
         return 1
-    print("\nnothing lost: every line of the old README is in the documentation")
+    if corrected:
+        print("\nnothing lost: every line of the old README is in the documentation, except the %d"
+              " corrections declared in tools/docs_corrected.txt" % len(corrected))
+    else:
+        print("\nnothing lost: every line of the old README is in the documentation")
     return 0
 
 

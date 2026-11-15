@@ -101,7 +101,7 @@ opt-in with `--slot-save-path`. The Strata numbers on this page were measured on
 [AgentLongBench benchmark](#benchmark-agentlongbench-with-a-32k-window) and the
 [recall tests](#does-the-model-recall-on-its-own), but the restore times in the table above have not been
 re-measured on 0.1.40; a contributor measured restore on Strata 0.1.41
-([Tools](tools.md#tools-audit-the-archive-and-measure-restore)).
+([Tools](tools.md#archive-audit-and-restore-measurement)).
 
 ## Claude Code and Codex, live on Strata
 
@@ -195,4 +195,5 @@ with the [user report](https://github.com/lastreload/mnemonic-proxy/issues/new?t
 - [Radyz.cz](https://radyz.cz/nazory/mnemonic-proxy-agenticka-pamet-kontextove-okno/) (Czech, 25 Oct 2026):
   *"AI si nepamatuje. Jen si vede spis."* ("AI doesn't remember. It just keeps a file."). An independent review of how
   the proxy works, the session and benchmark numbers with their limits, and the privacy side. It points out that there
-  is no command yet to delete a conversation; that is tracked in [#19](https://github.com/lastreload/mnemonic-proxy/issues/19).
+  was no command yet to delete a conversation; that was [#19](https://github.com/lastreload/mnemonic-proxy/issues/19),
+  closed by `mnemonic-proxy forget` two days later ([Security & privacy](security.md)).

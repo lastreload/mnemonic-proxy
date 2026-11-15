@@ -563,7 +563,7 @@ extra prudence. Exact counting with a tokenizer is never calibrated.
 `response_clamped`, `mask`, `switch`, `switch_skipped`, and `client_disconnected`. No prompt/notes/error-body text
 is printed by this summary. Capture it with `2> proxy-events.log` (or use your service manager's journal).
 The full structured log stays at `<--data>/journal.jsonl`; recent events are also available at
-`GET /v1/strata/journal`. The optional [dashboard](tools.md#dashboard-optional-needs-the-git-clone-ui-in-italian) reads the data directory; do not confuse its
+`GET /v1/strata/journal`. The optional [dashboard](tools.md#dashboard-optional-needs-the-git-clone) reads the data directory; do not confuse its
 port with the proxy's. `where=answer|recall_round|final|notes|seal|anchor|answerfix` identifies the upstream phase;
 a client continuation is a new answer request, not a distinct server-side phase. `seal` and `anchor` deliberately
 request one token to establish saved state; this differs from a client answer clamped to one token.
@@ -596,7 +596,7 @@ reasoning or an effort instruction moved by the server). `fit_max_tokens=true` i
 output safety net, but cannot make an already oversized prompt fit. `window_margin` applies in tokenizer mode;
 `window_estimate_slack` does not. Increasing the margin is not a substitute for the correct template.
 
-Disable the agent's own auto-compaction in every client below, otherwise two context managers fight over the same
+Disable the agent's own auto-compaction in every client ([Connect your agent](agents.md#connect-your-agent)), otherwise two context managers fight over the same
 history.
 
 ## Platforms
