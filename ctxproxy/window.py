@@ -50,7 +50,7 @@ import math
 import re
 
 from .render import (IMAGE_KEYS, VISION, UnsupportedPicture, image_markers, literal_marker_count, picture_contract,
-                     render_pieces, template_kwargs)
+                     prompt_tools, render_pieces, template_kwargs)
 from .upstream import UpstreamError
 
 IDENT_RAW = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./:\-]{2,}[A-Za-z0-9]")
@@ -303,7 +303,8 @@ class WindowGuard:
         return total
 
     def count_body(self, body: dict) -> int:
-        return self.count(body.get("messages") or [], body.get("tools"), template_kwargs(body))
+        # issue #90: la lista RESA (chat_template_kwargs.tools quando c'è), non l'array di grammatica
+        return self.count(body.get("messages") or [], prompt_tools(body), template_kwargs(body))
 
     def room(self, prompt: int) -> int:
         return int(self.cfg.window) - self.margin - int(prompt)

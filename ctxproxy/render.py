@@ -74,6 +74,19 @@ def template_kwargs(req: dict) -> dict:
     return kw
 
 
+def prompt_tools(req: dict):
+    """La lista di strumenti che il motore RENDE nel prompt.
+
+    `chat_template_kwargs["tools"]` ha la precedenza sul parametro `tools` (extra_context del template,
+    llama.cpp common/chat.cpp:894-902, misurato in workspaces/mp-issue90-cache-native): quando il proxy separa
+    il catalogo reso dall'array di grammatica (issue #90), è QUESTA la lista che fa il testo, i token, la cache e
+    l'identità dello stato. Senza questa precedenza il proxy conterebbe e firmerebbe un prompt inesistente."""
+    ctk = req.get("chat_template_kwargs")
+    if isinstance(ctk, dict) and "tools" in ctk:
+        return ctk.get("tools") or None
+    return req.get("tools") or None
+
+
 def _has_image(c) -> bool:
     return isinstance(c, list) and any(isinstance(p, dict) and p.get("type") in IMAGE_TYPES for p in c)
 

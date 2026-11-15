@@ -27,9 +27,10 @@ import uuid
 from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, CUSTOM_INPUT_DESC_IT, norm as \
     norm_lang, outcome_text
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
-                     query_terms, tool_desc, tool_name, typed_receipt)
+                     query_terms, promote_loaded_schemas, tool_desc, tool_name, typed_receipt)
 from .render import (def_text, image_source, message_piece, prompt_head, redact_images, render_pieces,
                      template_kwargs, volatile_pictures)
+from .nativetools import Gate as NativeSplitGate, canonical_tools
 from .savedstate import state_available
 from .toolheads import EVENT as TOOL_HEADS_EVENT, fingerprint as tools_fingerprint, payload as tool_heads_payload
 from .window import find_guard, notes_source, labeled_chat
@@ -239,6 +240,29 @@ class Config:
     # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + recall + tools;
     # gli altri si caricano con lo strumento tools (definizione nel risultato, in coda: il prefisso non cambia)
     tools_paging: bool = False
+    # Modo di compatibilità OPT-IN per i motori la cui grammatica/parser nativi delle chiamate enumerano SOLO
+    # l'array `tools` (llama.cpp b11723: misurato, issue #90). Con tools_paging acceso, gli schemi COMPLETI degli
+    # strumenti già caricati nel prompt fisico vengono aggiunti in coda all'array `tools`, così la chiamata nativa
+    # a uno strumento caricato è ammessa dalla grammatica. Costo: il blocco <tools> sta in TESTA al prompt, quindi
+    # ogni nuovo caricamento invalida il prefisso cacheato (vedi IMPACT.md). Nessun autodetect: il percorso Strata
+    # non ne ha bisogno e resta quello di serie.
+    tools_paging_native_schemas: bool = False
+    # Variante che NON invalida il prefisso (issue #90, prova nativa in workspaces/mp-issue90-cache-native):
+    # il catalogo visibile va in `chat_template_kwargs.tools` in forma canonica (il template lo rende con
+    # precedenza su `tools`, common/chat.cpp:894-902) e l'array `tools` porta catalogo + schemi caricati, cioè
+    # SOLO grammatica e parser. Il prompt reso resta identico byte per byte, quindi il prefisso cacheato non si
+    # invalida a ogni caricamento. Opt-in e con gate: motore llama.cpp, /props con build_info, template con i
+    # marcatori dell'handler dedicato (nativetools.qualify). Gate non superato = comportamento di serie, con
+    # diagnostica esplicita: nessun ritorno silenzioso alla promozione costosa.
+    tools_paging_native_split: bool = False
+    # Stringa attesa dentro `build_info` del motore per accendere la separazione: di serie la REVISIONE
+    # misurata (llama.cpp 31288c9c6, build 11723), perché grammatica e parser sono stati qualificati su quella
+    # sorgente, non su «un llama.cpp qualunque». Vuota = nessun pin (l'operatore si assume la verifica); un
+    # altro valore = un'altra build qualificata da chi la usa.
+    tools_paging_native_split_build: str = "31288c9c6"
+    # sha256 atteso del `chat_template` del motore, prefisso ammesso (vuoto = solo i marcatori dell'handler
+    # dedicato). Il template provato è 7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67.
+    tools_paging_native_split_template_sha256: str = ""
     # Nomi di base dei client documentati: pi / opencode / Claude Code (read bash edit write grep find ls) e
     # Hermes (read_file write_file patch search_files terminal). Senza i nomi di Hermes il pager mandava in
     # catalogo TUTTO il suo elenco e in testa restavano solo recall e tools (card t_3ebcb103). Un nome che il
@@ -1147,6 +1171,10 @@ class Prepared:
     lang: str = "it"                   # 0.3.1: lingua dei testi del proxy in questa conversazione
     recall_aliases: frozenset = frozenset((RECALL_NAME, LEGACY_RECALL_NAME))  # chiamate risolte come recall
     tools_aliases: frozenset = frozenset((TOOLS_NAME, LEGACY_TOOLS_NAME))
+    # issue #90, modo separazione (tools_paging_native_split): array `tools` da mandare al motore = catalogo
+    # reso + schemi COMPLETI dei caricati. `tools` sopra resta la lista RESA nel prompt, cioè quella che contano
+    # la finestra, la stima e l'invalidazione. None = separazione non attiva (nessun campo nuovo nel corpo).
+    grammar_tools: list | None = None
 
 
 class Manager:
@@ -1167,6 +1195,8 @@ class Manager:
         # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
         self.rich = bool(cfg.rich_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
+        # issue #90: qualifica del motore per la separazione catalogo-reso / array-di-grammatica (una volta)
+        self._split_gate = NativeSplitGate(cfg, journal)
         self._tool_heads_fp: dict = {}   # conv -> impronta dell'elenco strumenti già registrato (evento tool_heads)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
 
@@ -1448,6 +1478,42 @@ class Manager:
         return "; ".join(out)
 
     # ---------- passo principale ----------
+    def promote_tools(self, tools, catalog: dict, phys: list, split: bool = False):
+        """Issue #90: con il modo di compatibilità opt-in, aggiunge all'array `tools` gli schemi completi degli
+        strumenti del catalogo già CARICATI nel prompt fisico corrente. Sempre ricalcolata da `tools` di base e dal
+        `phys` corrente: se un cambio di segmento o un pacchetto taglia il risultato del caricatore, la promozione
+        scompare da sola. Nessuno stato nuovo, nessuna mutazione del catalogo.
+
+        Con la separazione attiva (`split`) la promozione NON si applica alla lista resa: gli schemi vivono
+        nell'array di grammatica, e promuoverli anche nel testo rimetterebbe in testa al prompt proprio il blocco
+        che invalida il prefisso. I due flag accesi insieme non sono un cumulo: la separazione vince, e la cosa
+        è detta una volta nel giornale (`native_split_overrides_schemas`), non in silenzio.
+        """
+        if split:
+            if (self.cfg.tools_paging and self.cfg.tools_paging_native_schemas
+                    and not getattr(self, "_split_over_schemas_said", False)):
+                self._split_over_schemas_said = True
+                self.journal.log(
+                    "native_split_overrides_schemas",
+                    note="tools_paging_native_split is active: tools_paging_native_schemas stays off for the "
+                         "rendered catalog (loaded schemas live in the grammar array only)")
+            return tools
+        if not (self.cfg.tools_paging and self.cfg.tools_paging_native_schemas) or not catalog:
+            return tools
+        return promote_loaded_schemas(tools, catalog, self.pager.loaded_in(phys))
+
+    def native_split(self, upstream=None) -> bool:
+        """Issue #90: la separazione «catalogo reso / array di grammatica» è attiva per questo motore?
+        Configurazione opt-in PIU' gate qualificato (nativetools.Gate): nessun autodetect."""
+        return self._split_gate.active(upstream)
+
+    def grammar_tools(self, tools, catalog: dict, phys: list):
+        """Array `tools` del modo separazione: la lista RESA più gli schemi completi dei caricati. La lista
+        resa non viene toccata, quindi il prompt (e il prefisso cacheato) non cambia a ogni caricamento."""
+        if not catalog:
+            return tools
+        return promote_loaded_schemas(tools, catalog, self.pager.loaded_in(phys))
+
     def prepare(self, req: dict, upstream=None, hint: str | None = None) -> Prepared:
         cfg = self.cfg
         msgs = list(req.get("messages") or [])
@@ -1501,6 +1567,12 @@ class Manager:
             tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang), self.lang))
         if catalog:
             tools.append(self.pager.tools_tool(catalog, self.tn))
+        tools_base = list(tools)    # issue #90: la promozione si ricalcola SEMPRE da qui, mai in modo cumulativo
+        # issue #90, modo separazione: la lista RESA è il catalogo canonico (quel che il motore scrive davvero nel
+        # prompt), e non cresce mai coi caricamenti; gli schemi vanno nell'array di grammatica, calcolato in coda.
+        split = self.native_split(upstream)
+        if split:
+            tools_base = canonical_tools(tools_base) or []
 
         seg, start, notes_msg, _, had_segments = self._segment_for(conv, hs)
         if upstream is not None and hasattr(upstream, "ctx"):
@@ -1512,6 +1584,7 @@ class Manager:
                                            note="storia modificata prima del taglio: segmenti non applicabili"))
         pins_msg = self.store.segment_pins(conv, seg) if seg else None
         phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+        tools = self.promote_tools(tools_base, catalog, phys, split=split)
         est, per = self.estimate(phys, tools)
         virtual, _ = self.estimate(msgs, client_tools)
         if cfg.journal_tool_heads:
@@ -1524,6 +1597,7 @@ class Manager:
             ev = self._mask_batch(conv, msgs, hs, phys, origin, per, est, seg or 0)
             if ev:
                 phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                tools = self.promote_tools(tools_base, catalog, phys, split=split)
                 est2, per = self.estimate(phys, tools)
                 # Δ MISURATO sulla stessa richiesta con/senza il pacchetto (GPT-ANSWER3 passo 1)
                 ev["tokens_saved_measured"] = est - est2
@@ -1551,6 +1625,7 @@ class Manager:
             ev = self._mask_current_tools(conv, msgs, hs, phys, origin, per, est, tools, resp, seg or 0)
             if ev:
                 phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                tools = self.promote_tools(tools_base, catalog, phys, split=split)
                 est2, per = self.estimate(phys, tools)
                 ev["tokens_saved_measured"] = est - est2
                 ev["est_after_measured"] = est2
@@ -1566,6 +1641,7 @@ class Manager:
             seg, start, notes_msg, _, _ = self._segment_for(conv, hs)
             pins_msg = self.store.segment_pins(conv, seg) if seg else None
             phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+            tools = self.promote_tools(tools_base, catalog, phys, split=split)
             est, per = self.estimate(phys, tools)
 
         # ---- richiamo automatico (spento di serie): pezzi nascosti pertinenti in coda, deciso una volta ----
@@ -1575,6 +1651,7 @@ class Manager:
                 events.append(ev)
                 if ev.get("injected"):
                     phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                    tools = self.promote_tools(tools_base, catalog, phys, split=split)
                     est, per = self.estimate(phys, tools)
 
         # Recompute after masking, segmentation and auto-recall. Never raise a client's ceiling.
@@ -1622,7 +1699,8 @@ class Manager:
                         masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
                         invalidated=inv, recall_name=self.rn, tools_name=self.tn, lang=self.lang,
                         recall_aliases=self.call_aliases("recall", client_tools),
-                        tools_aliases=self.call_aliases("tools", client_tools))
+                        tools_aliases=self.call_aliases("tools", client_tools),
+                        grammar_tools=self.grammar_tools(tools, catalog, phys) if split else None)
 
     # ---------- nomi degli strumenti del proxy (0.2.0) ----------
     def tool_names(self, conv: str, client_tools, legacy: bool = False) -> dict:

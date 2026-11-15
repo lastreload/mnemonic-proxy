@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.3.29 — 2026-11-15
+
+- **Tool definitions loaded at runtime can be called natively without re-reading the cached prefix** — new opt-in
+  mode `tools_paging_native_split`, off by default. With `tools_paging` on, llama.cpp builds the tool-call grammar
+  and parser only from the request's `tools` array, so a definition the model loaded at runtime is described in the
+  prompt and still not callable: the model keeps calling the `tools` loader. The existing answer
+  (`tools_paging_native_schemas`) puts the loaded schemas back into `tools`, which the template renders at the
+  **head** of the prompt, so every load changes the head and the engine re-reads the whole cached prefix. The new
+  mode sends the two lists apart: the visible catalog, in canonical form and stable for the whole turn, goes to
+  `chat_template_kwargs.tools` (rendered with precedence over `tools`, `common/chat.cpp:894-902`), while `tools`
+  carries catalog plus loaded schemas, i.e. grammar and parser only. Token counts, window guard and state signature
+  follow the rendered list. Measured once, on llama.cpp build 11723 revision `31288c9c6` with Qwen3.5-9B-Q8 and a
+  98,304-token context, inside the real Kilo Code extension in VS Code: two consecutive loads kept the cached prefix
+  (`cache_n` 36,258 and 36,912; 133 and 425 tokens read; prompt processing 362 ms and 841 ms) where the schema
+  promotion re-read the head (37,124 and 38,020 tokens read; 49.0 s and 50.3 s of prompt processing). Those are
+  prompt-processing figures from one run per arm, not total request latency and not a general speed-up.
+- **The mode is gated, never auto-detected.** Besides the two options it qualifies the engine once (engine kind +
+  URL): `llama.cpp`, `/props` with a `build_info` containing `tools_paging_native_split_build` — whose default is now
+  the measured revision `31288c9c6`, since that is the source the grammar and parser were qualified against — and a
+  chat template that uses the dedicated tool-call handler. The new
+  `tools_paging_native_split_template_sha256` pins the exact template as well (empty by default: markers only). When
+  the gate does not pass, the proxy keeps the standard behaviour with one warning and a `native_split_gate` journal
+  line carrying the reason: never a silent fallback to the expensive promotion.
+- **Conflicts are explicit.** A client that sends its own `chat_template_kwargs.tools` keeps it and the split is
+  skipped for that request (`native_split_skip`). With `tools_paging_native_split` **and**
+  `tools_paging_native_schemas` both on, the split wins and the promotion stays off for the rendered catalog —
+  promoting schemas there would put back the very head that invalidates the prefix — journalled once as
+  `native_split_overrides_schemas`; with the gate closed the explicitly requested promotion is kept.
+- **Documentation**: a dedicated section in `docs/configuration.md` (problem, split, JSON example, engine setup,
+  gate and pins, diagnostics, conflicts, how to switch the mode off), three troubleshooting rows and the declared
+  limits in `docs/limits.md`.
+- Default behaviour, Strata and `tools_paging` off are unchanged (explicit tests). Refs #90: this is a measured
+  mechanism on one engine, one model and one template, not a confirmed fix of the reporter's case, which was never
+  reproduced here.
+
 ## 0.3.28 — 2026-11-15
 
 - **Tool definition requests are no longer lost when the model also calls a client tool in the same turn.**

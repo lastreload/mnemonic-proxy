@@ -27,6 +27,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import answerfix, compat
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
+from .nativetools import GRAMMAR_KEY
 from .paging import guard_msg, is_guarded, receipt_contaminated
 from .render import count_images, redact_images, redact_text, template_kwargs
 from .savedstate import select_model
@@ -82,6 +83,7 @@ class Proxy:
         self.lock = threading.Lock()
         self.autosaver = None
         self.engine = None          # engines.Engine | None (impostato da main; None = Strata)
+        self._split_skip_said = False   # issue #90: avviso «il cliente manda già il suo catalogo», una volta
         # 0.3.3: window guard on the innermost Upstream (wrappers - Tracker, ArchivingUpstream - delegate to it)
         self.wguard = WindowGuard(cfg, self.mgr, journal)
         base = upstream
@@ -279,6 +281,11 @@ class Proxy:
             if guard_on:
                 final, tools_r = self._plan_round(p, phys0, loop, body, rnd, floor, lu_full, st)
                 phys = phys0 + clean(loop)
+            # issue #90: schemi dei soli strumenti già caricati nel prompt fisico di QUESTO giro
+            tools_r = self.mgr.promote_tools(tools_r, p.catalog, phys,
+                                             split=getattr(p, "grammar_tools", None) is not None)
+            # modo separazione: `tools_r` resta la lista RESA (prompt, conteggi), la grammatica va a parte
+            body_r = self._send_body(p, body, self._round_grammar(p, phys, final))
             self._live(p, phys, rnd, body)
             if stream_state is not None:
                 stream_state["internal"] = self._internal_names(p, phys)
@@ -286,10 +293,10 @@ class Proxy:
             self.wguard.where = "final" if final else ("answer" if rnd == 0 else "recall_round")
             try:
                 if emit:
-                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd, tools_r, no_think),
+                    resp = self._round({**answerfix.stream_body(self, p, body_r, phys, rnd, tools_r, no_think),
                                         "messages": phys, "tools": tools_r}, emit, stream_state)
                 else:
-                    resp = answerfix.chat(self, p, body, phys, rnd, tools_r, no_think)
+                    resp = answerfix.chat(self, p, body_r, phys, rnd, tools_r, no_think)
             except UpstreamError as e:
                 self.journal.log("upstream_error", conv=p.conv, status=e.status, error=str(e)[:300])
                 return e.status, _err_body(e), {}
@@ -602,15 +609,54 @@ class Proxy:
         return max(1, min(f, max(1, int(self.cfg.window) // 4)))
 
     def _final_tools(self, p, phys):
-        """Final call for lack of space: the client's tools only (the proxy's own are not offered)."""
-        if not getattr(self.cfg, "final_drop_internal_tools", True) or not p.tools:
+        """Final call for lack of space: the client's tools only (the proxy's own are not offered).
+        Issue #90: gli strumenti del catalogo già caricati sono strumenti DEL CLIENT, quindi restano offerti
+        (con il modo di compatibilità acceso anche con il loro schema completo).
+
+        Modo separazione: la lista RESA nel prompt NON cambia al giro finale (è il senso della correzione: il
+        prefisso cacheato resta valido). La revoca degli strumenti interni vive nell'array di grammatica
+        (`_round_grammar`), dove conta davvero: il modello non può più chiamarli."""
+        if getattr(p, "grammar_tools", None) is not None:
             return p.tools
+        if not getattr(self.cfg, "final_drop_internal_tools", True) or not p.tools:
+            return self.mgr.promote_tools(p.tools, p.catalog, phys)
         names = self._internal_names(p, phys)
         out = [t for t in p.tools if ((t or {}).get("function") or {}).get("name") not in names]
+        out = self.mgr.promote_tools(out, p.catalog, phys)
         return out or None
 
     def _wcount(self, phys, tools, body) -> int:
         return self.wguard.count(phys, tools, template_kwargs(body))
+
+    def _round_grammar(self, p, phys, final: bool):
+        """Issue #90, modo separazione: l'array `tools` del giro, cioè SOLO grammatica e parser delle chiamate =
+        catalogo reso + schemi completi degli strumenti già caricati nel prompt fisico di questo giro, meno gli
+        strumenti interni quando il giro è finale. None = separazione non attiva (nessun campo nuovo nel corpo).
+
+        La lista resa (il prompt) non entra qui: è `p.tools`, identica in tutti i giri."""
+        if getattr(p, "grammar_tools", None) is None:
+            return None
+        base = p.tools
+        if final and getattr(self.cfg, "final_drop_internal_tools", True) and p.tools:
+            names = self._internal_names(p, phys)
+            base = [t for t in p.tools if ((t or {}).get("function") or {}).get("name") not in names]
+        return self.mgr.grammar_tools(base, p.catalog, phys)
+
+    def _send_body(self, p, body, grammar) -> dict:
+        """Corpo del giro con l'array di grammatica agganciato (campo privato, rimosso da Upstream prima
+        dell'invio). Se il CLIENTE manda già `chat_template_kwargs.tools`, il suo catalogo non si sovrascrive:
+        la separazione salta per questa richiesta, e lo dice."""
+        if grammar is None:
+            return body
+        ctk = body.get("chat_template_kwargs")
+        if isinstance(ctk, dict) and "tools" in ctk:
+            if not self._split_skip_said:
+                self._split_skip_said = True
+                self.journal.log("native_split_skip", conv=p.conv, reason="client_kwargs_tools",
+                                 note="the client sends its own chat_template_kwargs.tools: not overwritten, "
+                                      "schemas not promoted")
+            return body
+        return {**body, GRAMMAR_KEY: grammar}
 
     def _check_floor(self, p, phys0, body, floor, st) -> None:
         """F (0.3.5): explicit check P0 + F + margin <= W before the loop. prepare() tries a segment switch but does
@@ -668,14 +714,17 @@ class Proxy:
         reason = "" if search_ok else (st.reason or "round_limit") if st.force_final else "round_limit"
         final = not search_ok
         extra = 0
+        # issue #90: l'array del giro include gli schemi già caricati, così la guardia di spazio li CONTA
+        tools_now = self.mgr.promote_tools(p.tools, p.catalog, phys0 + clean(loop),
+                                           split=getattr(p, "grammar_tools", None) is not None)
         if search_ok:
             H = self._frame_tokens(p, phys0 + clean(loop), body)
             extra = max(st.s_est, CALL_ALLOWANCE + RESULT_R + floor) + H
-            while not fits(extra, p.tools):
+            while not fits(extra, tools_now):
                 if not self._remove(p, loop, question, SEARCH_BANDS, "search", r_search):
                     final, reason = True, "space"
                     break
-        tools = p.tools
+        tools = tools_now
         if final:
             # closed for space or for the round limit: no internal tools (a recall there would be dropped and the
             # answer left empty); the model is told why

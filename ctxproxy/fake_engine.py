@@ -21,8 +21,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def render(body: dict) -> str:
     """Rendering deterministico del prompt (stand-in del template chat): ciò che conta è che due liste di messaggi
-    uguali diano la stessa stringa e che un messaggio cambiato cambi la stringa da quel punto in poi."""
-    out = ["<tools>" + json.dumps(body.get("tools") or [], sort_keys=True, ensure_ascii=False) + "</tools>"]
+    uguali diano la stessa stringa e che un messaggio cambiato cambi la stringa da quel punto in poi.
+
+    `chat_template_kwargs["tools"]` ha la PRECEDENZA sull'array `tools`, come il motore reale: il template riceve
+    extra_context e il parametro `tools` serve solo a grammatica e parser (llama.cpp common/chat.cpp:894-902,
+    misurato in workspaces/mp-issue90-cache-native). Senza questa precedenza il motore finto non potrebbe mostrare
+    la differenza fra il catalogo RESO e l'array di GRAMMATICA."""
+    ctk = body.get("chat_template_kwargs")
+    tools = ctk["tools"] if isinstance(ctk, dict) and "tools" in ctk else body.get("tools")
+    out = ["<tools>" + json.dumps(tools or [], sort_keys=True, ensure_ascii=False) + "</tools>"]
     for m in body.get("messages") or []:
         out.append("<|im_start|>%s\n%s%s%s<|im_end|>\n" % (
             m.get("role"), json.dumps(m.get("content"), ensure_ascii=False),
@@ -83,6 +90,9 @@ class FakeEngine:
         # 0.3.23: what the automatic configuration reads. `version`: Strata /v1/status "engine", llama /props
         # "build_info"; `gpu`: the GPU figures Strata reports in /v1/status (None = the engine says nothing).
         self.version = "0.1.51" if flavor in ("strata", "strata-poly") else "6123 (fake)"
+        # issue #90: il template che il motore dichiara in /props (vuoto = la chiave non compare, come i motori
+        # che non la espongono). Serve al gate della separazione catalogo-reso / array-di-grammatica.
+        self.chat_template = ""
         self.gpu = flavor in ("strata", "strata-poly")
 
     # ---- Ollama / LM Studio (flavor "ollama" | "lmstudio") ----
@@ -264,7 +274,9 @@ class FakeEngine:
                     if self.path.startswith("/props"):
                         return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
                                                 "total_slots": eng.n_slots, "model_path": "/m/fake-0.6B.gguf",
-                                                "build_info": eng.version})
+                                                "build_info": eng.version,
+                                                **({"chat_template": eng.chat_template} if eng.chat_template
+                                                   else {})})
                     if self.path.startswith("/slots"):
                         return self._send(200, eng.slots_list())
                     if self.path.startswith("/health"):

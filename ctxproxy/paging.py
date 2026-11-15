@@ -201,6 +201,24 @@ class ToolPager:
         return "\n".join(lines)
 
 
+def promote_loaded_schemas(tools: list | None, catalog: dict | None, loaded) -> list | None:
+    """Schemi COMPLETI dei soli strumenti già caricati, aggiunti in coda all'array `tools` (issue #90).
+
+    Serve ai motori che costruiscono grammatica e parser delle chiamate SOLO dall'array `tools`
+    (llama.cpp b11723: misurato in mp-issue90-grammar). Modo di compatibilità opt-in, vedi
+    Config.tools_paging_native_schemas: con l'opzione spenta questa funzione non viene chiamata.
+
+    Funzione PURA e deterministica: nomi `sorted`, dedup per nome, nessuna mutazione degli ingressi.
+    Se non c'è nulla da aggiungere restituisce **l'oggetto ricevuto**, così l'array resta identico
+    byte a byte fra richieste e la cache a prefisso non si invalida per niente.
+    """
+    if not tools or not catalog or not loaded:
+        return tools
+    have = {tool_name(t) for t in tools}
+    add = [catalog[n] for n in sorted(set(loaded) & set(catalog)) if n not in have]
+    return (list(tools) + add) if add else tools
+
+
 # ---------------------------------------------------------------- ricevute tipizzate
 _EXIT = re.compile(r"(?:Command )?exited with code (\d+)|exit(?:ed)? (?:status|code)[:= ]+(\d+)", re.I)
 _TEST_CMD = re.compile(
