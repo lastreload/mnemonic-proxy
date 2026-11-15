@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.28 — 2026-11-15
+
+- **Tool definition requests are no longer lost when the model also calls a client tool in the same turn.**
+  When the model emitted, in one turn, a pager call (the `tools` loader, or a direct call to a catalog tool whose
+  definition is not loaded yet) together with a tool call for the client, the pager call was dropped: not executed
+  and not reported back to the model. With `tools_paging` on, the model could ask for the same definitions again
+  and again without ever receiving them. Pager calls are pure definition lookups with no side effects, so in a
+  mixed turn they are now executed: the client still receives only its own calls, unchanged (id, name, arguments,
+  `finish_reason`), the model is not re-run in that turn, and it finds the definitions in the next turn, re-inserted
+  with the other internal events. Recall calls, calls blocked by the receipt guard, the internal round cap and the
+  final round for lack of space keep the previous behaviour. Refs #90: the reporter's session was not reproduced
+  with a real model, so this is a loop mechanism that is now fixed, not a confirmed cause.
+- **The streaming "definitions loaded" placeholder follows the conversation language.** In the streaming path the
+  placeholder written into `reasoning_content` when tool definitions are loaded was unconditionally Italian, even in
+  an English conversation; it now behaves like its twin branch for a call blocked by the receipt guard. Other
+  Italian placeholders are untouched: the recall results placeholder in `server.py` is still unconditional and is
+  tied to a frozen test fixture. Refs #88. Test for both fixes: `tests/test_issue88_mixed_paging.py` (13).
+
 ## 0.3.27 — 2026-11-14
 
 - **New conversations keep their configured defaults after an interrupted first preparation.** Language, tool
