@@ -74,3 +74,8 @@ English for new conversations (`prompt_language`, default `"en"`). Conversations
 keep the Italian texts they were born with: those strings are part of their stable prompt prefix (archive, session
 files, KV cache), so changing them would invalidate saved sessions. The language is stored per conversation at its
 first request; the proxy recognizes its own markers in both languages in every conversation.
+
+The same choice applies to the short lines the proxy writes into the streaming `reasoning_content`, which clients
+show inside the model's thinking box: definitions loaded, a call blocked by the receipt guard, a closed search, and
+the results of a recall call (this last one since 0.3.31). They are stream deltas to the client, not part of the
+physical prompt, so no stable prefix depends on them.
