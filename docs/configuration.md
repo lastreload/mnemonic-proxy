@@ -406,6 +406,17 @@ measurements, and changing them is rarely necessary.
 | `notes_thinking` | "auto" | thinking while writing handoff notes: `auto` (on when the engine leaves room) \| `off` \| `on` |
 | `notes_tool_choice` | "auto" | `tool_choice` of the handoff-notes request: `none` forbids a tool call, `keep` sends nothing. `auto` = `keep` on every engine: with `none` both Strata and llama-server drop the tools from the template, so the whole segment is read again before the notes (measured through Unsloth: 13.2 s instead of 1.5 s on 11.7K tokens). A call that comes back anyway is turned into rebuilt notes |
 
+How much the notes and the reasoning get, and what it costs. The request asks for `min(notes_max_tokens, room)`. When the
+**window** is what shrank it, the notes keep `NOTES_ROOM` (3072) and the reasoning takes what is left — at the edge the
+reasoning is effectively off and the ~1300 tokens go to the notes instead of a note cut at 493. When the request fits as
+configured, the notes already have the size they were asked for, so the reasoning keeps its allowance
+(`notes_max_tokens // 2` unless the caller sets one) and only `NOTES_MIN` (256) is reserved for the notes; below that
+minimum no request is sent at all. The reserve asked of `notes_source` (`min(notes_max_tokens, 3072)`) also decides how
+many messages survive in the source the note is written from: on a tight window it is a little shorter than the 1024 of
+the older arithmetic (a review fixture kept 246 of 253 messages with 1024 and 242 with 3072). Those are the newest
+messages and they stay in the tail of the new segment anyway, but the effect on the notes is measured in the real-model
+comparison rather than assumed.
+
 </details>
 
 ## Tool names and older conversations

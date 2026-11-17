@@ -128,5 +128,54 @@ class TestNotesSkipped(Base):
             self.assertIn("notes not available", notes_msg)
 
 
+class TestNotesBudgetReview(unittest.TestCase):
+    """Os casos que a revisão da 0.3.31 apontou: orçamento configurado pequeno, com janela folgada.
+
+    `notes_budgets(want, room, thinking_budget)` recebia 1536/3072 de notas com 50 000 de room e devolvia 1 token
+    de raciocínio, porque o reservado das notas (`min(NOTES_ROOM, max_tokens)`) comia a request inteira.
+    """
+
+    def test_a_small_configured_budget_keeps_its_reasoning(self):
+        for want, thinking in ((1536, 768), (3072, 1536)):
+            mt, budget = notes_budgets(want, 50000, thinking)
+            self.assertEqual(mt, want, "a request configurada cabe inteira: max_tokens e o 'want'")
+            self.assertEqual(budget, thinking, "com room de sobra o raciocinio mantem a cota configurada")
+            self.assertGreaterEqual(mt - budget, NOTES_MIN, "e as notas ainda guardam o minimo delas")
+
+    def test_room_to_spare_is_still_the_previous_result(self):
+        # o caso que ja existia nao pode mudar: 12288 com room de sobra -> (12288, 6144)
+        self.assertEqual(notes_budgets(12288, 13000, 6144), (12288, 6144))
+        self.assertEqual(notes_budgets(16384, 40000, 8192), (16384, 8192))
+
+    def test_the_squeezed_request_still_protects_the_notes(self):
+        # o aperto da janela continua igual: room 1318 -> raciocinio 1, ~1300 tokens para as notas
+        mt, budget = notes_budgets(12288, 1318, 6144)
+        self.assertEqual(mt, 1318)
+        self.assertEqual(budget, 1)
+        self.assertGreaterEqual(mt - budget, 1200)
+
+    def test_a_note_below_the_minimum_is_not_asked(self):
+        # revisao 0.3.31: (1, 50000, 1) era (1, 1) - uma nota de 1 token e uma lista de titulos vazios
+        self.assertEqual(notes_budgets(1, 50000, 1), (0, 0))
+        self.assertEqual(notes_budgets(NOTES_MIN - 1, 50000, 0), (0, 0))
+        # a fronteira em si continua sendo enviada
+        mt, budget = notes_budgets(NOTES_MIN, 50000, 0)
+        self.assertEqual(mt, NOTES_MIN)
+        self.assertGreaterEqual(budget, 1)
+
+    def test_the_notes_never_lose_their_token(self):
+        # invariante em toda a faixa: 0 < max_tokens <= room, raciocinio >= 1 e ao menos 1 token de nota
+        for want in (1, 256, 512, 1318, 1536, 3072, 12288):
+            for room in (0, 255, 256, 300, 1318, 5000, 50000):
+                for thinking in (0, 1, 512, 6144, 10 ** 6):
+                    mt, budget = notes_budgets(want, room, thinking)
+                    if mt == 0:
+                        self.assertEqual(budget, 0)
+                        continue
+                    self.assertLessEqual(mt, room, (want, room, thinking))
+                    self.assertGreaterEqual(budget, 1, (want, room, thinking))
+                    self.assertGreaterEqual(mt - budget, 1, (want, room, thinking))
+
+
 if __name__ == "__main__":
     unittest.main()

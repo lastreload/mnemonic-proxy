@@ -191,17 +191,30 @@ def notes_budgets(want: int, room: int, thinking_budget: int = 0) -> tuple[int, 
     `want` is cfg.notes_max_tokens, `room` is what the window leaves for this request (the window guard's own
     count, on the same messages that will be sent).  (0, 0) means "do not send a notes request": the caller skips
     it.  Otherwise 0 < max_tokens <= room (INV-1 holds by construction, so the guard never has to lower it), the
-    notes keep min(NOTES_ROOM, max_tokens) and the reasoning gets the rest - never more than the configured budget
-    (notes_max_tokens // 2) and never 0, which for Strata means "no cap at all".  With room to spare the result is
-    the previous one: want 12288 + room 13000 -> (12288, 6144).  At the window edge (room 1318) -> (1318, 1): the
-    reasoning is effectively off and the ~1300 tokens go to the notes, instead of a note cut at 493 tokens.
+    notes keep NOTES_MIN and the reasoning gets the rest - never more than the configured budget
+    (notes_max_tokens // 2) and never 0, which for Strata means "no cap at all".
+
+    Which reserve the notes get depends on what shrank the request (0.3.31 review):
+    - the WINDOW (room < want): the notes take min(NOTES_ROOM, max_tokens) and the reasoning what is left, so at
+      the edge (room 1318) the reasoning is effectively off and the ~1300 tokens go to the notes, instead of a
+      note cut at 493 tokens;
+    - NOTHING (room >= want, so mt == want): the request fits as configured, and the notes already have the size
+      the caller asked for, so the reasoning keeps its configured allowance, capped only to leave NOTES_MIN for
+      the notes.  want 1536 with 768 of reasoning and a 50k room -> (1536, 768): with the first arithmetic the
+      reasoning dropped to 1 token there, because NOTES_ROOM is larger than the whole request.
+    With room to spare the 12288 case is unchanged: (12288, 6144).
+
+    A note below NOTES_MIN is not worth a turn either: max_tokens < NOTES_MIN yields (0, 0), like a room that
+    small does - the caller then sends nothing and the recovery handles the segment.
     """
     room, want = int(room), max(1, int(want))
     if room < NOTES_MIN:
         return 0, 0                      # not even a useful note fits: ask nothing
     mt = min(want, room)                 # never more than the room: the guard would lower it anyway
-    keep = min(NOTES_ROOM, mt)           # what the notes cannot lose
-    budget = max(1, mt - keep)           # 1 when the request is smaller than NOTES_ROOM (for Strata 0 = no cap)
+    if mt < NOTES_MIN:
+        return 0, 0                      # a note of a handful of tokens is a list of empty headings: ask nothing
+    reserve = min(NOTES_ROOM, mt) if mt < want else NOTES_MIN   # what the notes cannot lose
+    budget = max(1, mt - reserve)        # 1 when the window squeezed the request (for Strata 0 = no cap)
     if thinking_budget and int(thinking_budget) > 0:
         budget = max(1, min(int(thinking_budget), budget))
     return mt, budget
@@ -2454,6 +2467,12 @@ class Manager:
         want = max(1, int(cfg.notes_max_tokens))
         guard = find_guard(upstream)
         kw = template_kwargs(nbody)
+        # The reserve asked of notes_source is what decides how many messages survive in the source of the note:
+        # every message dropped here is one the note is written without (they are the NEWEST ones, and they stay in
+        # the tail of B, but the note itself does not see them).  The pre-0.3.29 arithmetic asked for 1024 there; this
+        # asks NOTES_ROOM (3072), so on a tight window the source is a little shorter - a review fixture kept 246 of
+        # 253 messages with 1024 and 242 with 3072.  That is the price of the notes keeping room to be worth
+        # reading: check it in the real-model comparison before changing either number (0.3.31 review, #92).
         src = notes_source(guard, phys, tools, instr, kw, min(want, NOTES_ROOM))
         room = guard.room(guard.count(src + [instr], tools, kw)) if guard is not None else want
         mt, budget = notes_budgets(want, room, int(nbody.get("reasoning_budget_tokens") or 0))
@@ -2473,7 +2492,8 @@ class Manager:
                 events.append(self.journal.log("notes_error", conv=conv, error=str(e)[:300]))
         else:
             # No room for a note worth reading: asking would only be refused by the guard.
-            events.append(self.journal.log("notes_skipped", conv=conv, seg=seg + 1, reason="no_room", room=room))
+            events.append(self.journal.log("notes_skipped", conv=conv, seg=seg + 1, reason="no_room", room=room,
+                                           want=want))
         if not notes:
             status = "fallback"
         events.append(self.journal.log("notes", conv=conv, seg=seg + 1, ms=round((time.time() - t0) * 1000),
