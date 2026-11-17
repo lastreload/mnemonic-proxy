@@ -327,7 +327,7 @@ and is not listed here.
 | | `--data DIR` | archive, journal and lock (default `./data`) |
 | | `--config FILE` | JSON file with the `Config` fields below |
 | | `--mode tools\|off` | `tools` = managed context (default); `off` = plain pass-through, nothing archived or masked, useful to compare a session with and without the proxy |
-| | `--tokenizer PATH` | Hugging Face `tokenizer.json` (or a Strata pack `tokenizer/` folder) for exact token counts; needs `pip install 'mnemonic-proxy[exact]'` |
+| | `--tokenizer PATH` | Hugging Face tokenizer or Strata pack, as a file **or** a folder (the format is read from the `tokenizer.json` structure), for exact token counts; needs `pip install 'mnemonic-proxy[exact]'` |
 | | `--api-key KEY` | key sent to the upstream engine |
 | | `--engine auto\|strata\|llama.cpp\|ds4\|openai` | force the engine type instead of detecting it |
 | | `--version` | print the version and exit |

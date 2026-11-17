@@ -466,8 +466,13 @@ other hardware.
 
 The proxy recognises the engine at startup and turns off, with a warning, whatever the engine cannot do
 (`--engine auto|strata|llama.cpp|ds4|openai` forces it). `ctxproxy` is kept as an alias of `mnemonic-proxy`.
-Optional: `--tokenizer` (a Hugging Face `tokenizer.json`, or a Strata pack `tokenizer/` folder; needs
-`pip install 'mnemonic-proxy[exact]'`) for exact token counts.
+Optional: `--tokenizer` (needs `pip install 'mnemonic-proxy[exact]'`) for exact token counts. The path may be
+**a file or a folder**, and either a Hugging Face tokenizer or a Strata pack: the format is read from the structure
+of the `tokenizer.json` found there (a Hugging Face file has `model` as an object; a pack descriptor has `model` as
+a string plus the pack's `pre_pattern`, and is built from the adjacent `vocab.json`, `merges.txt` and
+`token_type.json`). So the model folder a user already has on disk works, and so does the file inside it. What
+cannot be read is reported as what it is - an invalid JSON file, a Hugging Face tokenizer the installed
+`tokenizers` cannot open, an incomplete pack with the missing files named - and never re-read as the other format.
 If `--tokenizer` is explicitly supplied but cannot be loaded (missing `tokenizers`, bad path or invalid format),
 startup fails before contacting the engine; it never silently switches that run to estimated counting. Install
 `mnemonic-proxy[exact]` in the same environment as the proxy and check the path. Omit the option only when an
@@ -485,7 +490,16 @@ With `--tokenizer`, the final guard and planning total now load an adjacent `cha
 (from the pack directory, or beside a supplied HF tokenizer file). This matters for fine-tunes such as Tiel:
 its Sharp template adds instructions and tool-error warnings that the built-in Qwen renderer does not write.
 Install/update `mnemonic-proxy[exact]` for both the tokenizer and sandboxed Jinja renderer. A discovered template
-that cannot load or render is never silently replaced by the built-in one. Pictures are forwarded to the engine and
+that cannot load or render is never silently replaced by the built-in one. Tool definitions reach the template in
+the unwrapped form the Qwen/Strata templates expect (the contents of `function`) and also answer `tool.function`,
+which is what the OpenAI-wrapped convention used by other fine-tunes (Spark among them) reads; `function` is not
+added as a key, so a template that serialises the whole tool writes exactly what it wrote before.
+**The template has to be the one the served weights carry.** For a GGUF that is the template inside the GGUF, which
+can differ from the stock template in the model's Hugging Face repository: on one Spark-X2.6-4B conversation the
+GGUF's own template rendered 314 tokens against the repo template's 170, and only the former matched the backend's
+`/apply-template` byte for byte. Pointing `--tokenizer` at the Hugging Face folder of a model served as a GGUF
+therefore gives an exact count of the wrong prompt; copy the tokenizer and the GGUF's `chat_template.jinja` into
+one folder (`llama-server` prints the template, `gguf-dump` extracts it) and point `--tokenizer` at that folder. Pictures are forwarded to the engine and
 budgeted, not refused: the template writes one vision marker per picture (never its bytes), and the guard counts each
 marker as `image_tokens` tokens. That number is an **upper bound**, and it has to be: no engine reports the real
 patch count before the request (Strata has no `/tokenize`, and its `/v1/messages/count_tokens` counts the marker
