@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.31 — 2026-11-17
+
+- **The streaming "recall results" placeholder follows the conversation language (#88).** After each recall call
+  served internally, the streaming path writes a line into `reasoning_content` — `[recall 'db-s3-007': 8 …]` —
+  that the client shows inside the model's `thinking` box. The last word was unconditionally Italian
+  (`risultati`), so an English conversation saw Italian text that came from the proxy, not from the model: the
+  symptom reported in #88. It now has the same language branch as its three siblings in the same round
+  (definitions loaded, call blocked by the receipt guard, closed search), which 0.3.28 had already localized:
+  `… : 8 results]` in an English conversation, unchanged word for word in an Italian one. The string dates back
+  to 0.1.0, before the language selection of 0.3.1, so this is not a regression of a recent release. Nothing
+  else changes: the line is a stream delta to the client, never part of the physical prompt, the archive, a
+  receipt or the hash chain, so existing conversations keep their stable prefix byte for byte, and recalled
+  archive content — Italian included — is delivered verbatim. The 0.3.28 note said this placeholder was tied to
+  a frozen fixture: `tests/fixtures/closed-search-recall.json` records that text in a `reasoning_content` field
+  no test reads (only `content` is used), and the fixture is left untouched. An audit of every proxy-written
+  string on the recall path (`core.recall` and its pages, `recall2`, the leaf selector, the pager receipts, the
+  window notices, the closing notes) found no other unconditional Italian text.
+  Test: `tests/test_issue88_recall_language.py` (15) — HTTP integration with the in-process fake engine and a
+  real temporary archive: English, Italian preserved, an empty search (`0 results`), a renamed recall tool
+  (`mem0_search`), recalled Italian content delivered intact, the non-streaming path still without the line,
+  a resumed conversation, and a guard over every structural placeholder of the stream.
+
 ## 0.3.30 — 2026-11-17
 - **`--tokenizer` accepts the model folder, not just the file (#95).** The format was decided by the kind of path:
   a file was tried as a Hugging Face tokenizer and anything else, including a *directory*, went to the Strata pack

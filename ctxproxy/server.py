@@ -516,7 +516,9 @@ class Proxy:
                 recalls.append({k: rec[k] for k in ("args", "tokens")})
                 recall_logs.append((rec, out))
                 if emit:
-                    info = "\n[%s %s: %d risultati]\n" % (cname, _short(a), len(meta))
+                    # #88: la lingua della conversazione, come per gli altri segnaposti di questo giro
+                    info = ("\n[%s %s: %d risultati]\n" if p.lang == "it" else
+                            "\n[%s %s: %d results]\n") % (cname, _short(a), len(meta))
                     self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                     strip_r[-1] += info
             if guard_on and len(done) < len(mine):
