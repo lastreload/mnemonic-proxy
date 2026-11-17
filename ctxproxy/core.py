@@ -768,21 +768,48 @@ class TokenCounter:
         self.scale = self._pending if self.samples >= self.min_samples else max(self.scale, self._pending)
 
 
+def _pack_descriptor(desc) -> bool:
+    """Il descrittore del tokenizer del pack di Strata non è un tokenizer HF: descrive come *costruirne* uno (nome
+    del modello come stringa e regex di split del pack), mentre in un file HF `model` è un oggetto."""
+    return (isinstance(desc, dict) and isinstance(desc.get("model"), str)
+            and isinstance(desc.get("pre_pattern"), str))
+
+
 def load_tokenizer(path: str):
-    """Tokenizer HF (`tokenizers`) per il conteggio esatto. Accetta un tokenizer.json HF oppure la cartella
-    tokenizer del pack di Strata (vocab.json + merges.txt + token_type.json + descrittore tokenizer.json, che NON è
-    in formato HF): in quel caso lo costruisce (tools/make_hf_tokenizer.py, verificato identico a Strata)."""
+    """Tokenizer HF (`tokenizers`) per il conteggio esatto. Accetta, indifferentemente come file o come cartella,
+    un tokenizer HF (tokenizer.json in formato HF) oppure il tokenizer del pack di Strata (descrittore
+    tokenizer.json + vocab.json + merges.txt + token_type.json, che NON è in formato HF): in quel caso lo
+    costruisce (tools/make_hf_tokenizer.py, verificato identico a Strata).
+    Il formato si riconosce dalla STRUTTURA del tokenizer.json, non dal tipo di percorso (issue #95: la cartella di
+    un modello HF veniva scambiata per un pack). Ciò che non si riconosce è un errore fedele al formato che si
+    stava leggendo: mai una reinterpretazione nell'altro formato, mai un declassamento silenzioso al conteggio
+    stimato (il chiamante, TokenCounter, resta non esatto e con --tokenizer esplicito l'avvio è rifiutato)."""
     from tokenizers import Tokenizer  # type: ignore
-    p = path
-    if os.path.isfile(p):
-        try:
-            return Tokenizer.from_file(p)
-        except Exception:  # noqa: BLE001  descrittore del pack: si costruisce dalla cartella
-            p = os.path.dirname(os.path.abspath(p))
-    if os.path.isdir(p) and os.path.exists(os.path.join(p, "vocab.json")):
+    if os.path.isdir(path):
+        directory, file = path, os.path.join(path, "tokenizer.json")
+        if not os.path.isfile(file):
+            raise ValueError("unrecognized tokenizer: %s (no tokenizer.json in the directory: neither a Hugging "
+                             "Face tokenizer nor a Strata tokenizer pack)" % path)
+    elif os.path.isfile(path):
+        directory, file = os.path.dirname(os.path.abspath(path)), path
+    else:
+        raise ValueError("unrecognized tokenizer: %s (no such file or directory)" % path)
+    try:
+        with open(file, encoding="utf-8") as f:
+            desc = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError("unrecognized tokenizer: %s is not a valid JSON tokenizer file (%s)" % (file, e)) from e
+    if _pack_descriptor(desc):
+        missing = [n for n in ("vocab.json", "merges.txt", "token_type.json")
+                   if not os.path.isfile(os.path.join(directory, n))]
+        if missing:
+            raise ValueError("incomplete Strata tokenizer pack %s: missing %s" % (directory, ", ".join(missing)))
         from .packtok import build
-        return build(p)
-    raise ValueError("unrecognized tokenizer: %s" % path)
+        return build(directory)
+    try:
+        return Tokenizer.from_file(file)
+    except Exception as e:  # noqa: BLE001  non è un descrittore di pack: l'errore della libreria è l'errore vero
+        raise ValueError("unsupported Hugging Face tokenizer %s: %s" % (file, e)) from e
 
 
 class Journal:
