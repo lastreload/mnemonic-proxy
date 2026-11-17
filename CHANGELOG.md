@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.3.32 — 2026-11-17
+
+- **`--mode off` is a plain pass-through in streaming too.** The mode is documented in three places as «plain
+  pass-through, nothing archived or masked», and the non-streaming path has always been exactly that: one request,
+  one answer. The streaming path, however, went through the same stream reader as the managed mode, where the
+  receipt guard holds every `write`/`edit`/`bash`-family call until its arguments are complete: in `off` a clean
+  call lost its incremental delivery, and a call whose arguments contained a receipt or a placeholder — the
+  shortened form of an old argument, a line with only `…` — **disappeared**. In `off` there is no internal loop,
+  so nothing could tell the model why: the client got `finish_reason: "tool_calls"` with no call at all, while the
+  same prompt without `stream` delivered the call. The same branch also swallowed a client call that happened to
+  be named like the proxy's internal recall tool, which in `off` has no consumer either. The stream reader now
+  knows the mode: in `off` nothing is held, inspected or intercepted, so streaming and non-streaming deliver the
+  same calls with the same arguments, receipt-looking text included, byte for byte. `off` adds no guard message
+  and no journal event, as before.
+- **The client receives the model's tool calls in the model's own order.** With `receipt_guard` on (the default),
+  a call the guard must inspect is held until the end of the round — its arguments can only be judged complete.
+  The calls the model emitted *after* it were meanwhile forwarded immediately, so the engine's `[write, read]`
+  arrived as `[read, write]`: the client could execute a later call first, and an agent that chains them (write
+  then read back) saw its own actions inverted. Renumbering the call index would not have been enough: on
+  Messages and Responses the block index is assigned when the block opens (`content_block_start`,
+  `response.output_item.added`), so the order on the wire *is* the arrival order. From the first held call on, the
+  calls not yet started are now held as well and delivered whole at the end of the round, in the order of the
+  engine's indices (gaps in those indices do not matter, the order does); the indices handed to the client stay
+  contiguous from 0. A call already streaming when the held one appears keeps streaming: its index is already with
+  the client and cannot be withdrawn. Nothing is released early: a held call is still judged on its complete
+  arguments, and a contaminated one is still never delivered. Cost, in exchange for the order: the calls that
+  follow a held one lose the incremental streaming of their arguments. As a side effect, those calls now reach the
+  native adapters as a single complete delta, so they can no longer run into the «interleaved arguments» case the
+  two adapters have to discard.
+- **In a mixed turn the call blocked by the receipt guard no longer vanishes without telling the model.** When the
+  model emitted its own calls together with the client's, the blocked ones were excluded from the internal group,
+  logged as `recall_dropped` and dropped: the client correctly never saw the call, but the model was never
+  relaunched in that turn (#90), so it never learned that its `write` had not been executed — it saw a call with
+  no result and, in the live sessions, repeated it. The blocked calls now stay in the internal group: the model
+  gets the usual `guard_msg` as the result of that call, reinserted with the other internal events, so it reads it
+  at the **next** turn, once, with the `tool_call_id` paired to the call in the internal assistant message. The
+  turn still costs one generation, the client still receives only its own calls, once, and the blocked call is
+  still never delivered. The round cap and the final round no longer empty the group for blocked calls: there is
+  no relaunch of the model to limit there, and the room is checked by `_fit_other` as before. When the message
+  cannot be delivered — no room for it, or the search already closed — the call leaves the group as before, and
+  the `receipt_guard` event now says so: `delivered: false` with a `reason` (`no_room`, `search_closed`), and
+  `delivered: true` when the model will read it. One blocked call alone in the final round still goes through
+  `_final_retry`, which answers every call of the round with the closed-search text: the model gets a message,
+  but the wrong one. Unchanged here, on purpose.
+  Tests: `tests/test_guard_delivery.py` (14) — HTTP integration with the in-process fake engine and a real
+  temporary archive: `off` with a contaminated `write` and with an internally-named call (streaming vs
+  non-streaming, all three APIs), delivery order with the held call first and last, split and interleaved
+  argument deltas with gaps in the engine's indices, an internal call in the same round, contiguous client
+  indices, the mixed turn (one generation, one `receipt_guard` with `delivered`, the paired feedback at the next
+  turn, tool-call pairing of the whole physical prompt), the blocked call never reaching the client, an engine
+  error surfacing inside an `off` stream, and a client disconnect while calls are held.
+
 ## 0.3.31 — 2026-11-17
 
 - **The streaming "recall results" placeholder follows the conversation language (#88).** After each recall call
