@@ -1,26 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.3.30 — 2026-11-17
 - **`--tokenizer` accepts the model folder, not just the file (#95).** The format was decided by the kind of path:
   a file was tried as a Hugging Face tokenizer and anything else, including a *directory*, went to the Strata pack
-  builder - so a plain Hugging Face model folder was read as a pack and startup failed on a missing
+  builder — so a plain Hugging Face model folder was read as a pack and startup failed on a missing
   `token_type.json`. The format is now read from the structure of the `tokenizer.json` at that path (file or
   folder): `model` as an object is a Hugging Face file, `model` as a string with `pre_pattern` is a pack
   descriptor, built from the adjacent `vocab.json`, `merges.txt` and `token_type.json`. Each failure keeps the
-  format it belongs to - invalid JSON, a Hugging Face file the installed `tokenizers` cannot open, a pack with the
-  missing files named - instead of surfacing as the other format's error, and an explicit `--tokenizer` that cannot
+  format it belongs to — invalid JSON, a Hugging Face file the installed `tokenizers` cannot open, a pack with the
+  missing files named — instead of surfacing as the other format's error, and an explicit `--tokenizer` that cannot
   be loaded still refuses startup rather than falling back to an estimate.
 - **Tool definitions render on templates written for the wrapped OpenAI form (#95).** The template received the
   definitions unwrapped (the contents of `function`, the Qwen/Strata convention); a template that reads
-  `tool.function` - both Spark-X2.6-4B templates do - got `Undefined` and the render failed, so with a tokenizer
+  `tool.function` — both Spark-X2.6-4B templates do — got `Undefined` and the render failed, so with a tokenizer
   loaded every request in `--mode tools` was refused by the window guard with HTTP 400, even when the client sent
   no tools (the proxy injects its own). The definitions now also answer `tool.function` with themselves, without
   `function` becoming a key: `keys()`, `items()` and `tojson` of the whole tool are byte for byte what they were,
-  so the prompts of the templates already supported do not change. Measured on llama.cpp b11514 with
-  `Sharp-Spark-X2.6-4B-Q4_K_XL` on CPU: tokenizer loaded from the folder, the GGUF's own template, `--mode tools`,
-  five requests (no client tools, client tools, `tool_choice: required`, a full tool round, streaming) all accepted
-  with the counted prompt equal to the backend's `usage.prompt_tokens` (505, 556, 556, 581, 581; delta 0) and no
-  `count_error`.
+  so the prompts of the templates already supported do not change. Measured once on Linux/CPU, llama.cpp b11514
+  (`de7fa0a3c`) with `Sharp-Spark-X2.6-4B-Q4_K_XL`: tokenizer loaded from the folder, the GGUF's own template,
+  `--mode tools`, five requests (no client tools, client tools, `tool_choice: required`, a full tool round,
+  streaming) all accepted with the counted prompt equal to the backend's `usage.prompt_tokens`
+  (505, 556, 556, 581, 581; delta 0) and no `count_error`. One quantization, one engine build and one template:
+  not a claim about every model or every backend.
+- **Exact counting needs the template of the weights served.** Documented in `docs/install.md`: for a GGUF the
+  template inside the GGUF can differ from the stock one in the model's Hugging Face repository (on one
+  Spark-X2.6-4B conversation, 314 rendered tokens against 170, and only the GGUF's matched the backend's
+  `/apply-template` byte for byte), so a tokenizer folder pointing at the wrong template gives an exact count of
+  the wrong prompt.
+- Refs #95. Tests: `tests/test_issue95_tokenizer_formats.py` (12) and `tests/test_issue95_tool_rendering.py` (11),
+  16 of which fail on the previous code; the equality of the already supported prompts is checked against a golden
+  generated before the fix.
 
 ## 0.3.29 — 2026-11-15
 

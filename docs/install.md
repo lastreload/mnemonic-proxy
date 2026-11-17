@@ -178,7 +178,10 @@ switches, tool calls, streaming, `/v1/messages` and `/v1/responses` worked, no s
   loaded first with a 1-token request), so the window follows the engine and a prompt never goes over it. Below
   16384 the proxy refuses to start; a `window` in the config bigger than the engine context also refuses the start
   and fails `check`, with the command that fixes it. You can leave `window` out of the config.
-- **`--tokenizer` is still recommended** (the model's `tokenizer.json`, `pip install 'mnemonic-proxy[exact]'`).
+- **`--tokenizer` is still recommended** (`pip install 'mnemonic-proxy[exact]'`). Either the model's
+  `tokenizer.json` or the folder holding it is accepted — `--tokenizer ~/models/Model/tokenizer/tokenizer.json`
+  and `--tokenizer ~/models/Model/tokenizer` both work (0.3.30) — but for the counted prompt to match the backend,
+  the `chat_template.jinja` beside it has to be the template of the weights actually served (see below).
   Without it the proxy estimates chars/3.5, which was up to ~10% low on code with many digits; on generic engines
   the estimate now gets a 15% margin by default (`window_estimate_slack` 0.15) and `check` warns. With 0.3.7 the
   notes request at a segment switch was estimated at 31.3K tokens but was 33.4K real tokens and both engines cut it;
@@ -499,7 +502,8 @@ can differ from the stock template in the model's Hugging Face repository: on on
 GGUF's own template rendered 314 tokens against the repo template's 170, and only the former matched the backend's
 `/apply-template` byte for byte. Pointing `--tokenizer` at the Hugging Face folder of a model served as a GGUF
 therefore gives an exact count of the wrong prompt; copy the tokenizer and the GGUF's `chat_template.jinja` into
-one folder (`llama-server` prints the template, `gguf-dump` extracts it) and point `--tokenizer` at that folder. Pictures are forwarded to the engine and
+one folder (`llama-server` prints the template, `gguf-dump` extracts it) and point `--tokenizer` at that folder.
+Pictures are forwarded to the engine and
 budgeted, not refused: the template writes one vision marker per picture (never its bytes), and the guard counts each
 marker as `image_tokens` tokens. That number is an **upper bound**, and it has to be: no engine reports the real
 patch count before the request (Strata has no `/tokenize`, and its `/v1/messages/count_tokens` counts the marker
