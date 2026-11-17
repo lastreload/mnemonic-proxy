@@ -79,3 +79,16 @@ The same choice applies to the short lines the proxy writes into the streaming `
 show inside the model's thinking box: definitions loaded, a call blocked by the receipt guard, a closed search, and
 the results of a recall call (this last one since 0.3.31). They are stream deltas to the client, not part of the
 physical prompt, so no stable prefix depends on them.
+
+## Delivery order of tool calls in streaming
+
+The order in which the client receives the model's tool calls is the model's own order, in `--mode tools` and in
+`--mode off`, on Chat Completions, Messages and Responses. This costs something in one case. The receipt guard can
+only judge a `write`/`edit`/`bash`-family call once its arguments are complete, so such a call is held to the end of
+the round; from that moment the calls the model emits after it are held too and delivered whole at the end, in the
+model's order. Without that, the later call would reach the client first — on Messages and Responses the block
+index is assigned when the block opens, so renumbering alone cannot fix the order. Calls that had already started
+streaming before the held one keep streaming: their index is already with the client.
+
+`--mode off` holds and inspects nothing at all: it is a pass-through, so a call carrying a copied receipt reaches
+the client exactly as the engine emitted it — that is the point of the comparison mode (0.3.32).

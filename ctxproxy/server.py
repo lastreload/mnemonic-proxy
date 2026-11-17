@@ -208,7 +208,10 @@ class Proxy:
         """mode off: plain pass-through (one round, no prompt management)."""
         t0 = time.time()
         try:
-            r = self._round(req, emit, None) if emit else self.up.chat(req)
+            # 0.3.32: `off: True` dice al lettore di stream che questa è la modalità di passaggio diretto:
+            # nessuna chiamata trattenuta, nessuna intercettata. Il non-stream era già un passaggio diretto.
+            r = self._round(req, emit, {"sent_role": False, "client_calls": 0, "final": False, "off": True}) \
+                if emit else self.up.chat(req)
         except UpstreamError as e:
             return e.status, _err_body(e), {}
         self._log_request("off", None, r, t0, 0, 0)
@@ -364,7 +367,13 @@ class Proxy:
                 load = [c for c in mine if c not in blocked
                         and (c.get("function") or {}).get("name") not in p.recall_aliases] \
                     if others and not (rnd > self.cfg.max_recall_rounds or final) else []
-                if not load:
+                # 0.3.32: in un turno misto le chiamate BLOCCATE dalla guardia non svaniscono più. Restano nel
+                # gruppo interno: il modello riceve `guard_msg` al TURNO SUCCESSIVO (reinserito con gli altri
+                # eventi interni), senza essere rilanciato adesso e senza che il client veda la chiamata. Per
+                # loro il tetto dei giri e il giro finale non hanno ragione d'essere — non c'è nessun rilancio
+                # da limitare — e lo spazio lo controlla `_fit_other` più sotto.
+                guarded = [c for c in mine if c in blocked] if others else []
+                if not load and not guarded:
                     # la recall non eseguita sparisce (invariato: vedi test_mixed_calls_*)
                     msg["tool_calls"] = others or None
                     if not others:
@@ -376,14 +385,15 @@ class Proxy:
                                      thinking_off=no_think)
                     break
                 deliver = others
-                if len(load) < len(mine):
-                    # recall o chiamate bloccate dal receipt_guard nello stesso turno: scartate come prima
-                    self.journal.log("recall_dropped", conv=p.conv, count=len(mine) - len(load), mixed=True,
-                                     round=rnd, names=sorted({(c.get("function") or {}).get("name") for c in mine
-                                                              if c not in load}),
+                rest = [c for c in mine if c not in load and c not in guarded]
+                if rest:
+                    # recall non eseguita nello stesso turno misto: scartata come prima
+                    self.journal.log("recall_dropped", conv=p.conv, count=len(rest), mixed=True,
+                                     round=rnd, names=sorted({(c.get("function") or {}).get("name")
+                                                              for c in rest}),
                                      final=final, retry=made > 0, retry_no_room=tries > made, attempts=made,
                                      thinking_off=no_think)
-                mine = load
+                mine = [c for c in mine if c in load or c in guarded]
                 n_strip = len(strip_c)
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
             amsg = {"role": "assistant", "content": "" if deliver is not None else (msg.get("content") or ""),
@@ -427,16 +437,23 @@ class Proxy:
                     # the assistant message so the tool protocol stays coherent
                     self.journal.log("recall_skipped", conv=p.conv, round=rnd, name=cname, args=str(a)[:300],
                                      reason=st.reason)
+                    if c in blocked:
+                        # la guardia ha bloccato la chiamata ma il messaggio NON è stato consegnato al modello
+                        self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500],
+                                         delivered=False, reason="search_closed")
                     continue
                 if c in blocked:
                     out = guard_msg(p.lang).replace("{rn}", p.recall_name)
                     if guard_on:
                         out = self._fit_other(p, phys0, loop, new, body, rnd, floor, lu_full, out, st)
                         if out is None:
+                            self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname,
+                                             args=str(a)[:500], delivered=False, reason="no_room")
                             continue
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     done.append(c)
-                    self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500])
+                    self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500],
+                                     delivered=True)
                     if emit:
                         info = ("\n[gestore del contesto: chiamata %s bloccata (copia di una ricevuta)]\n"
                                 if p.lang == "it" else
@@ -1012,9 +1029,15 @@ class Proxy:
 
     def _round(self, body, emit, state):
         """Un giro in streaming da Strata. Inoltra subito ragionamento/testo/tool call del client; trattiene le
-        chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning)."""
+        chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning).
+
+        0.3.32: `state["off"]` = modalità `off`, passaggio trasparente (niente trattenute, niente intercettazioni).
+        Dalla prima chiamata trattenuta in poi le chiamate del client ancora da iniziare non si inoltrano a pezzi:
+        escono intere a fine flusso, in ordine di indice del motore, così l'ordine di consegna coincide con quello
+        del motore anche su Messages e Responses (dove l'indice del blocco si assegna all'arrivo)."""
         if state is None:
             state = {"sent_role": False, "client_calls": 0, "final": False}
+        off = bool(state.get("off"))
         call = self.up.chat_stream(body)
         content, reasoning = [], []
         # Hold only a possible native wrapper at the start of a closed-search answer.
@@ -1023,6 +1046,7 @@ class Proxy:
         holding_content = bool(state.get("final"))
         sent_c, sent_r = [], []
         calls: dict[int, dict] = {}      # indice upstream -> {id, name, args, mine, cidx}
+        holding = False                  # dalla prima trattenuta: le chiamate nuove del client si bufferizzano
         finish, usage, timings, meta = None, None, None, {}
         last_ka = time.monotonic()
         try:
@@ -1062,14 +1086,17 @@ class Proxy:
                     c = calls.get(i)
                     if c is None:
                         name = f.get("name") or ""
-                        c = calls[i] = {"id": tc.get("id"), "name": name,
-                                        "args": "", "mine": name in state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
-                                        "cidx": None, "held": self.cfg.receipt_guard and is_guarded(name)}
-                        if not c["mine"] and not c["held"]:
+                        c = calls[i] = {"id": tc.get("id"), "name": name, "args": "", "cidx": None,
+                                        "mine": not off and name in state.get(
+                                            "internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
+                                        "held": not off and self.cfg.receipt_guard and is_guarded(name)}
+                        if c["held"]:
+                            holding = True
+                        elif not c["mine"] and not holding:
                             c["cidx"] = state["client_calls"]
                             state["client_calls"] += 1
                     c["args"] += f.get("arguments") or ""
-                    if not c["mine"] and not c["held"]:
+                    if c["cidx"] is not None:   # già iniziata verso il client: continua a pezzi
                         x = {"index": c["cidx"], "function": {"arguments": f.get("arguments") or ""}}
                         if tc.get("id"):
                             x["id"] = tc["id"]
@@ -1100,14 +1127,19 @@ class Proxy:
                 held_content, state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)))):
             self._emit_delta(emit, state, meta, {"content": held_content})
             sent_c.append(held_content)
-        # chiamate con effetti trattenute dalla guardia: inoltrate intere solo se pulite
+        # Chiamate trattenute dalla guardia (solo se pulite) e chiamate del client bufferizzate perché
+        # arrivate dopo una trattenuta: inoltrate intere, in ordine di indice del motore (i buchi di indice
+        # non contano, l'ordine sì), così il client le riceve nell'ordine in cui il modello le ha emesse.
         for _, c in sorted(calls.items()):
-            if c.get("held") and not receipt_contaminated(c["name"], c["args"]):
-                c["cidx"] = state["client_calls"]
-                state["client_calls"] += 1
-                self._emit_delta(emit, state, meta, {"tool_calls": [
-                    {"index": c["cidx"], "id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": c["args"]}}]})
+            if c["mine"] or c["cidx"] is not None:
+                continue
+            if c["held"] and receipt_contaminated(c["name"], c["args"]):
+                continue                      # bloccata: non esce, il modello lo saprà dal gruppo interno
+            c["cidx"] = state["client_calls"]
+            state["client_calls"] += 1
+            self._emit_delta(emit, state, meta, {"tool_calls": [
+                {"index": c["cidx"], "id": c["id"], "type": "function",
+                 "function": {"name": c["name"], "arguments": c["args"]}}]})
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
             msg["reasoning_content"] = "".join(reasoning)
