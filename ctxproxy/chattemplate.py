@@ -15,6 +15,27 @@ from .render import (VISION, UnsupportedPicture, _args, _has_image, _text_of, li
                      picture_contract)
 
 
+class _ToolView(dict):
+    """Una definizione di strumento nella forma *scartata* (il contenuto di `function`, convenzione Qwen/Strata)
+    che risponde anche a `tool.function` restituendo la definizione stessa, per i template scritti sulla forma
+    avvolta di OpenAI (entrambi i template di Spark fanno `tool.function | tojson`).
+    `function` NON è una chiave: `keys()`, `items()` e il `tojson` dell'intero oggetto vedono esattamente la
+    definizione di prima, byte per byte, quindi il prompt dei template già supportati non cambia di un carattere
+    (duplicare la proprietà lo cambierebbe: un template che serializza l'intero strumento scriverebbe anche la
+    copia annidata). Issue #95.
+    """
+    __slots__ = ()
+
+    def __getitem__(self, key):
+        if key == 'function' and not dict.__contains__(self, 'function'):
+            return dict(self)     # dict semplice: stesso contenuto, nessuna ricorsione su tool.function.function
+        return dict.__getitem__(self, key)
+
+
+def _tool_view(tdef):
+    return _ToolView(tdef) if isinstance(tdef, dict) else tdef
+
+
 class PackTemplate:
     def __init__(self, path):
         try:
@@ -86,7 +107,8 @@ class PackTemplate:
                     and not out['content'].strip() and not out.get('tool_calls')):
                 continue
             normalized.append(out)
-        tdefs = [t.get('function', t) if t.get('type') == 'function' else t for t in tools or []] or None
+        tdefs = [_tool_view(t.get('function', t) if t.get('type') == 'function' else t)
+                 for t in tools or []] or None
         try:
             rendered = self.template.render(messages=normalized, tools=tdefs, add_generation_prompt=True,
                                             **{'enable_thinking': True, **kwargs})
