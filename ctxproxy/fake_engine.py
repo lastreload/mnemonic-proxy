@@ -403,6 +403,7 @@ class FakeEngine:
                 r = eng.handle_chat(body)
                 msg = dict(r["choices"][0]["message"])
                 slow = msg.pop("_slow", 0)
+                deltas = msg.pop("_deltas", None)
                 base = {k: r[k] for k in ("id", "object", "created", "model")}
                 base["object"] = "chat.completion.chunk"
 
@@ -410,16 +411,22 @@ class FakeEngine:
                     return {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": fin}], **x}
 
                 parts = [ch({"role": "assistant", "content": ""})]
-                for key in ("reasoning_content", "content"):
-                    t = msg.get(key) or ""
-                    for i in range(0, len(t), 10):
-                        parts.append(ch({key: t[i:i + 10]}))
-                for i, c in enumerate(msg.get("tool_calls") or []):
-                    parts.append(ch({"tool_calls": [{"index": i, "id": c["id"], "type": "function",
-                                                     "function": {"name": c["function"]["name"], "arguments": ""}}]}))
-                    a = c["function"]["arguments"]
-                    for k in range(0, len(a), 7):
-                        parts.append(ch({"tool_calls": [{"index": i, "function": {"arguments": a[k:k + 7]}}]}))
+                if deltas is not None:
+                    # sequenza di delta dettata dal test (nomi e argomenti divisi o intercalati come li
+                    # manda un motore reale); il messaggio non-stream resta quello della policy
+                    parts += [ch(d) for d in deltas]
+                else:
+                    for key in ("reasoning_content", "content"):
+                        t = msg.get(key) or ""
+                        for i in range(0, len(t), 10):
+                            parts.append(ch({key: t[i:i + 10]}))
+                    for i, c in enumerate(msg.get("tool_calls") or []):
+                        parts.append(ch({"tool_calls": [{"index": i, "id": c["id"], "type": "function",
+                                                         "function": {"name": c["function"]["name"],
+                                                                      "arguments": ""}}]}))
+                        a = c["function"]["arguments"]
+                        for k in range(0, len(a), 7):
+                            parts.append(ch({"tool_calls": [{"index": i, "function": {"arguments": a[k:k + 7]}}]}))
                 parts.append(ch({}, r["choices"][0]["finish_reason"], usage=r["usage"], timings=r["timings"]))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
