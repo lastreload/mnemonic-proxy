@@ -39,25 +39,26 @@ jobs:
         run: |
           cd /tmp
           /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 32768 --port 18095 &
-          for i in $(seq 1 50); do curl -sf localhost:18095/health > /dev/null && break; sleep 0.2; done
+          # `if ... break; fi` and `|| true`: with bash -e a failed curl (connection refused) would abort the step.
+          for i in $(seq 1 50); do if curl -sf localhost:18095/health > /dev/null; then break; fi; sleep 0.2; done
       - name: start the container
+        # the container shares the runner's network: the fake engine listens on 127.0.0.1, which a bridge network cannot reach.
         run: |
-          docker run -d --name smoke --add-host=host.docker.internal:host-gateway \
-            -e UPSTREAM=http://host.docker.internal:18095 -e API_KEY=ci-key \
-            -p 127.0.0.1:8096:8096 mnemonic-proxy:ci
+          docker run -d --name smoke --network=host \
+            -e UPSTREAM=http://127.0.0.1:18095 -e API_KEY=ci-key mnemonic-proxy:ci
       - name: the proxy takes the key and refuses the rest
         run: |
           code=0
           for i in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-key' localhost:8096/health)
-            [ "$code" = 200 ] && break
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-key' localhost:8096/health || true)
+            if [ "$code" = 200 ]; then break; fi
             sleep 0.5
           done
           test "$code" = 200
-          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8096/health)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8096/health || true)" = 401
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-key' \
             -H 'Content-Type: application/json' -d '{"model":"local-model","messages":[{"role":"user","content":"hi"}]}' \
-            localhost:8096/v1/chat/completions)" = 200
+            localhost:8096/v1/chat/completions || true)" = 200
       - name: the dashboard answers inside the container
         run: |
           docker exec smoke python -c "import urllib.request,json;print(json.load(urllib.request.urlopen('http://127.0.0.1:8097/health',timeout=5)))"
