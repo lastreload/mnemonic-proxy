@@ -1,6 +1,7 @@
 """Real CLI startup failure matrix against a loopback fake engine, never production."""
 import contextlib
 import io
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -28,34 +29,44 @@ class KeyStartupHTTPTests(unittest.TestCase):
             def do_POST(self): calls.append(self.path); return super().do_POST()
         self.engine.srv.RequestHandlerClass=Record
 
-    def test_all_invalid_files_real_cli_before_bind_network_or_data(self):
-        values={'missing':None,'empty':b'','space':b' \r\n\t','utf8':b'fake-secret-prefix\xff','denied':b'fake-denied'}
+    def _assert_invalid_path_before_side_effects(self, f, kind):
         commands=[(['-m','ctxproxy.server'],flag) for flag in ('--api-key-file','--client-key-file')]
         commands += [(['-m','ctxproxy.server','check','--json'],flag) for flag in ('--api-key-file','--client-key-file')]
         commands += [(['dashboard/ctxdash.py'],flag) for flag in ('--api-key-file','--proxy-api-key-file')]
+        for command,flag in commands:
+            with self.subTest(kind=kind,command=command,flag=flag):
+                with socket.socket() as sock:
+                    sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
+                data=self.root/'new-data'
+                options=['--data',str(data),'--port',str(port)]
+                options+=['--strata',self.url,'--proxy',self.url] if command==['dashboard/ctxdash.py'] else ['--upstream',self.url,'--api-key','fake-inline']
+                r=subprocess.run([sys.executable,*command,*options,flag,str(f)],capture_output=True,timeout=5)
+                self.assertNotEqual(r.returncode,0)
+                self.assertIn(flag.encode(),r.stderr)
+                self.assertNotIn(b'Traceback',r.stderr)
+                self.assertNotIn(b'fake-secret',r.stdout+r.stderr)
+                if kind=='utf8':self.assertIn(b'invalid UTF-8',r.stderr)
+                self.assertEqual(self.calls,[])
+                self.assertFalse(data.exists())
+                with socket.socket() as sock:self.assertNotEqual(sock.connect_ex(('127.0.0.1',port)),0)
+
+    def test_all_invalid_files_real_cli_before_bind_network_or_data(self):
+        values={'missing':None,'empty':b'','space':b' \r\n\t','utf8':b'fake-secret-prefix\xff','directory':None}
         for kind,contents in values.items():
             f=self.root/(kind+'.key')
-            if contents is not None:f.write_bytes(contents)
-            if kind=='denied':f.chmod(0)
-            try:
-                for command,flag in commands:
-                    with self.subTest(kind=kind,command=command,flag=flag):
-                        with socket.socket() as sock:
-                            sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]
-                        data=self.root/'new-data'
-                        options=['--data',str(data),'--port',str(port)]
-                        options+=['--strata',self.url,'--proxy',self.url] if command==['dashboard/ctxdash.py'] else ['--upstream',self.url,'--api-key','fake-inline']
-                        r=subprocess.run([sys.executable,*command,*options,flag,str(f)],capture_output=True,timeout=5)
-                        self.assertNotEqual(r.returncode,0)
-                        self.assertIn(flag.encode(),r.stderr)
-                        self.assertNotIn(b'Traceback',r.stderr)
-                        self.assertNotIn(b'fake-secret',r.stdout+r.stderr)
-                        if kind=='utf8':self.assertIn(b'invalid UTF-8',r.stderr)
-                        self.assertEqual(self.calls,[])
-                        self.assertFalse(data.exists())
-                        with socket.socket() as sock:self.assertNotEqual(sock.connect_ex(('127.0.0.1',port)),0)
-            finally:
-                if kind=='denied':f.chmod(0o600)
+            if kind=='directory':f.mkdir()
+            elif contents is not None:f.write_bytes(contents)
+            self._assert_invalid_path_before_side_effects(f,kind)
+
+    @unittest.skipUnless(os.name=='posix','chmod mode bits do not deny file reads on Windows; directory rejection is tested there')
+    def test_posix_unreadable_file_real_cli_before_side_effects(self):
+        if os.geteuid()==0:self.skipTest('requires an unprivileged process for a real POSIX read denial')
+        f=self.root/'denied.key';f.write_bytes(b'fake-denied');f.chmod(0)
+        try:
+            # Validate the fixture itself: Windows chmod(0) does not establish this precondition.
+            with self.assertRaises(PermissionError):f.read_bytes()
+            self._assert_invalid_path_before_side_effects(f,'denied')
+        finally:f.chmod(0o600)
 
     def test_explicit_empty_paths_real_cli(self):
         for command,flag in [(['-m','ctxproxy.server'],'--client-key-file'),
