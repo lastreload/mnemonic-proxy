@@ -595,9 +595,10 @@ def build_check_parser():
 
 
 def main(argv=None):
-    from .server import load_config
+    from .server import load_config, resolve_keys
     ap = build_check_parser()
     a = ap.parse_args(argv)
+    resolve_keys(a)   # the report must probe the engine with the same key the proxy would send
     config_error = None
     try:
         raw_cfg, cfg = load_config(a)

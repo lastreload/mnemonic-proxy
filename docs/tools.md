@@ -95,7 +95,14 @@ python3 dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 --prox
 
 `--data` is required: it is the proxy's data directory (`journal.jsonl`, `archive.sqlite`, `live/`). If
 Strata requires an API key, add `--api-key-file` with the host path to its key file. The dashboard reads the
-key locally and sends it only to Strata.
+key locally and sends it only to Strata. If the proxy requires a client key, add `--proxy-api-key-file`
+explicitly; even when sharing the same key file, supply both flags. The dashboard is local-only: use its
+listener's port and `localhost` or `127.0.0.1` as Host (the gate also recognizes `[::1]`, without changing the
+existing IPv4-only bind implementation). Custom hosts, reverse proxies and forwarding to a different local
+port are not supported. Headless writes to `/api/marks` must use JSON, not text/plain; browser writes must
+be same-origin. These dashboard guards are automatic: no new key configuration is required for local no-auth
+setups. Key files are read at startup; restart to change them. This is not HTTPS or safe public exposure.
+See [Security & privacy](security.md#security--privacy).
 
 On `127.0.0.1:8097`: engine status, physical vs. virtual context over time, masking/segment/recall events,
 and the live physical prompt (with `live_dump: true`). It reads Strata and the data directory without

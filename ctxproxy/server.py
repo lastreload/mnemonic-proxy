@@ -14,6 +14,7 @@ Disconnessione del client (Esc in pi): il proxy chiude lo stream verso Strata, c
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import os
@@ -1368,7 +1369,10 @@ def sse_from_response(r: dict):
 
 
 def is_loopback(host: str) -> bool:
-    """Admin endpoints accept only this machine (the proxy has no client authentication; see #28: 0.0.0.0)."""
+    """Admin endpoints accept only this machine. Without `--client-key-file` the proxy has no client
+    authentication (see #28: 0.0.0.0)."""
+    if host == "localhost":
+        return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -1377,12 +1381,31 @@ def is_loopback(host: str) -> bool:
     return (mapped or ip).is_loopback
 
 
-def make_handler(proxy: Proxy):
+def authorized(headers, key: str) -> bool:
+    """Does the request carry `key`? An empty `key` means the proxy is open (the default: bound to 127.0.0.1).
+    Accepts the bearer token of the OpenAI SDKs and the `x-api-key` of the Anthropic ones."""
+    if not key:
+        return True
+    auth = headers.get("Authorization", "").encode()
+    if auth[:7].lower() == b"bearer " and hmac.compare_digest(auth[7:].strip(), key.encode()):
+        return True
+    return hmac.compare_digest(headers.get("x-api-key", "").strip().encode(), key.encode())
+
+
+def make_handler(proxy: Proxy, client_key: str = ""):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *a):  # meno rumore
             pass
+
+        def _refused(self) -> bool:
+            """401 when the proxy is behind a key and the request does not carry it."""
+            if authorized(self.headers, client_key):
+                return False
+            self._send(401, {"error": {"message": "missing or invalid API key",
+                                       "type": "authentication_error"}})
+            return True
 
         def _send(self, status, obj, headers=None, raw=None, ctype="application/json"):
             data = raw if raw is not None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -1403,6 +1426,8 @@ def make_handler(proxy: Proxy):
             self._send(st, None, raw=data, ctype=hdr.get("Content-Type", "application/json"))
 
         def do_GET(self):
+            if self._refused():
+                return
             parts = self.path.split("?")[0].strip("/").split("/")
             if parts[:3] == ["v1", "strata", "archive"] and len(parts) == 4:
                 r = proxy.store.get(parts[3])
@@ -1453,7 +1478,9 @@ def make_handler(proxy: Proxy):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n) if n else b""
+            body = self.rfile.read(n) if n else b""   # drained before the 401, so keep-alive stays aligned
+            if self._refused():
+                return
             path = self.path.split("?")[0].rstrip("/")
             if path.startswith("/v1/strata/marks"):
                 try:
@@ -1569,6 +1596,12 @@ def build_parser(prog="mnemonic-proxy", description=None):
     ap.add_argument("--config", help="JSON file with Config fields (window, thresholds, feature flags)")
     ap.add_argument("--tokenizer", help="HF tokenizer.json for exact token counts (optional; default chars/3.5)")
     ap.add_argument("--api-key", default="", help="API key sent to the upstream engine (optional)")
+    ap.add_argument("--api-key-file", help="file holding the key sent to the upstream engine; keeps the secret out "
+                                           "of the command line (overrides --api-key)")
+    ap.add_argument("--client-key-file", help="file holding the key clients must send; keeps the secret out of the "
+                                             "command line and out of the process list. The proxy checks every request "
+                                             "against it, so the key can be a different one from --api-key: giving "
+                                             "clients the engine key would let them reach the engine directly.")
     ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "ds4", "openai"], default=None,
                     help="engine type (default: from the config file, otherwise auto-detected)")
     ap.add_argument("--version", action="version", version="mnemonic-proxy " + __version__)
@@ -1708,6 +1741,7 @@ def main(argv=None):
     if argv and argv[0] == "init-config":
         raise SystemExit(init_config_main(argv[1:]))
     a = build_parser().parse_args(argv)
+    resolve_keys(a)   # reject invalid explicit key files before config, data directory or lock
     try:
         raw_cfg, cfg = load_config(a)
     except (OSError, ValueError) as e:
@@ -1729,8 +1763,44 @@ def main(argv=None):
         raise SystemExit("mnemonic-proxy: %s" % e) from None
 
 
+def resolve_keys(a):
+    """Read the two key files into the keys used at runtime, so the server and `check` see the same ones.
+    A missing or empty file is a startup error, never a silently open request."""
+    if a.api_key_file is not None:
+        a.api_key = read_key_file(a.api_key_file, "--api-key-file")
+    a.client_key = read_key_file(a.client_key_file, "--client-key-file")
+
+
+def read_key_file(path, label):
+    """Only None means absent; invalid explicit files never fall back to another key."""
+    if path is None:
+        return ""
+    if path == "":
+        raise SystemExit("mnemonic-proxy: %s path is empty" % label)
+    try:
+        with open(path, encoding="utf-8") as f:
+            key = f.read().strip()
+    except UnicodeError:
+        raise SystemExit("mnemonic-proxy: %s: invalid UTF-8" % label) from None
+    except OSError as e:
+        raise SystemExit("mnemonic-proxy: cannot read %s: %s" % (label, e)) from None
+    if not key:
+        raise SystemExit("mnemonic-proxy: %s is empty" % label)
+    return key
+
+
 def serve(a, raw_cfg, cfg, origin=None):
     """Run only while main owns the data directory's maintenance lock."""
+    # The archive is plaintext, so an open proxy on a reachable address is an open archive. The key clients are
+    # checked against comes from a file (--client-key-file): a separate one also keeps the engine's key from being
+    # handed to whoever is allowed to use the proxy.
+    if not hasattr(a, "client_key"):
+        resolve_keys(a)   # direct callers; main has already read each file once
+    client_key = a.client_key
+    if not client_key and not is_loopback(a.host):
+        print("[mnemonic-proxy] warning: bound to %s with no client key: anyone who can reach this port reads and "
+              "writes the archive and the engine. Add --client-key-file or bind to 127.0.0.1." % a.host,
+              file=sys.stderr, flush=True)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
@@ -1792,16 +1862,17 @@ def serve(a, raw_cfg, cfg, origin=None):
                              "running on Python %d.%d. Set \"kv_archive\": false or upgrade Python."
                              % sys.version_info[:2])
         enable_kv_archive(proxy)
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
+    srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy, client_key))
     # Request threads stay daemonic: with HTTP/1.1 keep-alive an idle client connection would otherwise block
     # shutdown forever. The data lock is released by the OS when the process exits.
     srv.daemon_threads = True
     saved_on = bool(engine.slot_save and any(getattr(cfg, k, False) for k in SAVE_PRODUCING))
-    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
+    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s auth=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
         "yes" if saved_on else "off (optional)" if engine.slot_save else "no", a.mode,
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
-            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor),
+            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor,
+        "api key required" if client_key else "open"),
           file=sys.stderr, flush=True)
     if not saved_on:
         from .engines import BASE_MODE, saved_state_later

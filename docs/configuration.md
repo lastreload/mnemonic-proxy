@@ -312,6 +312,43 @@ declared: in the final round the model still **reads** the proxy's internal tool
 a general speed-up: nothing changes in front of Strata, which does not need it, and the cold prefill
 of a first turn is unaffected.
 
+## Optional client authentication and key files
+
+Existing local installations remain open by default and need no key or configuration migration. Only setting
+`--client-key-file FILE` activates client authentication: every path then requires that file's key as
+`Authorization: Bearer KEY` or `x-api-key`. A public bind without it prints a warning, not a startup refusal.
+`--api-key` is a separate key sent upstream; `--api-key-file FILE` replaces that inline value, including in
+`check`. It never enables client authentication or supplies a missing client key.
+
+Files contain UTF-8 text, trimmed at both ends. An absent file option leaves its key unset (or keeps the inline
+upstream key); an explicitly empty path, missing/unreadable file, empty/whitespace-only content or invalid UTF-8
+is an error before probes or startup side effects. An invalid file never falls back to the inline/other key.
+Paths themselves are not stripped. Files are read at process startup, not watched: changing a file requires
+restarting the proxy or dashboard; there is no live key rotation.
+
+The standalone [dashboard](tools.md#dashboard-optional-needs-the-git-clone) uses `--api-key-file` only for Strata,
+and `--proxy-api-key-file` only for the proxy. Sharing a file requires both explicit flags; no implicit fallback.
+
+For example, with two existing UTF-8 key files (the engine must accept the engine key and the client must send
+exactly the client key):
+
+<!-- readme-test: illustrative -->
+```sh
+mnemonic-proxy --upstream http://127.0.0.1:8095 --data ./data --port 8096 \
+  --api-key-file /path/to/engine.key --client-key-file /path/to/client.key
+python3 dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 \
+  --proxy http://127.0.0.1:8096 --port 8097 \
+  --api-key-file /path/to/engine.key --proxy-api-key-file /path/to/client.key
+```
+
+The dashboard command runs from the git clone, not the pip package. Existing local no-auth installations keep
+their old command lines: omit these file flags if no corresponding key is needed. Protect key files with local
+filesystem permissions. The proxy's client key is the credential configured in the agent; a dummy `local` value
+in a no-auth agent example is not valid once you enable `--client-key-file`.
+
+Its local Host/same-origin protections are automatic, also without keys; they do not add HTTPS, remote-user
+sessions or safe public exposure. See [Security & privacy](security.md#security--privacy) for network limits.
+
 ## Every command-line option
 
 Three commands are installed: `mnemonic-proxy` (the proxy, with its `demo`, `check`, `init-config`
@@ -329,6 +366,8 @@ and is not listed here.
 | | `--mode tools\|off` | `tools` = managed context (default); `off` = plain pass-through, nothing archived or masked, useful to compare a session with and without the proxy. Since 0.3.32 the streaming path of `off` is a pass-through too: no call is held, inspected or dropped, so it delivers exactly what the non-streaming path delivers |
 | | `--tokenizer PATH` | Hugging Face tokenizer or Strata pack, as a file **or** a folder (the format is read from the `tokenizer.json` structure), for exact token counts; needs `pip install 'mnemonic-proxy[exact]'` |
 | | `--api-key KEY` | key sent to the upstream engine |
+| | `--api-key-file FILE` | file holding the key sent to the upstream engine; keeps it out of the command line, overrides `--api-key` |
+| | `--client-key-file FILE` | file holding the key clients must send (`Authorization: Bearer` or `x-api-key`); setting it activates the check, keeps the key out of the command line, and it can be a different secret from `--api-key` ([Security & privacy](security.md#security--privacy)) |
 | | `--engine auto\|strata\|llama.cpp\|ds4\|openai` | force the engine type instead of detecting it |
 | | `--version` | print the version and exit |
 | `mnemonic-proxy demo` | `--keep DIR` | keep the demo's archive in `DIR` (`archive.sqlite`, `journal.jsonl`) instead of a temporary folder, to look at it afterwards or to point `mnemonic-mcp --db` at it |

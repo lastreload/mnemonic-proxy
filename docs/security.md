@@ -11,6 +11,38 @@
   Saved engine state files (`slot_dir`) and `kv-archive/` hold the conversation's tokens.
 - The proxy binds to `127.0.0.1` by default and has no authentication; do not expose it (`--host`) on a shared
   network. The MCP server's HTTP mode also binds to `127.0.0.1`.
+- **Requiring a key** (`--client-key-file`) closes that hole: every request must then
+  carry the client key as `Authorization: Bearer <key>` (what the OpenAI clients send) or `x-api-key` (what the
+  Anthropic ones send), compared in constant time, and anything else gets HTTP 401 on every path, including `/health`
+  and the `/v1/strata/*` ones. Both keys are read from files (`--client-key-file` for the client key,
+  `--api-key-file` for the engine key), so neither is in the command line or the process list, and the two can be
+  different secrets: handing clients the engine key would let them reach the engine directly, bypassing the proxy.
+  Outside this machine the proxy starts open and logs a warning; add `--client-key-file` to close it. The dashboard
+  reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy), so its 📌 / 🗑 calls
+  keep working against a proxy that requires a key. The files are independent: to use the same key, pass the
+  same file explicitly to both flags. No flags are required for an existing local no-auth setup: client
+  authentication is opt-in, and an unprotected public bind warns but is not blocked. File keys are read at
+  startup; restart the corresponding proxy/dashboard to change them (no live rotation). An absent flag leaves
+  that file key unset (the proxy keeps any inline upstream `--api-key`); an explicitly empty path, invalid UTF-8,
+  empty content or an unreadable file is an error,
+  never a fallback to another key. `--api-key-file` overrides inline `--api-key`; neither enables client auth.
+  The HTTP key check provides neither encryption nor network isolation: configure HTTPS/tunneling and access
+  controls separately rather than treating this as an Internet-ready deployment.
+- **The dashboard is local, not an authenticated multi-user service.** GET and POST require a single Host of
+  `localhost`, `127.0.0.1` or `[::1]` on the listener's port. Its only mutation, `POST /api/marks`, requires
+  `Content-Type: application/json` (charset parameters allowed); when present, Origin must match that HTTP
+  origin and Sec-Fetch-Site must be `same-origin`. Missing browser metadata remains allowed for headless JSON
+  clients. Cross-origin preflight is not granted; no permissive CORS, token, cookie or session is added.
+  Invalid framing and other pre-body rejections close the connection without draining an untrusted body.
+  This prevents the demonstrated cross-origin simple POST from borrowing the dashboard's proxy credential;
+  Host checking is additional protection against hostile authority/DNS rebinding, not a reproduced browser attack.
+  Trusted local processes can still construct these headers: this is not local-user authentication or a general
+  denial-of-service defense for the standard-library HTTP server.
+- **Dashboard compatibility:** text/plain writes, custom/public Host names and reverse proxies with an external
+  authority are deliberately rejected. SSH forwarding works only with the same local and listener port; forwarding
+  to a different local port is rejected. Forwarded/X-Forwarded-* are not trusted. The proxy API's tunnel/reverse-proxy
+  contract is separate and unchanged. Bracketed `[::1]` is recognized by the gate, but the existing standard-library
+  IPv4 server's inability to bind `::1` is not changed here.
 - Protect the folders: `chmod 700 ./data /path/to/slots`.
 - **Forget one conversation:** stop the proxy, then run:
 

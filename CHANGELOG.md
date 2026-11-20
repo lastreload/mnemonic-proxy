@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.33 — 2026-11-20
+
+- **Optional client authentication and file-based keys**, contributed by LawiK974 in #99, with startup and
+  dashboard safeguards added before integration. `--client-key-file FILE` enables a constant-time key check on
+  every GET/POST path, including `/health` and the archive endpoints: clients send `Authorization: Bearer KEY`
+  or `x-api-key`. `--api-key-file FILE` supplies the separate upstream engine key and overrides inline `--api-key`;
+  neither upstream option enables client authentication. Keys stay out of command-line arguments.
+- **No migration for existing local setups.** Without a client-key flag the proxy remains open on loopback;
+  a public bind without authentication warns but is not blocked. Upgrading and restarting needs no new key
+  configuration. HTTP authentication is not encryption or network isolation: keep the service local or arrange
+  HTTPS/tunneling and access controls separately.
+- **Invalid key files stop startup before side effects.** Explicit empty paths, invalid UTF-8, missing/unreadable
+  files and empty/whitespace-only content never fall back to another key. The CLI reads each file once, before
+  configuration, data-directory locking or network probes. Files are read at startup, not watched; restart to
+  change a key.
+- **The standalone dashboard uses explicit separate keys:** `--api-key-file` for Strata, `--proxy-api-key-file`
+  for the proxy. Sharing a file requires both flags. GET/POST require a loopback Host on the listener's port;
+  mutation requests require JSON and matching Origin/Fetch Metadata when supplied. Headless JSON clients remain
+  supported. Pre-body rejections close the connection; ambiguous framing is refused. No UI/session/CORS changes.
+  Custom/public hosts, reverse proxies with an external authority and dashboard tunnels using a different local
+  port are intentionally unsupported. These are cross-origin guards, not local-user authentication or a general
+  denial-of-service defense. The proxy API's separate forwarding contract is unchanged.
+- README upgrade guidance and the [configuration](docs/configuration.md#optional-client-authentication-and-key-files),
+  [security](docs/security.md) and [dashboard](docs/tools.md#dashboard-optional-needs-the-git-clone) guides describe
+  optional authentication, independent keys and deployment limits. Dashboard remains a clone-only tool, not part
+  of the PyPI wheel. PR #92 and unrelated fixes are not included.
+
 ## 0.3.32 — 2026-11-17
 
 - **`--mode off` is a plain pass-through in streaming too.** The mode is documented in three places as «plain
