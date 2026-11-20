@@ -19,7 +19,24 @@
   different secrets: handing clients the engine key would let them reach the engine directly, bypassing the proxy.
   Outside this machine the proxy starts open and logs a warning; add `--client-key-file` to close it. The dashboard
   reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy), so its 📌 / 🗑 calls
-  keep working against a proxy that requires a key.
+  keep working against a proxy that requires a key. The files are independent: to use the same key, pass the
+  same file explicitly to both flags. An absent flag leaves that key unset; an explicitly empty path, invalid UTF-8,
+  empty content or an unreadable file is an error, never a fallback to another key.
+- **The dashboard is local, not an authenticated multi-user service.** GET and POST require a single Host of
+  `localhost`, `127.0.0.1` or `[::1]` on the listener's port. Its only mutation, `POST /api/marks`, requires
+  `Content-Type: application/json` (charset parameters allowed); when present, Origin must match that HTTP
+  origin and Sec-Fetch-Site must be `same-origin`. Missing browser metadata remains allowed for headless JSON
+  clients. Cross-origin preflight is not granted; no permissive CORS, token, cookie or session is added.
+  Invalid framing and other pre-body rejections close the connection without draining an untrusted body.
+  This prevents the demonstrated cross-origin simple POST from borrowing the dashboard's proxy credential;
+  Host checking is additional protection against hostile authority/DNS rebinding, not a reproduced browser attack.
+  Trusted local processes can still construct these headers: this is not local-user authentication or a general
+  denial-of-service defense for the standard-library HTTP server.
+- **Dashboard compatibility:** text/plain writes, custom/public Host names and reverse proxies with an external
+  authority are deliberately rejected. SSH forwarding works only with the same local and listener port; forwarding
+  to a different local port is rejected. Forwarded/X-Forwarded-* are not trusted. The proxy API's tunnel/reverse-proxy
+  contract is separate and unchanged. Bracketed `[::1]` is recognized by the gate, but the existing standard-library
+  IPv4 server's inability to bind `::1` is not changed here.
 - Protect the folders: `chmod 700 ./data /path/to/slots`.
 - **Forget one conversation:** stop the proxy, then run:
 

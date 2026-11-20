@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import sqlite3
+import sys
 import threading
 import time
 import urllib.error
@@ -133,7 +134,7 @@ class State:
     def __init__(self, strata: str, data: str, api_key: str = "", proxy_key: str = ""):
         self.strata, self.data = strata.rstrip("/"), data
         self.api_key = api_key          # key sent to Strata
-        self.proxy_key = proxy_key or api_key   # key the proxy checks clients against
+        self.proxy_key = proxy_key      # explicit key the proxy checks clients against
         self.journal = JournalTail(os.path.join(data, "journal.jsonl"))
         self.virt = VirtualEstimator(os.path.join(data, "archive.sqlite"))
         self.series: list[dict] = []  # un punto per evento "request"
@@ -259,6 +260,25 @@ def history_markdown(conv: str, msgs: list[dict]) -> str:
     return "\n".join(out)
 
 
+def _loopback_authority(value: str):
+    """Recognize only the dashboard's three local authorities; no URL parsing or DNS.
+
+    Bound the port syntax before int(), including on arbitrarily long hostile input.
+    These deliberately narrow spellings are not a general URL canonicalizer.
+    """
+    value = value.lower()
+    for host in ("localhost", "127.0.0.1", "[::1]"):
+        if value == host:
+            return host, 80
+        if value.startswith(host + ":"):
+            port = value[len(host) + 1:]
+            if (1 <= len(port) <= 5 and port.isascii() and port.isdigit()
+                    and not port.startswith("0") and int(port) <= 65535):
+                return host, int(port)
+            return None
+    return None
+
+
 def make_handler(state: State):
     page = os.path.join(HERE, "index.html")
 
@@ -268,15 +288,87 @@ def make_handler(state: State):
         def log_message(self, *a):
             pass
 
-        def _send(self, code, data: bytes, ctype):
+        def handle(self):
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
+
+        def _send(self, code, data: bytes, ctype, close=False):
+            if close:
+                self.close_connection = True
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            if close:
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(data)
 
+        def _reject(self, code, message):
+            # Never drain an untrusted body or let it become another keep-alive request.
+            self._send(code, json.dumps({"error": message}).encode(), "application/json", close=True)
+
+        def _check_host(self):
+            hosts = self.headers.get_all("Host", [])
+            if len(hosts) != 1:
+                self._reject(400, "one Host header required")
+                return None
+            authority = _loopback_authority(hosts[0])
+            if authority is None or authority[1] != self.server.server_address[1]:
+                self._reject(403, "local dashboard Host required")
+                return None
+            return authority
+
+        def _check_mutation(self, authority):
+            sites = self.headers.get_all("Sec-Fetch-Site", [])
+            if sites and sites != ["same-origin"]:
+                self._reject(403, "same-origin request required")
+                return False
+            origins = self.headers.get_all("Origin", [])
+            if origins and (len(origins) != 1 or origins[0][:7].lower() != "http://"
+                            or _loopback_authority(origins[0][7:]) != authority):
+                self._reject(403, "same-origin request required")
+                return False
+            types = self.headers.get_all("Content-Type", [])
+            if (len(types) != 1 or "," in types[0]
+                    or types[0].split(";", 1)[0].strip().lower() != "application/json"):
+                self._reject(415, "application/json required")
+                return False
+            return True
+
+        def _body_length(self):
+            lengths = self.headers.get_all("Content-Length", [])
+            if self.headers.get_all("Transfer-Encoding") is not None or len(lengths) > 1:
+                self._reject(400, "invalid request framing")
+                return None
+            if not lengths:
+                return 0
+            raw = lengths[0]
+            # Bound conversion, not application payload size. read() takes a Py_ssize_t.
+            if (not raw or len(raw) > len(str(sys.maxsize)) or not raw.isascii()
+                    or not raw.isdigit() or int(raw) > sys.maxsize):
+                self._reject(400, "invalid Content-Length")
+                return None
+            return int(raw)
+
+        def handle_expect_100(self):
+            # BaseHTTPRequestHandler otherwise emits 100 before do_POST's pre-body gate.
+            authority = self._check_host()
+            if authority is None:
+                return False
+            if self.command == "POST":
+                if self.path.split("?")[0] != "/api/marks":
+                    self._reject(404, "not found")
+                    return False
+                if not self._check_mutation(authority) or self._body_length() is None:
+                    return False
+            return super().handle_expect_100()
+
         def do_GET(self):
+            if self._check_host() is None:
+                return
             path, _, q = self.path.partition("?")
             args = dict(kv.split("=", 1) for kv in q.split("&") if "=" in kv)
             if path in ("/", "/index.html"):
@@ -317,15 +409,26 @@ def make_handler(state: State):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return self.wfile.write(body)
-            self._send(404, b'{"error": "not found"}', "application/json")
+            self._reject(404, "not found")
 
         def do_POST(self):
-            # 📌 / 🗑 dalla dashboard: inoltro al proxy (unica scrittura della dashboard, solo localhost)
+            authority = self._check_host()
+            if authority is None:
+                return
             if self.path.split("?")[0] != "/api/marks":
-                return self._send(404, b'{"error": "not found"}', "application/json")
-            n = int(self.headers.get("Content-Length") or 0)
-            st, data = proxy_call(state.proxy + "/v1/strata/marks", self.rfile.read(n) if n else b"{}",
-                                  api_key=state.proxy_key)
+                return self._reject(404, "not found")
+            if not self._check_mutation(authority):
+                return
+            n = self._body_length()
+            if n is None:
+                return
+            try:
+                body = self.rfile.read(n) if n else b"{}"
+            except (ValueError, OverflowError, MemoryError):
+                return self._reject(400, "unrepresentable Content-Length")
+            if n and len(body) != n:
+                return self._reject(400, "incomplete request body")
+            st, data = proxy_call(state.proxy + "/v1/strata/marks", body, api_key=state.proxy_key)
             self._send(st, data, "application/json")
 
     return H
@@ -351,7 +454,7 @@ def main(argv=None):
     ap.add_argument("--strata", default="http://127.0.0.1:8095")
     ap.add_argument("--api-key-file", help="file holding Strata's API key (sent to Strata)")
     ap.add_argument("--proxy-api-key-file", help="file holding the key the proxy checks clients against "
-                                                 "(its --client-key-file); defaults to --api-key-file (📌 / 🗑)")
+                                                 "(its --client-key-file); pass both flags explicitly to share a file (📌 / 🗑)")
     ap.add_argument("--data", required=True, help="data_dir del proxy (journal.jsonl, archive.sqlite, live/)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8097)
@@ -360,11 +463,15 @@ def main(argv=None):
     if a.host not in ("127.0.0.1", "localhost", "::1"):
         ap.error("solo localhost (privacy: il prompt resta sulla macchina)")
     def read_key(path, label):
-        if not path:
+        if path is None:
             return ""
+        if path == "":
+            ap.error("%s path is empty" % label)
         try:
             with open(path, encoding="utf-8") as f:
                 key = f.read().strip()
+        except UnicodeError:
+            ap.error("%s: invalid UTF-8" % label)
         except OSError as e:
             ap.error("cannot read %s: %s" % (label, e))
         if not key:

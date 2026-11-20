@@ -1741,6 +1741,7 @@ def main(argv=None):
     if argv and argv[0] == "init-config":
         raise SystemExit(init_config_main(argv[1:]))
     a = build_parser().parse_args(argv)
+    resolve_keys(a)   # reject invalid explicit key files before config, data directory or lock
     try:
         raw_cfg, cfg = load_config(a)
     except (OSError, ValueError) as e:
@@ -1765,18 +1766,24 @@ def main(argv=None):
 def resolve_keys(a):
     """Read the two key files into the keys used at runtime, so the server and `check` see the same ones.
     A missing or empty file is a startup error, never a silently open request."""
-    if a.api_key_file:
+    if a.api_key_file is not None:
         a.api_key = read_key_file(a.api_key_file, "--api-key-file")
-    a.client_key = read_key_file(a.client_key_file, "--client-key-file") if a.client_key_file else ""
+    a.client_key = read_key_file(a.client_key_file, "--client-key-file")
 
 
 def read_key_file(path, label):
-    """The key held in a 0600 file instead of on the command line."""
+    """Only None means absent; invalid explicit files never fall back to another key."""
+    if path is None:
+        return ""
+    if path == "":
+        raise SystemExit("mnemonic-proxy: %s path is empty" % label)
     try:
         with open(path, encoding="utf-8") as f:
             key = f.read().strip()
+    except UnicodeError:
+        raise SystemExit("mnemonic-proxy: %s: invalid UTF-8" % label) from None
     except OSError as e:
-        raise SystemExit("mnemonic-proxy: cannot read %s: %s" % (label, e))
+        raise SystemExit("mnemonic-proxy: cannot read %s: %s" % (label, e)) from None
     if not key:
         raise SystemExit("mnemonic-proxy: %s is empty" % label)
     return key
@@ -1787,7 +1794,8 @@ def serve(a, raw_cfg, cfg, origin=None):
     # The archive is plaintext, so an open proxy on a reachable address is an open archive. The key clients are
     # checked against comes from a file (--client-key-file): a separate one also keeps the engine's key from being
     # handed to whoever is allowed to use the proxy.
-    resolve_keys(a)
+    if not hasattr(a, "client_key"):
+        resolve_keys(a)   # direct callers; main has already read each file once
     client_key = a.client_key
     if not client_key and not is_loopback(a.host):
         print("[mnemonic-proxy] warning: bound to %s with no client key: anyone who can reach this port reads and "

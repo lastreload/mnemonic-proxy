@@ -211,9 +211,14 @@
   `--client-key-file`.
 - `--api-key-file` reads the key sent to the engine from a file (it overrides `--api-key`), so neither key appears in
   the command line; an unreadable or empty key file is a startup error instead of a silent open request.
-- The dashboard reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy, which
-  defaults to `--api-key-file`), so its 📌 / 🗑 calls keep working against a proxy that requires a key and `--api-key-file`
-  is now sent to Strata itself (`/status`, `/metrics`).
+- The dashboard uses separate explicit files: `--api-key-file` goes only to Strata (`/status`, `/metrics`),
+  `--proxy-api-key-file` to the proxy for 📌 / 🗑. To share a key, pass the same file to both flags; there is no fallback.
+- Explicit empty key-file paths, invalid UTF-8 and empty/unreadable files fail before startup side effects;
+  the proxy CLI reads each key file once, before configuration and the data-directory lock.
+- Dashboard writes require JSON and matching Origin/Fetch Metadata when present; reads and writes require a
+  loopback Host on the listener's port. Pre-body rejections close the connection and ambiguous framing is refused.
+  Headless JSON without browser metadata still works. Custom hosts, reverse proxies and dashboard tunnels using
+  a different local port are deliberately unsupported; the proxy API is unchanged. See [security](docs/security.md).
 
 ## 0.3.25 — 2026-11-11
 
