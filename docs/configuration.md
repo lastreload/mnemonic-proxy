@@ -328,6 +328,24 @@ restarting the proxy or dashboard; there is no live key rotation.
 
 The standalone [dashboard](tools.md#dashboard-optional-needs-the-git-clone) uses `--api-key-file` only for Strata,
 and `--proxy-api-key-file` only for the proxy. Sharing a file requires both explicit flags; no implicit fallback.
+
+For example, with two existing UTF-8 key files (the engine must accept the engine key and the client must send
+exactly the client key):
+
+<!-- readme-test: illustrative -->
+```sh
+mnemonic-proxy --upstream http://127.0.0.1:8095 --data ./data --port 8096 \
+  --api-key-file /path/to/engine.key --client-key-file /path/to/client.key
+python3 dashboard/ctxdash.py --data ./data --strata http://127.0.0.1:8095 \
+  --proxy http://127.0.0.1:8096 --port 8097 \
+  --api-key-file /path/to/engine.key --proxy-api-key-file /path/to/client.key
+```
+
+The dashboard command runs from the git clone, not the pip package. Existing local no-auth installations keep
+their old command lines: omit these file flags if no corresponding key is needed. Protect key files with local
+filesystem permissions. The proxy's client key is the credential configured in the agent; a dummy `local` value
+in a no-auth agent example is not valid once you enable `--client-key-file`.
+
 Its local Host/same-origin protections are automatic, also without keys; they do not add HTTPS, remote-user
 sessions or safe public exposure. See [Security & privacy](security.md#security--privacy) for network limits.
 

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.33 — 2026-11-20
+
+- **Optional client authentication and file-based keys**, contributed by LawiK974 in #99, with startup and
+  dashboard safeguards added before integration. `--client-key-file FILE` enables a constant-time key check on
+  every GET/POST path, including `/health` and the archive endpoints: clients send `Authorization: Bearer KEY`
+  or `x-api-key`. `--api-key-file FILE` supplies the separate upstream engine key and overrides inline `--api-key`;
+  neither upstream option enables client authentication. Keys stay out of command-line arguments.
+- **No migration for existing local setups.** Without a client-key flag the proxy remains open on loopback;
+  a public bind without authentication warns but is not blocked. Upgrading and restarting needs no new key
+  configuration. HTTP authentication is not encryption or network isolation: keep the service local or arrange
+  HTTPS/tunneling and access controls separately.
+- **Invalid key files stop startup before side effects.** Explicit empty paths, invalid UTF-8, missing/unreadable
+  files and empty/whitespace-only content never fall back to another key. The CLI reads each file once, before
+  configuration, data-directory locking or network probes. Files are read at startup, not watched; restart to
+  change a key.
+- **The standalone dashboard uses explicit separate keys:** `--api-key-file` for Strata, `--proxy-api-key-file`
+  for the proxy. Sharing a file requires both flags. GET/POST require a loopback Host on the listener's port;
+  mutation requests require JSON and matching Origin/Fetch Metadata when supplied. Headless JSON clients remain
+  supported. Pre-body rejections close the connection; ambiguous framing is refused. No UI/session/CORS changes.
+  Custom/public hosts, reverse proxies with an external authority and dashboard tunnels using a different local
+  port are intentionally unsupported. These are cross-origin guards, not local-user authentication or a general
+  denial-of-service defense. The proxy API's separate forwarding contract is unchanged.
+- README upgrade guidance and the [configuration](docs/configuration.md#optional-client-authentication-and-key-files),
+  [security](docs/security.md) and [dashboard](docs/tools.md#dashboard-optional-needs-the-git-clone) guides describe
+  optional authentication, independent keys and deployment limits. Dashboard remains a clone-only tool, not part
+  of the PyPI wheel. PR #92 and unrelated fixes are not included.
+
 ## 0.3.32 — 2026-11-17
 
 - **`--mode off` is a plain pass-through in streaming too.** The mode is documented in three places as «plain
@@ -199,29 +226,6 @@
   off. 7 requests, 0 errors, exact answers after masking, the hidden code brought back with `recall` in the next turn.
   Setup and numbers in [DeepSeek Harness](docs/agents.md#deepseek-harness-chat-completions). Asked for by
   u/Due-Advantage-9777.
-- **Security: the proxy can sit behind an API key** (`--client-key-file`). Before this the only guard on the HTTP port
-  was the bind address: `--api-key` is the key the proxy *sends upstream*, nothing checked what the client sent, so a
-  proxy on an address others can reach (`--host 0.0.0.0`, or behind a tunnel or a reverse proxy) let anyone read and
-  write the archive and reach the engine. Setting `--client-key-file` activates the check: a request must carry the
-  client key as `Authorization: Bearer <key>` (what the OpenAI clients send) or `x-api-key` (what the Anthropic ones
-  send), compared in constant time, and anything else gets HTTP 401 on every path, including `/health` and the
-  `/v1/strata/*` ones. The key is read from a file, so it stays out of the command line and the process list, and it
-  can be a different secret from `--api-key`: giving clients the engine key would let them bypass the proxy and hit
-  the engine directly. `--host 0.0.0.0` without a client key starts as before, logging a warning that points at
-  `--client-key-file`.
-- `--api-key-file` reads the key sent to the engine from a file (it overrides `--api-key`), so neither key appears in
-  the command line; an unreadable or empty key file is a startup error instead of a silent open request.
-- Client authentication remains optional: existing local no-auth setups need no new options; public binds without
-  a key warn rather than fail. Keys are read at startup, not live-reloaded. HTTP authentication does not supply TLS
-  or network isolation; these require separate deployment controls.
-- The dashboard uses separate explicit files: `--api-key-file` goes only to Strata (`/status`, `/metrics`),
-  `--proxy-api-key-file` to the proxy for 📌 / 🗑. To share a key, pass the same file to both flags; there is no fallback.
-- Explicit empty key-file paths, invalid UTF-8 and empty/unreadable files fail before startup side effects;
-  the proxy CLI reads each key file once, before configuration and the data-directory lock.
-- Dashboard writes require JSON and matching Origin/Fetch Metadata when present; reads and writes require a
-  loopback Host on the listener's port. Pre-body rejections close the connection and ambiguous framing is refused.
-  Headless JSON without browser metadata still works. Custom hosts, reverse proxies and dashboard tunnels using
-  a different local port are deliberately unsupported; the proxy API is unchanged. See [security](docs/security.md).
 
 ## 0.3.25 — 2026-11-11
 

@@ -76,6 +76,11 @@ mnemonic-proxy --upstream http://127.0.0.1:8095 --port 8096 --data ./data
 Then point your agent at the proxy, `http://127.0.0.1:8096/v1`, instead of the server, and turn off the agent's own
 auto-compaction (next section).
 
+To upgrade an existing installation, run `pip install --upgrade mnemonic-proxy` in its environment and restart
+the proxy (and the dashboard, if used). Version 0.3.33 needs no data/config migration: local setups without keys
+keep working without new options. [Optional client authentication](docs/configuration.md#optional-client-authentication-and-key-files)
+uses a client key distinct from the engine key; enable it only when you intend clients to send that key.
+
 No model at hand? `uvx mnemonic-proxy demo` shows the archive and `recall` working in one minute, with a scripted
 fake model.
 
