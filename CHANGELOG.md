@@ -211,6 +211,9 @@
   `--client-key-file`.
 - `--api-key-file` reads the key sent to the engine from a file (it overrides `--api-key`), so neither key appears in
   the command line; an unreadable or empty key file is a startup error instead of a silent open request.
+- Client authentication remains optional: existing local no-auth setups need no new options; public binds without
+  a key warn rather than fail. Keys are read at startup, not live-reloaded. HTTP authentication does not supply TLS
+  or network isolation; these require separate deployment controls.
 - The dashboard uses separate explicit files: `--api-key-file` goes only to Strata (`/status`, `/metrics`),
   `--proxy-api-key-file` to the proxy for 📌 / 🗑. To share a key, pass the same file to both flags; there is no fallback.
 - Explicit empty key-file paths, invalid UTF-8 and empty/unreadable files fail before startup side effects;

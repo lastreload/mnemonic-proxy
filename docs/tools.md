@@ -100,7 +100,9 @@ explicitly; even when sharing the same key file, supply both flags. The dashboar
 listener's port and `localhost` or `127.0.0.1` as Host (the gate also recognizes `[::1]`, without changing the
 existing IPv4-only bind implementation). Custom hosts, reverse proxies and forwarding to a different local
 port are not supported. Headless writes to `/api/marks` must use JSON, not text/plain; browser writes must
-be same-origin. See [Security & privacy](security.md#security--privacy).
+be same-origin. These dashboard guards are automatic: no new key configuration is required for local no-auth
+setups. Key files are read at startup; restart to change them. This is not HTTPS or safe public exposure.
+See [Security & privacy](security.md#security--privacy).
 
 On `127.0.0.1:8097`: engine status, physical vs. virtual context over time, masking/segment/recall events,
 and the live physical prompt (with `live_dump: true`). It reads Strata and the data directory without

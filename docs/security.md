@@ -20,8 +20,14 @@
   Outside this machine the proxy starts open and logs a warning; add `--client-key-file` to close it. The dashboard
   reads the same two files (`--api-key-file` for Strata, `--proxy-api-key-file` for the proxy), so its 📌 / 🗑 calls
   keep working against a proxy that requires a key. The files are independent: to use the same key, pass the
-  same file explicitly to both flags. An absent flag leaves that key unset; an explicitly empty path, invalid UTF-8,
-  empty content or an unreadable file is an error, never a fallback to another key.
+  same file explicitly to both flags. No flags are required for an existing local no-auth setup: client
+  authentication is opt-in, and an unprotected public bind warns but is not blocked. File keys are read at
+  startup; restart the corresponding proxy/dashboard to change them (no live rotation). An absent flag leaves
+  that file key unset (the proxy keeps any inline upstream `--api-key`); an explicitly empty path, invalid UTF-8,
+  empty content or an unreadable file is an error,
+  never a fallback to another key. `--api-key-file` overrides inline `--api-key`; neither enables client auth.
+  The HTTP key check provides neither encryption nor network isolation: configure HTTPS/tunneling and access
+  controls separately rather than treating this as an Internet-ready deployment.
 - **The dashboard is local, not an authenticated multi-user service.** GET and POST require a single Host of
   `localhost`, `127.0.0.1` or `[::1]` on the listener's port. Its only mutation, `POST /api/marks`, requires
   `Content-Type: application/json` (charset parameters allowed); when present, Origin must match that HTTP

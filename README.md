@@ -113,7 +113,10 @@ part of long prompts. [Engines](docs/engines.md) has the command for each server
 
 Everything stays on your machine. The proxy talks only to the server you give it, with no telemetry. The archive is
 plain text and holds everything the agent saw, secrets included: protect the `data` folder. The proxy listens on
-`127.0.0.1` and has no authentication, so do not expose it on a shared network. [Security](docs/security.md)
+`127.0.0.1` without client authentication by default. Existing local setups need no new keys or options.
+Client authentication is optional: `--client-key-file` enables it; `--api-key-file` instead supplies the engine's
+key. A public bind without a client key warns but still starts. These flags do not provide HTTPS or make the
+service Internet-ready: keep it local or separately protect the network/transport. [Security](docs/security.md)
 
 ## Documentation
 
