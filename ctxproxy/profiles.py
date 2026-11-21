@@ -154,7 +154,8 @@ def load_profiles(raw_cfg: dict, cfg: Config, default_tokenizer: str | None = No
         values = dict(values)
         if tokenizer:
             values["tokenizer"] = tokenizer
-        counter = TokenCounter(values.get("chars_per_token", cfg.chars_per_token), tokenizer)
+        counter = TokenCounter(values.get("chars_per_token", cfg.chars_per_token), tokenizer,
+                               template_tools_format=values.get("template_tools_format", cfg.template_tools_format))
         if tokenizer is not None and not counter.exact:
             raise ValueError("profile %r: cannot load tokenizer %s. Install 'mnemonic-proxy[exact]' and check the "
                              "path/format; refusing to start with an estimated window guard. %s"

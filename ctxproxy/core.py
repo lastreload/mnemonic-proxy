@@ -323,6 +323,9 @@ class Config:
     live_dump: bool = False         # scrive data_dir/live/last_request.json (prompt fisico + risposta) per la dashboard
     # motore (engines.py): auto = rilevato all'avvio; strata | llama.cpp | openai lo forzano
     engine: str = "auto"
+    # Pack-template input contract: default PolyStrata unwraps definitions;
+    # opt-in OpenAI/llama.cpp preserves wrappers for the template to handle.
+    template_tools_format: str = "strata"
     slot_id: int = 0                # slot del motore (llama-server con --parallel N)
     engine_tokenize: bool = False   # conteggio token esatto via /tokenize del motore (llama.cpp), se non c'è --tokenizer
     # 0.3.7 llama-server router mode (router.py): model used when the client's "model" is not served by the router
@@ -705,7 +708,9 @@ class TokenCounter:
     `scale` si calibra con i prompt_tokens reali restituiti da Strata."""
 
     def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None,
-                 min_samples: int = CALIB_MIN_SAMPLES):
+                 min_samples: int = CALIB_MIN_SAMPLES, *, template_tools_format: str = "strata"):
+        if template_tools_format not in ("strata", "openai"):
+            raise ValueError("template_tools_format must be 'strata' or 'openai'")
         self.cpt = chars_per_token
         self.scale = 1.0
         self.samples = 0            # accepted calibration samples (see calibrate)
@@ -724,7 +729,7 @@ class TokenCounter:
         self.prompt_template = None
         if self.tk is not None and tokenizer_path:
             from .chattemplate import discover
-            self.prompt_template = discover(tokenizer_path)
+            self.prompt_template = discover(tokenizer_path, tools_format=template_tools_format)
 
     @property
     def exact(self) -> bool:

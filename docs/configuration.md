@@ -1,5 +1,19 @@
 # Configuration
 
+## Pack template tool input (local candidate, not yet released)
+
+`template_tools_format` defaults to `"strata"`: tool definitions are unwrapped,
+with the existing `tool.function` compatibility view. Set it explicitly to
+`"openai"` when the backend passes the original OpenAI tool array to the template
+(for example the qualified llama.cpp path). This preserves the wrappers; a
+self-unwrapping template still decides what to print. The setting is inherited
+and may be overridden per model profile. Unknown values fail startup.
+
+This does not rewrite the model's template or qualify every backend/template
+combination. Compare the complete prompt and token IDs with the actual backend
+before enabling it. Existing callers and the built-in renderer keep their
+previous default. No frontend is inferred from a model name.
+
 ## Model profiles (local candidate, not yet released)
 
 `profiles` maps each request's concrete `model` to a tokenizer and optional adjacent

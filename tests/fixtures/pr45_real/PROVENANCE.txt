@@ -1,0 +1,20 @@
+Real-template fixtures, task t_ce1fd4c0
+
+Captured on PC4070TI using llama.cpp 6c5afc86ae84448ae4d744e357017e2c490ad9c3.
+backend-A.json preserves the integral /apply-template requests/responses for text
+and tools, plus /tokenize IDs for the tools prompt. No generated output is in
+this fixture: qualification stopped before inference.
+A.jinja and B.jinja are extracted verbatim from the existing Qwen3-0.6B-Q8_0.gguf
+and granite-4.2-3b-Q4_K_M.gguf metadata respectively, not rewritten templates.
+
+Baseline 647295c (0.3.34) and candidate e07777a have identical chattemplate.py
+SHA256 615a53eb810b42cdef2a24ecc097faac4be36de4638afab7481ea4b88e755459.
+Both strip the OpenAI wrapper, rendering 4948 characters / 1905 IDs for tools;
+the real backend preserves it, rendering 4982 characters / 1915 IDs.
+The explicit openai opt-in reproduces the latter byte-for-byte. The strata
+default and existing issue95 golden remain unchanged. B is self-unwrapping;
+its fixture is not a substitute for real backend qualification.
+
+Tokenizer files remain outside the source tree. The task's offline verifier
+uses the official pinned tokenizer files checked against all GGUF vocab IDs
+and merges. The full impact/RED/byte/ID records live in the task workspace.

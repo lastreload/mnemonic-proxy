@@ -37,7 +37,10 @@ def _tool_view(tdef):
 
 
 class PackTemplate:
-    def __init__(self, path):
+    def __init__(self, path, *, tools_format='strata'):
+        if tools_format not in ('strata', 'openai'):
+            raise ValueError("template_tools_format must be 'strata' or 'openai'")
+        self.tools_format = tools_format
         try:
             from jinja2.sandbox import ImmutableSandboxedEnvironment
             env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True,
@@ -107,8 +110,10 @@ class PackTemplate:
                     and not out['content'].strip() and not out.get('tool_calls')):
                 continue
             normalized.append(out)
-        tdefs = [_tool_view(t.get('function', t) if t.get('type') == 'function' else t)
-                 for t in tools or []] or None
+        # Frontend contract, not a model-family heuristic. Preserve the default.
+        tdefs = (tools or None) if self.tools_format == 'openai' else [
+            _tool_view(t.get('function', t) if t.get('type') == 'function' else t)
+            for t in tools or []] or None
         try:
             rendered = self.template.render(messages=normalized, tools=tdefs, add_generation_prompt=True,
                                             **{'enable_thinking': True, **kwargs})
@@ -133,8 +138,8 @@ class PackTemplate:
         return (rendered, markers) if with_counts else rendered
 
 
-def discover(tokenizer_path):
+def discover(tokenizer_path, *, tools_format='strata'):
     path = Path(tokenizer_path)
     directory = path if path.is_dir() else path.parent
     template = directory / 'chat_template.jinja'
-    return PackTemplate(template) if template.is_file() else None
+    return PackTemplate(template, tools_format=tools_format) if template.is_file() else None
