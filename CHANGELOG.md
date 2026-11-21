@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.34 — 2026-11-21
 
 - **Model-native reasoning effort (#100).** Prompt counting no longer promotes `high` or unknown values to
   `xhigh` before rendering a model's own chat template. Spark's valid `high` now stays `high`; unsupported
