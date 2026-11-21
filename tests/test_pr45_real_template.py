@@ -4,6 +4,7 @@ A templates/requests/prompts/IDs captured by t_ce1fd4c0 on PC4070TI.
 Templates extracted from the existing GGUF; tokenizer provenance in offline report.
 """
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -17,6 +18,8 @@ F = Path(__file__).parent / 'fixtures' / 'pr45_real'
 RAW = json.loads((F / 'backend-A.json').read_text())
 
 
+@unittest.skipUnless(importlib.util.find_spec('jinja2') and importlib.util.find_spec('tokenizers'),
+                     'install mnemonic-proxy[exact]')
 class RealTemplateTests(unittest.TestCase):
     def test_openai_real_backend_integral_prompt(self):
         template = PackTemplate(F / 'A.jinja', tools_format='openai')
