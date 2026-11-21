@@ -55,14 +55,18 @@ def _effort_kwargs(value) -> dict:
         return {}
     if value is False:
         return {"enable_thinking": False}
-    level = EFFORT.get(str(value).strip().lower(), "xhigh")
-    return {"enable_thinking": False} if level is None else {"reasoning_effort": level}
+    # Off aliases are shared switches; positive effort vocabularies belong to the model's template.
+    level = str(value).strip().lower()
+    return {"enable_thinking": False} if level in EFFORT and EFFORT[level] is None else {"reasoning_effort": value}
 
 
 def template_kwargs(req: dict) -> dict:
-    """Come frontend.openai_to_messages: reasoning_effort / reasoning.effort / chat_template_kwargs."""
+    """Resolve request switches without imposing one model family's effort vocabulary."""
     reasoning = req.get("reasoning") if isinstance(req.get("reasoning"), dict) else {}
-    kw = dict(_effort_kwargs(req.get("reasoning_effort") or reasoning.get("effort")))
+    effort = req.get("reasoning_effort")
+    if effort is None or effort == "":
+        effort = reasoning.get("effort")
+    kw = dict(_effort_kwargs(effort))
     for k, v in (req.get("chat_template_kwargs") or {}).items():
         if k == "enable_thinking" and not v:
             kw = {"enable_thinking": False}
@@ -505,7 +509,9 @@ def _merged_system(msgs: list) -> tuple[str, int]:
 
 def _effort_instr(kw: dict) -> str:
     if kw.get("enable_thinking") is None or kw.get("enable_thinking") is True:
-        return EFFORT_TEXT[kw.get("reasoning_effort") or "xhigh"]
+        # Compatibility of the built-in Qwen/Strata renderer only. Pack templates get native levels.
+        level = EFFORT.get(str(kw.get("reasoning_effort") or "xhigh").strip().lower(), "xhigh")
+        return EFFORT_TEXT[level] if level is not None else ""
     return ""
 
 

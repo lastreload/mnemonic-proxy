@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- **Model-native reasoning effort (#100).** Prompt counting no longer promotes `high` or unknown values to
+  `xhigh` before rendering a model's own chat template. Spark's valid `high` now stays `high`; unsupported
+  efforts remain unsupported and name the original value. Top-level `reasoning_effort`, nested
+  `reasoning.effort`, template effort overrides and explicit thinking-off switches keep their precedence;
+  boolean `false` is no longer mistaken for a missing top-level effort. The upstream request is not rewritten.
+  The built-in Qwen/Strata renderer retains its own historical effort aliases and defaults.
+- **Count failures are not context overflow (#100).** An unrenderable or otherwise uncountable prompt is still
+  refused before sending, with HTTP 400 `type=prompt_count_error`, `code=prompt_count_failed` and the cause,
+  rather than inventing `prompt = window` arithmetic. Actual context exhaustion still uses
+  `context_window_exceeded` / `window_guard`; output clamping, image checks and the final count barrier remain
+  active. Messages/Responses adapters and already-open streams retain their existing error envelopes while
+  carrying the count-failure cause.
+
 ## 0.3.33 — 2026-11-20
 
 - **Optional client authentication and file-based keys**, contributed by LawiK974 in #99, with startup and

@@ -118,6 +118,15 @@ class SearchState:
             self.force_final, self.reason = True, reason
 
 
+class PromptCountError(UpstreamError):
+    """An uncountable prompt is refused, not reported as a measured context overflow."""
+
+    def __init__(self, detail: str):
+        msg = "mnemonic-proxy prompt count failed: %s; the request was not sent" % detail
+        super().__init__(400, json.dumps({"error": {"message": msg, "type": "prompt_count_error",
+                                                    "code": "prompt_count_failed"}}).encode("utf-8"))
+
+
 class WindowExceeded(UpstreamError):
     """The request cannot be sent without exceeding the window (fail-closed). An UpstreamError with status 400, so
     every caller that handles engine errors handles this one too (the client gets a clear 400)."""
@@ -322,8 +331,8 @@ class WindowGuard:
 
     def enforce(self, body: dict, dry: bool = False) -> dict:
         """Upstream hook: returns the body to send (max_tokens set/lowered, thinking budget capped) or raises
-        WindowExceeded. Never sends a request with prompt + max_tokens + margin > W. dry: no journal, no counters
-        (answerfix asks how much room there is)."""
+        WindowExceeded or PromptCountError. Never sends a request with prompt + max_tokens + margin > W.
+        dry: no journal, no counters (answerfix asks how much room there is)."""
         if not getattr(self.cfg, "window_guard", True) or not self.cfg.window:
             return body
         errors = self.count_errors
@@ -335,8 +344,7 @@ class WindowGuard:
                 self._log(action="refused", where=self.where or "call", reason="count_error")
             # The reason the count failed is what the operator needs (a picture the template did not write is not
             # a window arithmetic problem), and the client deserves the same sentence the journal got.
-            detail = "prompt count failed" + (": %s" % self.count_error[:180] if self.count_error else "")
-            raise WindowExceeded(self.cfg.window, self.cfg.window, self.margin, detail)
+            raise PromptCountError(self.count_error[:180] or "prompt could not be counted")
         if not dry:
             # 0.3.8: the count without the slack, for the engine-truncation watch (Upstream.truncwatch)
             sl = 0.0 if self.exact else float(getattr(self.cfg, "window_estimate_slack", 0.0) or 0.0)
