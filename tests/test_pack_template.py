@@ -6,7 +6,7 @@ import unittest
 from types import SimpleNamespace
 
 from ctxproxy.core import Config, Journal, Manager, Store, TokenCounter
-from ctxproxy.window import WindowGuard, WindowExceeded, labeled_chat
+from ctxproxy.window import WindowGuard, WindowExceeded, PromptCountError, labeled_chat
 
 try:
     import jinja2
@@ -63,7 +63,7 @@ class PackTemplateTests(unittest.TestCase):
     def test_render_failure_is_fail_closed(self):
         (self.path/'chat_template.jinja').write_text("{{ raise_exception('invalid conversation') }}")
         self.tc.prompt_template = TokenCounter(tokenizer_path=str(self.path/'tokenizer.json')).prompt_template
-        with self.assertRaises(WindowExceeded):
+        with self.assertRaises(PromptCountError):
             self.g.enforce(self.body)
         self.assertEqual(self.g.count_errors, 1)
 
@@ -88,7 +88,7 @@ class PackTemplateTests(unittest.TestCase):
         # that do write a marker are covered by tests/test_vision_real_template.py and test_vision_passthrough.py).
         body = {'messages': [{'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': 'x'}}]}],
                 'max_tokens': 20}
-        with self.assertRaises(WindowExceeded) as ctx:
+        with self.assertRaises(PromptCountError) as ctx:
             self.g.enforce(body)
         self.assertIn('vision marker', str(ctx.exception))
         self.assertEqual(self.g.count_errors, 1)
@@ -97,7 +97,7 @@ class PackTemplateTests(unittest.TestCase):
         # No engine reads video: its marker would cost tokens nobody budgeted, so the guard still refuses.
         body = {'messages': [{'role': 'user', 'content': [{'type': 'video_url', 'video_url': {'url': 'x'}}]}],
                 'max_tokens': 20}
-        with self.assertRaises(WindowExceeded):
+        with self.assertRaises(PromptCountError):
             self.g.enforce(body)
         self.assertEqual(self.g.count_errors, 1)
 

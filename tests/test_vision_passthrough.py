@@ -27,7 +27,7 @@ from types import SimpleNamespace
 from ctxproxy.autosave import prompt_text
 from ctxproxy.core import Config, Journal, Manager, Store, TokenCounter
 from ctxproxy.render import count_images, image_hash, image_markers, redact_images
-from ctxproxy.window import WindowGuard, WindowExceeded, remove_piece
+from ctxproxy.window import WindowGuard, PromptCountError, remove_piece
 
 try:
     import jinja2                      # noqa: F401
@@ -141,7 +141,7 @@ class VisionGuardTests(unittest.TestCase):
         """openai_to_messages reads a system message's text parts and the pack template raises on its pictures: the
         bytes would never reach the model, so the request is refused instead of quietly counted as text."""
         msgs = [{'role': 'system', 'content': parts(text('base'), img(PNG))}, {'role': 'user', 'content': 'hello'}]
-        with self.assertRaises(WindowExceeded) as ctx:
+        with self.assertRaises(PromptCountError) as ctx:
             self.g.enforce({'messages': msgs, 'max_tokens': 50})
         self.assertIn('system message cannot carry a picture', str(ctx.exception))
         self.assertEqual(self.g.count_errors, 1)
@@ -152,7 +152,7 @@ class VisionGuardTests(unittest.TestCase):
                           ({'type': 'image_url', 'image_url': {'url': '   '}}, 'no readable source'),
                           ({'type': 'text', 'text': 'x', 'image_url': img(PNG)}, 'does not read as an image')):
             with self.subTest(part=part.get('type')):
-                with self.assertRaises(WindowExceeded) as ctx:
+                with self.assertRaises(PromptCountError) as ctx:
                     self.g.enforce({'messages': [{'role': 'user', 'content': [part]}], 'max_tokens': 50})
                 self.assertIn(why, str(ctx.exception))
 
@@ -169,7 +169,7 @@ class VisionGuardTests(unittest.TestCase):
 
     def test_video_fails_closed(self):
         msgs = [{'role': 'user', 'content': [{'type': 'video_url', 'video_url': {'url': 'x'}}]}]
-        with self.assertRaises(WindowExceeded):
+        with self.assertRaises(PromptCountError):
             self.g.enforce({'messages': msgs, 'max_tokens': 50})
         self.assertEqual(self.g.count_errors, 1)
 
@@ -406,7 +406,7 @@ class EstimatedPathTests(unittest.TestCase):
         for msgs, why in cases:
             with self.subTest(why=why):
                 before = self.g.count_errors
-                with self.assertRaises(WindowExceeded) as ctx:
+                with self.assertRaises(PromptCountError) as ctx:
                     self.g.enforce({'messages': msgs, 'max_tokens': 50})
                 self.assertIn(why, str(ctx.exception))
                 self.assertEqual(self.g.count_errors, before + 1)     # one refusal, one counted error
@@ -414,7 +414,7 @@ class EstimatedPathTests(unittest.TestCase):
     def test_a_picture_under_a_zero_bound_is_refused(self):
         guard = WindowGuard(Config(window=8000, image_tokens=0),
                            Manager(self.cfg, Store(), TokenCounter(), self.journal), Journal(None))
-        with self.assertRaises(WindowExceeded) as ctx:
+        with self.assertRaises(PromptCountError) as ctx:
             guard.enforce(self.body(parts(text('patrz'), img(PNG))))
         self.assertIn('image_tokens=0', str(ctx.exception))
 

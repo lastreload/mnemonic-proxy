@@ -77,7 +77,7 @@ Then point your agent at the proxy, `http://127.0.0.1:8096/v1`, instead of the s
 auto-compaction (next section).
 
 To upgrade an existing installation, run `pip install --upgrade mnemonic-proxy` in its environment and restart
-the proxy (and the dashboard, if used). Version 0.3.33 needs no data/config migration: local setups without keys
+the proxy (and the dashboard, if used). Version 0.3.34 needs no data/config migration: local setups without keys
 keep working without new options. [Optional client authentication](docs/configuration.md#optional-client-authentication-and-key-files)
 uses a client key distinct from the engine key; enable it only when you intend clients to send that key.
 

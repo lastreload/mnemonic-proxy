@@ -19,7 +19,7 @@ from pathlib import Path
 
 from ctxproxy.core import Config, Journal, Manager, Store, TokenCounter
 from ctxproxy.render import VISION
-from ctxproxy.window import WindowGuard, WindowExceeded
+from ctxproxy.window import WindowGuard, PromptCountError
 
 try:
     import jinja2                      # noqa: F401
@@ -170,7 +170,7 @@ class RealTemplateTests(unittest.TestCase):
         """The engine reads a system message's text parts only and the pack template raises on its pictures: the
         bytes would never reach the model, so the request is refused instead of counted."""
         msgs = [dict(SYSTEM, content=parts(text('base'), img(PNG))), {'role': 'user', 'content': 'hello'}]
-        with self.assertRaises(WindowExceeded) as ctx:
+        with self.assertRaises(PromptCountError) as ctx:
             self.g.enforce({'messages': msgs, 'max_tokens': 50})
         self.assertIn('system message cannot carry a picture', str(ctx.exception))
         self.assertEqual(self.g.count_errors, 1)
@@ -181,7 +181,7 @@ class RealTemplateTests(unittest.TestCase):
                           ({'type': 'text', 'text': 'x', 'image_url': img(PNG)}, 'does not read as an image')):
             msgs = [{'role': 'user', 'content': [part]}]
             with self.subTest(part=part.get('type')):
-                with self.assertRaises(WindowExceeded) as ctx:
+                with self.assertRaises(PromptCountError) as ctx:
                     self.g.enforce({'messages': msgs, 'max_tokens': 50})
                 self.assertIn(why, str(ctx.exception))
                 self.assertIn('not sent', str(ctx.exception))
@@ -189,7 +189,7 @@ class RealTemplateTests(unittest.TestCase):
 
     def test_video_next_to_a_picture_is_refused(self):
         msgs = [{'role': 'user', 'content': parts(img(PNG), {'type': 'video_url', 'video_url': {'url': 'x'}})}]
-        with self.assertRaises(WindowExceeded):
+        with self.assertRaises(PromptCountError):
             self.g.enforce({'messages': msgs, 'max_tokens': 50})
         self.assertEqual(self.g.count_errors, 1)
 
@@ -197,7 +197,7 @@ class RealTemplateTests(unittest.TestCase):
         """image_tokens <= 0 prices a picture at nothing: the prompt would be counted smaller than the engine will
         read it, so a request carrying a picture is refused until the bound is a number that bounds."""
         self.cfg.image_tokens = 0
-        with self.assertRaises(WindowExceeded) as ctx:
+        with self.assertRaises(PromptCountError) as ctx:
             self.g.enforce(self.body(parts(text('hello'), img(PNG))))
         self.assertIn('image_tokens=0', str(ctx.exception))
         self.assertEqual(self.g.count_errors, 1)

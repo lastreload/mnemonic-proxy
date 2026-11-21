@@ -13,7 +13,7 @@ from ctxproxy.fake_engine import FakeEngine
 from ctxproxy.render import render, template_kwargs
 from ctxproxy.server import Proxy
 from ctxproxy.upstream import Upstream, UpstreamError
-from ctxproxy.window import WindowExceeded
+from ctxproxy.window import WindowExceeded, PromptCountError
 
 try:
     from tokenizers import AddedToken, Tokenizer, models
@@ -146,8 +146,10 @@ class TestStrataLiterals(unittest.TestCase):
         body = {'messages': [{'role': 'assistant', 'content': '', 'tool_calls': [
             {'id': 'c', 'type': 'function', 'function': {'name': 'bash', 'arguments': '{invalid'}}]}],
             'max_tokens': 1}
-        with self.assertRaises(WindowExceeded):
+        with self.assertRaises(PromptCountError) as ctx:
             self.up.chat(body)
+        self.assertEqual(json.loads(ctx.exception.body)['error']['code'], 'prompt_count_failed')
+        self.assertNotIn('leaves no room', str(ctx.exception))
         self.assertEqual(self.eng.requests, [])
         self.assertEqual(self.proxy.wguard.count_errors, 1)
 
