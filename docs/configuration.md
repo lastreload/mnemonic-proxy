@@ -4,10 +4,15 @@
 
 `template_tools_format` defaults to `"strata"`: tool definitions are unwrapped,
 with the existing `tool.function` compatibility view. Set it explicitly to
-`"openai"` when the backend passes the original OpenAI tool array to the template
-(for example the qualified llama.cpp path). This preserves the wrappers; a
-self-unwrapping template still decides what to print. The setting is inherited
-and may be overridden per model profile. Unknown values fail startup.
+`"openai"` for the qualified llama.cpp-style canonical input contract.
+This rebuilds the canonical
+`type/function/name/description/parameters` catalogue as that frontend does,
+including defaults and discarding client-only extras, without changing the
+forwarded body. The opt-in also preserves intermediate system/empty assistant
+turns and joins text parts with newlines; the Strata default stays unchanged.
+The setting is inherited and may be overridden per model profile. Unknown
+values fail startup. Malformed OpenAI tools fail counting rather than silently
+claiming an exact count for a body the frontend would reject.
 
 This does not rewrite the model's template or qualify every backend/template
 combination. Compare the complete prompt and token IDs with the actual backend

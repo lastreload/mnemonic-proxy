@@ -18,3 +18,14 @@ its fixture is not a substitute for real backend qualification.
 Tokenizer files remain outside the source tree. The task's offline verifier
 uses the official pinned tokenizer files checked against all GGUF vocab IDs
 and merges. The full impact/RED/byte/ID records live in the task workspace.
+
+library-variants.json is captured from the exact existing common chat shared
+library at 6c5afc86, invoked via a small C++ adapter with model=nullptr. No model,
+backend or generation is initialized. Both integral base prompts were first
+matched byte-for-byte against the real server captures above. Twenty variants
+cover order, strict extras, absent description, two tools, compact arguments,
+Unicode, empty assistants, developer/intermediate system roles and text parts.
+The initial opt-in failed eleven variants; only the opt-in branch was corrected.
+Default Strata and all four already successful real-generation prompts remain
+byte/ID identical. Capability supports_object_arguments is true for both real
+templates, so the common library parses argument strings before rendering.

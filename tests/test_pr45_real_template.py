@@ -21,6 +21,14 @@ RAW = json.loads((F / 'backend-A.json').read_text())
 @unittest.skipUnless(importlib.util.find_spec('jinja2') and importlib.util.find_spec('tokenizers'),
                      'install mnemonic-proxy[exact]')
 class RealTemplateTests(unittest.TestCase):
+    def test_exact_common_library_variants(self):
+        cases = json.loads((F / 'library-variants.json').read_text())
+        self.assertEqual(len(cases), 20)
+        for c in cases:
+            with self.subTest(case=c['id']):
+                t = PackTemplate(F / (c['id'][0]+'.jinja'), tools_format='openai')
+                self.assertEqual(t.render(c['messages'], c['tools'], {}), c['prompt'])
+
     def test_openai_real_backend_integral_prompt(self):
         template = PackTemplate(F / 'A.jinja', tools_format='openai')
         for name, capture in RAW.items():
@@ -37,14 +45,19 @@ class RealTemplateTests(unittest.TestCase):
 
     def test_openai_catalogue_is_not_changed(self):
         tools = [{'type': 'function', 'function': {'name': 'x', 'parameters': {'type': 'object'}},
-                  'strict': True}, {'name': 'already_unwrapped'}]
+                  'strict': True}, {'type': 'function', 'function': {'name': 'second'}}]
         before = copy.deepcopy(tools)
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / 'chat_template.jinja'
             p.write_text('{{ tools | tojson }}')
             t = PackTemplate(p, tools_format='openai')
-            self.assertEqual(json.loads(t.render([{'role': 'user', 'content': 'x'}], tools, {})), tools)
+            expected = [{'type': 'function', 'function': {'name': 'x', 'description': '',
+                        'parameters': {'type': 'object'}}}, {'type': 'function', 'function': {
+                        'name': 'second', 'description': '', 'parameters': {}}}]
+            self.assertEqual(json.loads(t.render([{'role': 'user', 'content': 'x'}], tools, {})), expected)
             self.assertEqual(t.render([{'role': 'user', 'content': 'x'}], None, {}), 'null')
+            with self.assertRaisesRegex(ValueError, 'function.name'):
+                t.render([{'role': 'user', 'content': 'x'}], [{'name': 'unwrapped'}], {})
         self.assertEqual(tools, before)
 
     def test_invalid_format_fails_even_without_tokenizer(self):
