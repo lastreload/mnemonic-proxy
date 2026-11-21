@@ -11,6 +11,7 @@ otherwise two context managers fight over the same history:
 | opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
 | Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](hermes-agent.md) |
 | DeepSeek Harness (`dsh`) | `baseURL: http://127.0.0.1:8096/v1` (`api: openai-completions`) | `compaction-basic` and `tool-result-pruner`: `disabled: true` | [DeepSeek Harness](#deepseek-harness-chat-completions) |
+| Cline | `http://127.0.0.1:8096/v1` (OpenAI Compatible provider) | its automatic context compaction, **and its "Context" value raised above the engine's window** | [Cline](#cline-chat-completions) |
 | Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
 | Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
@@ -203,6 +204,33 @@ tokens each one per tool call, add up the numbers in each, give the grand total;
 | masks / `recall` | 2 masks (47,309 tokens hidden) / 6 `recall`, 24-344 ms each |
 | segment switches | none (the task stayed inside one segment) |
 | wall time | 5 min 49 s for both turns |
+
+## Cline (Chat Completions)
+
+Provider **OpenAI Compatible**, Base URL `http://127.0.0.1:8096/v1`, Model ID = the id the engine answers at
+`/v1/models`. Turn Cline's automatic context compaction off: the proxy is the context manager here.
+
+**Raise Cline's own "Context" value well above the engine's window.** Cline sizes each request's output budget so
+that `estimate(history) + max_tokens` stays under the window it knows, keeping about 15K of headroom. With the value
+equal to the engine's window (131072 in the test below) that budget collapsed as the conversation grew: measured over
+a 4-hour task, from 32000 tokens to **1272** once Cline's own estimate passed ~84K, while the proxy's physical prompt
+was 38-66K, because masking is invisible to the client. A tool call that needs more than the budget left is cut in
+the middle of its arguments (`finish=length`), and the agent stops. With the value at 1310720 (10x the engine) the
+same task asked for 32000 at every one of its 483 requests; the proxy clamped only what did not fit
+(`response_clamped`: 16548-31783 here) and, from `prompt > 106488`, the response floor (16384) handed over to the
+segment switch, as designed.
+
+Cline holds its conversation unmasked, so masking does not relieve this budget - only the client's own window does.
+
+**10x, not 2x.** A third run of the same task with the value at 262144 (2x) grew Cline's unmasked history to **246K
+in two hours** (fewer, larger tool calls) and the output budget fell to **909** tokens: one tool call was cut
+mid-arguments and the model had to recover. The value has to stay above `unmasked history + max_tokens + headroom`,
+and that history reached 1.9x the engine's window - use 10x, or at least 4-5x.
+
+**Do not go further than needed either.** A client that sends a *window-sized* `max_tokens` instead of a fixed cap
+fills the engine's window (`prompt + max_tokens`), so `est + resp + reserve + 8 > window` never holds and segments stop
+switching (the handoff notes go with them). A fixed cap plus 10x keeps the switch firing at
+`est > window - reserve - 8 - response_floor`.
 
 ## Claude Code (Anthropic Messages)
 
