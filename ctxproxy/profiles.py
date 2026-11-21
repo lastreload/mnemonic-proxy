@@ -97,7 +97,8 @@ class ProfileSpec:
         defaults = Config()
         window = int(raw.get("window", defaults.window))
         ratio = window / float(BASE_WINDOW)
-        if ratio != 1:
+        if ratio != 1 and "window" not in explicit:
+            # Explicit small windows are already scaled once by engines.apply (0.3.26).
             for field in SCALED:
                 value = getattr(defaults, field, None)
                 if field not in raw and isinstance(value, int) and value > 0:
@@ -188,7 +189,7 @@ class ProfileAutoSaver:
             d = self.dispatcher
             with d.lock:
                 current = d.contexts.get(d.active_model)
-                if current is None or current.autosaver is None:
+                if current is None or current.autosaver is None or not current.cfg.autosave:
                     continue
                 if time.time() - ((current.up.state or {}).get("t_end", 0)) < current.cfg.autosave_poll_s:
                     continue
@@ -224,8 +225,8 @@ class ProfileProxy:
         self.owners = SlotOwners(os.path.join(os.path.abspath(args.data), OWNERS_FILE))
         self.autosaver = None
         self.archiver = None
-        if any(cfg.get("autosave") for cfg in (s.raw_config()[0] for s in specs)):
-            self.autosaver = ProfileAutoSaver(self).start()
+        # Start lazily after a concrete profile's automatic choices have been applied.
+        # In off mode no managed-state worker may run.
 
     @property
     def cfg(self):
@@ -301,24 +302,33 @@ class ProfileProxy:
             setattr(dst, field.name, getattr(src, field.name))
 
     def _make_context(self, model: str, spec: ProfileSpec):
-        from . import engines
+        from . import engines, autoconfig
         from .server import Proxy
 
         raw, explicit = spec.raw_config()
         cfg = Config.from_dict(raw)
-        if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
-            cfg.data_dir = os.path.abspath(self.args.data)
+        digest = hashlib.sha256(model.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+        directory = os.path.join(os.path.abspath(self.args.data), "models", digest)
+        origin = autoconfig.origin(directory)  # before mkdir, metadata or Store
+        os.makedirs(directory, exist_ok=True)
         counter = spec.new_counter()
+        counter.journal = self.journal
         up = Upstream(self.up.base, self.up.api_key, timeout=self.up.timeout)
+        up.profile_model, up.slot_owners = model, self.owners
         engine = engines.setup(cfg, up, self.journal, explicit=explicit, counter=counter,
+                               data_dir=directory, origin=origin, mark=True,
                                log=lambda m: print(m, file=__import__("sys").stderr, flush=True))
+        if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
+            cfg.data_dir = directory
+        if self.mode != "off" and any(getattr(cfg, k, False) for k in engines.SAVE_PRODUCING):
+            outcome, detail = engines.ensure_slot_dir(cfg.slot_dir, up.base)
+            if outcome in ("created", "failed", "remote"):
+                self.journal.log("profile_slot_dir", model=model, slot_dir=cfg.slot_dir,
+                                 outcome=outcome, detail=detail)
         problems = engines.window_problems(cfg, engine, explicit) + engines.window_mismatch(cfg, engine, explicit)
         if problems:
             raise ProfileError(400, "model %r profile has an invalid context window: %s"
                                % (model, "; ".join(e for e, _ in problems)), "invalid_profile_window")
-        digest = hashlib.sha256(model.encode("utf-8", "surrogatepass")).hexdigest()[:20]
-        directory = os.path.join(os.path.abspath(self.args.data), "models", digest)
-        os.makedirs(directory, exist_ok=True)
         try:
             with open(os.path.join(directory, "model.json"), "w", encoding="utf-8") as f:
                 json.dump({"model": model, "profile": spec.name}, f, ensure_ascii=False, indent=1)
@@ -335,9 +345,11 @@ class ProfileProxy:
             engine.router_state.owners = self.owners
         up.profile_model = model
         up.slot_owners = self.owners
-        if cfg.autosave:
+        if cfg.autosave and self.mode != "off":
             child.enable_autosave(start=False)
-        if cfg.kv_archive:
+            if self.autosaver is None:
+                self.autosaver = ProfileAutoSaver(self).start()
+        if cfg.kv_archive and self.mode != "off":
             from .kvarchive import enable as enable_kv_archive, zstd
             if zstd is None:
                 raise ProfileError(400, "model %r enables kv_archive but Python >= 3.14 is required" % model)
@@ -362,8 +374,9 @@ class ProfileProxy:
         spec = self.context_specs[model]
         raw, explicit = spec.raw_config()
         cfg = Config.from_dict(raw)
-        if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
-            cfg.data_dir = os.path.abspath(self.args.data)
+        digest = hashlib.sha256(model.encode("utf-8", "surrogatepass")).hexdigest()[:20]
+        directory = os.path.join(os.path.abspath(self.args.data), "models", digest)
+        # Re-evaluate on a clean Config; apply() alone loses automatic choices.
         detected = engines.detect(child.up, cfg.engine, int(cfg.slot_id or 0))
         if detected.kind == "ds4":
             from .engines import _get_json
@@ -375,8 +388,23 @@ class ProfileProxy:
                 detected.n_ctx = int(mine.get("context_length") or 0) or detected.n_ctx
         child.up.set_engine(detected, cfg.slot_dir)
         engines.apply(cfg, detected, self.journal, explicit, log=None)
+        from . import autoconfig
+        origin = autoconfig.origin(directory)
+        detected.data_origin, detected.data_origin_why = origin
+        machine = autoconfig.Machine.read(detected)
+        chosen = autoconfig.decide(cfg, detected, explicit, machine, exact=child.tc.exact,
+                                  existing=(origin[0] == autoconfig.ORIGIN_EARLIER))
+        if chosen:
+            self.journal.log("auto_config", model=model, machine=machine.summary(),
+                             data_folder=origin[0], decisions=[d.summary() for d in chosen if d.changed])
+        if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
+            cfg.data_dir = directory
         self._copy_cfg(child.cfg, cfg)
         child.engine = detected
+        if cfg.autosave and self.mode != "off" and child.autosaver is None:
+            child.enable_autosave(start=False)
+            if self.autosaver is None:
+                self.autosaver = ProfileAutoSaver(self).start()
         problems = engines.window_problems(cfg, detected, explicit) + engines.window_mismatch(cfg, detected, explicit)
         if problems:
             raise ProfileError(400, "model %r has an invalid active context window: %s"

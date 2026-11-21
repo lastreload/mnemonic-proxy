@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — local model-profile candidate
+
+- Reconcile the per-model profiles proposal (#45 / #27) with the complete 0.3.34 baseline, without
+  replacing its authentication, off-mode, template, guard or reasoning-effort fixes.
+- Preserve per-concrete-model tokenizer/template, window, archive/accounting and saved-file ownership.
+  Apply automatic-configuration provenance per runtime through refresh/restart and scale explicit small
+  windows only once. Keep managed-state background workers off in `--mode off`.
+- `forget` now refuses profile data/configuration before mutation: full profile-aware deletion is not
+  implemented and root-only deletion must not claim success. See the [profile contract and limits](docs/configuration.md#model-profiles-local-candidate-not-yet-released).
+- This is a locally tested CPU-fixture candidate, not a release or real-engine qualification.
+
 ## 0.3.34 — 2026-11-21
 
 - **Model-native reasoning effort (#100).** Prompt counting no longer promotes `high` or unknown values to

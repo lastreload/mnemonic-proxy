@@ -75,7 +75,8 @@ class TestProfileEdges(ProfileBase):
         for profiles in ({}, [], None, "alpha"):
             raw = {"profiles": profiles}
             cfg = Config.from_dict(raw)
-            args = SimpleNamespace(data=self.tmp.name, tokenizer=None, upstream=self.url, api_key="", config=None)
+            args = SimpleNamespace(data=self.tmp.name, tokenizer=None, upstream=self.url, api_key="", config=None,
+                                   client_key="", host="127.0.0.1")
             with self.subTest(profiles=profiles), patch.object(server, "Upstream") as upstream:
                 with self.assertRaises(ValueError):
                     server.serve(args, raw, cfg)
@@ -88,6 +89,7 @@ class TestProfileEdges(ProfileBase):
         raw = {"profiles": {"beta": {"window": 65536}}}
         cfg = Config.from_dict(raw)
         args = SimpleNamespace(data=self.tmp.name, tokenizer=None, upstream=self.url, api_key="", mode="tools",
+                               client_key="",
                                host="127.0.0.1", port=free_port())
         class Listener:
             def __init__(self, *a):

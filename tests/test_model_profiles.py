@@ -410,7 +410,8 @@ class TestCheckAndStartup(ProfileBase):
     def test_bad_profile_tokenizer_fails_before_upstream(self):
         raw = {"profiles": {"alpha": {"tokenizer": "missing.json"}}}
         cfg = Config.from_dict(raw)
-        args = SimpleNamespace(data=self.tmp.name, tokenizer=None, upstream=self.url, api_key="")
+        args = SimpleNamespace(data=self.tmp.name, tokenizer=None, upstream=self.url, api_key="",
+                               client_key="", host="127.0.0.1")
         with patch("ctxproxy.core.load_tokenizer", side_effect=ValueError("bad tokenizer")), \
                 patch.object(server, "Upstream") as upstream:
             with self.assertRaisesRegex(ValueError, "alpha.*estimated window guard"):

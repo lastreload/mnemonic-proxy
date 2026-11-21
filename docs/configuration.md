@@ -1,5 +1,66 @@
 # Configuration
 
+## Model profiles (local candidate, not yet released)
+
+`profiles` maps each request's concrete `model` to a tokenizer and optional adjacent
+`chat_template.jinja`, session directory, window and normal configuration fields:
+
+<!-- readme-test: illustrative; config: partial -->
+```json
+{
+  "profiles": {
+    "model-a": {"tokenizer": "/packs/a/tokenizer", "slot_dir": "/slots/a"},
+    "model-b": {"tokenizer": "/packs/b/tokenizer", "slot_dir": "/slots/b"},
+    "model-c-*": {"tokenizer": "/packs/c/tokenizer", "slot_dir": "/slots/c"}
+  }
+}
+```
+
+Exact names win; shell-style patterns are checked in declaration order. An unknown or missing model is
+HTTP 400 before streaming starts, unless `default_profile` explicitly names an exact profile; then that
+concrete model is selected, never whichever handled the preceding request. A profile inherits top-level
+options and may override them. Invalid tokenizers/templates fail startup rather than silently estimate.
+The engine-reported context wins over a configured fallback; `window_override: true` requests the configured
+window but does not bypass engine safety checks. Explicit small-window thresholds scale only once.
+
+Each concrete model, including two ids matching the same pattern, owns a runtime, token counter/template,
+conversation accounting and SQLite archive under `data/models/<sha256(model)[:20]>`. `model.json` records
+the concrete id and profile. Switching A → B → A retains A's archived state; it does not transfer it to B.
+This is archive isolation, NOT client-history filtering: if the client resends A's raw messages to B, B
+receives those messages. Use separate client conversations when separate histories are intended.
+The archive HTTP endpoint keyed only by a recall id is an administrative view, not a model authorization
+boundary; ids derived from identical messages may be present in more than one archive.
+
+Automatic configuration uses each concrete model directory's own provenance, read before creating the
+archive. New directories get `autoconfig.json`; old directories without that mark keep their previous
+choices unless `auto_config` is explicitly enabled. Startup, request refresh and restart preserve this
+rule. Explicit profile/top-level options win. Default live dumps go into that model directory. Internal
+notes, recall, final retries, anchors, saves and remote token counting retain the selected model id.
+
+The shared engine is serialized. Only the active runtime's idle autosaver is ticked; `--mode off` does not
+start profile autosave/archive workers or archive/mask client messages. Session-file ownership is recorded
+in `profile-slot-models.json`, shared across runtimes and persistent across restart. A restore owned by a
+different or unknown concrete model is refused before calling the engine. Use distinct engine-side
+session directories and the engine's real model aliases. Retention caps (`autosave_keep`, `autosave_max_gb`)
+are PER RUNTIME, not a global disk cap; explicitly shared custom `data_dir`/archive paths remain the
+operator's responsibility.
+
+Limitations of this local candidate:
+
+- `forget` refuses model-profile data/configuration, including `--list` and `--dry-run`, with a nonzero
+  exit and no changes. It does not falsely report root-only deletion as successful. Profile-aware
+  deletion is not implemented; do not claim such data has been deleted.
+- MCP still opens one explicitly selected SQLite archive, not an automatic cross-model aggregate.
+- Static `check` lists profile fallbacks without loading inactive models; `check --live` actively switches
+  through exact profiles. It is not a read-only inventory; do not run it against an engine in use.
+- Strata selection may issue a one-token probe before reading the selected model's context. Pattern
+  matches are validated when a concrete model is requested.
+- CPU fixture tests are not real model-switching, generated-note or saved-state compatibility evidence.
+
+Without `profiles`, the 0.3.34 path and its optional authentication, image checks, native reasoning-effort
+handling and `off` pass-through are retained. No profile-aware deletion or real-engine qualification is
+claimed by this preparation.
+
 Output limits in managed mode: `max_completion_tokens` takes precedence over `max_tokens` when both are supplied;
 without either field, `default_response` is used (16384 by default). These values are ceilings, not a reason to
 switch segments. After masking and any necessary switch, the proxy caps the response to
