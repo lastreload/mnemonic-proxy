@@ -194,7 +194,7 @@ def guard(proxy, p, body: dict, phys: list, resp: dict, emit=None, tools="_p") -
     send = fit_thinking(proxy, p, body, phys, budget, tools)
     if send is None:
         proxy.journal.log("truncation_guard", conv=p.conv, word=hit[0], token=hit[1], before=text[:200],
-                          used=False, error="nessuno spazio per il ragionamento")
+                          used=False, error="no room for reasoning")
         return resp
     t0 = time.time()
     try:

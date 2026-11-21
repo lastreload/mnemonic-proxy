@@ -21,8 +21,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def render(body: dict) -> str:
     """Rendering deterministico del prompt (stand-in del template chat): ciò che conta è che due liste di messaggi
-    uguali diano la stessa stringa e che un messaggio cambiato cambi la stringa da quel punto in poi."""
-    out = ["<tools>" + json.dumps(body.get("tools") or [], sort_keys=True, ensure_ascii=False) + "</tools>"]
+    uguali diano la stessa stringa e che un messaggio cambiato cambi la stringa da quel punto in poi.
+
+    `chat_template_kwargs["tools"]` ha la PRECEDENZA sull'array `tools`, come il motore reale: il template riceve
+    extra_context e il parametro `tools` serve solo a grammatica e parser (llama.cpp common/chat.cpp:894-902,
+    misurato in workspaces/mp-issue90-cache-native). Senza questa precedenza il motore finto non potrebbe mostrare
+    la differenza fra il catalogo RESO e l'array di GRAMMATICA."""
+    ctk = body.get("chat_template_kwargs")
+    tools = ctk["tools"] if isinstance(ctk, dict) and "tools" in ctk else body.get("tools")
+    out = ["<tools>" + json.dumps(tools or [], sort_keys=True, ensure_ascii=False) + "</tools>"]
     for m in body.get("messages") or []:
         out.append("<|im_start|>%s\n%s%s%s<|im_end|>\n" % (
             m.get("role"), json.dumps(m.get("content"), ensure_ascii=False),
@@ -89,6 +96,13 @@ class FakeEngine:
         self.loads = 0
         self.truncated: list = []
         self.read_override = None
+        # 0.3.23: what the automatic configuration reads. `version`: Strata /v1/status "engine", llama /props
+        # "build_info"; `gpu`: the GPU figures Strata reports in /v1/status (None = the engine says nothing).
+        self.version = "0.1.51" if flavor in ("strata", "strata-poly") else "6123 (fake)"
+        # issue #90: il template che il motore dichiara in /props (vuoto = la chiave non compare, come i motori
+        # che non la espongono). Serve al gate della separazione catalogo-reso / array-di-grammatica.
+        self.chat_template = ""
+        self.gpu = flavor in ("strata", "strata-poly")
 
     def activate_model(self, name) -> bool:
         """Select the one active model. False = this multi-model fake does not serve the requested id."""
@@ -183,9 +197,12 @@ class FakeEngine:
                 for i in range(self.n_slots)]
 
     def status(self) -> dict:
-        return {"service": "strata", "loaded": True, "started": self.started,
+        # Keep both active-model selection and the current engine capability evidence.
+        return {"service": "strata", "loaded": True, "started": self.started, "engine": self.version,
                 **({"model": self.active_model} if self.active_model is not None else {}),
                 "context": {"native": self.n_ctx, "max_positions": self.n_ctx},
+                "concurrency": {"serving": self.n_slots, "requested": self.n_slots},
+                "machine": {"gpu": {"name": "fake", "total_mib": 12288, "used_mib": 8192}} if self.gpu else {},
                 "activity": {"requests": self.n_requests, "in_flight": int(self.busy)}}
 
     # ---- ds4-server (flavor="ds4"): comportamento verificato su ds4_server.c ----
@@ -286,7 +303,10 @@ class FakeEngine:
                     if self.path.startswith("/props"):
                         return self._send(200, {"default_generation_settings": {"n_ctx": eng.n_ctx // eng.n_slots},
                                                 "total_slots": eng.n_slots,
-                                                "model_path": "/m/%s.gguf" % (eng.active_model or "fake-0.6B")})
+                                                "model_path": "/m/%s.gguf" % (eng.active_model or "fake-0.6B"),
+                                                "build_info": eng.version,
+                                                **({"chat_template": eng.chat_template} if eng.chat_template
+                                                   else {})})
                     if self.path.startswith("/slots"):
                         return self._send(200, eng.slots_list())
                     if self.path.startswith("/health"):
@@ -424,6 +444,7 @@ class FakeEngine:
                 r = eng.handle_chat(body)
                 msg = dict(r["choices"][0]["message"])
                 slow = msg.pop("_slow", 0)
+                deltas = msg.pop("_deltas", None)
                 base = {k: r[k] for k in ("id", "object", "created", "model")}
                 base["object"] = "chat.completion.chunk"
 
@@ -431,16 +452,22 @@ class FakeEngine:
                     return {**base, "choices": [{"index": 0, "delta": delta, "finish_reason": fin}], **x}
 
                 parts = [ch({"role": "assistant", "content": ""})]
-                for key in ("reasoning_content", "content"):
-                    t = msg.get(key) or ""
-                    for i in range(0, len(t), 10):
-                        parts.append(ch({key: t[i:i + 10]}))
-                for i, c in enumerate(msg.get("tool_calls") or []):
-                    parts.append(ch({"tool_calls": [{"index": i, "id": c["id"], "type": "function",
-                                                     "function": {"name": c["function"]["name"], "arguments": ""}}]}))
-                    a = c["function"]["arguments"]
-                    for k in range(0, len(a), 7):
-                        parts.append(ch({"tool_calls": [{"index": i, "function": {"arguments": a[k:k + 7]}}]}))
+                if deltas is not None:
+                    # sequenza di delta dettata dal test (nomi e argomenti divisi o intercalati come li
+                    # manda un motore reale); il messaggio non-stream resta quello della policy
+                    parts += [ch(d) for d in deltas]
+                else:
+                    for key in ("reasoning_content", "content"):
+                        t = msg.get(key) or ""
+                        for i in range(0, len(t), 10):
+                            parts.append(ch({key: t[i:i + 10]}))
+                    for i, c in enumerate(msg.get("tool_calls") or []):
+                        parts.append(ch({"tool_calls": [{"index": i, "id": c["id"], "type": "function",
+                                                         "function": {"name": c["function"]["name"],
+                                                                      "arguments": ""}}]}))
+                        a = c["function"]["arguments"]
+                        for k in range(0, len(a), 7):
+                            parts.append(ch({"tool_calls": [{"index": i, "function": {"arguments": a[k:k + 7]}}]}))
                 parts.append(ch({}, r["choices"][0]["finish_reason"], usage=r["usage"], timings=r["timings"]))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")

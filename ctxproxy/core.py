@@ -27,9 +27,12 @@ import uuid
 from .lang import IMAGE_NOTE_EN, IMAGE_NOTE_IT, LANG_KEY, CUSTOM_INPUT_DESC_EN, CUSTOM_INPUT_DESC_IT, norm as \
     norm_lang, outcome_text
 from .paging import (AUTO_HEAD, AUTO_HEAD_EN, AUTO_HEADS, LEGACY_TOOLS_NAME, TOOLS_NAME, ToolPager, is_tools_result,
-                     query_terms, typed_receipt)
-from .render import message_piece, render_pieces, template_kwargs
+                     query_terms, promote_loaded_schemas, tool_desc, tool_name, typed_receipt)
+from .render import (def_text, image_source, message_piece, prompt_head, redact_images, render_pieces,
+                     template_kwargs, volatile_pictures)
+from .nativetools import Gate as NativeSplitGate, canonical_tools
 from .savedstate import state_available
+from .toolheads import EVENT as TOOL_HEADS_EVENT, fingerprint as tools_fingerprint, payload as tool_heads_payload
 from .window import find_guard, notes_source, labeled_chat
 from .tooldefs import ToolShortener
 
@@ -61,6 +64,8 @@ DROP_NOTE = ("\n\n[gestore del contesto: scambio \u00abusa e getta\u00bb conclus
              "Testo completo: {rn} id={rid}.]")
 PIN_HEAD = "[strata-context: punti fermi]"
 NOTES_MARK = "[strata-context: richiesta note di passaggio]"
+# 0.3.22: ricevute estese, scelte alla prima richiesta e ricordate come la lingua (Manager.receipt_detail)
+RECEIPTS_KEY = "receipts:"
 SEG_MARK = "[strata-context: segmento {seg}]"
 # 0.3.1: English texts for new conversations (prompt_language, see lang.py). The Italian ones above stay verbatim
 # for conversations born before 0.3.1 (byte-identical prefix). Recognition always accepts both.
@@ -235,8 +240,39 @@ class Config:
     # strumenti su richiesta (card t_00c5aef6, paging.py): nel prompt solo tools_core + recall + tools;
     # gli altri si caricano con lo strumento tools (definizione nel risultato, in coda: il prefisso non cambia)
     tools_paging: bool = False
-    tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls")
+    # Modo di compatibilità OPT-IN per i motori la cui grammatica/parser nativi delle chiamate enumerano SOLO
+    # l'array `tools` (llama.cpp b11723: misurato, issue #90). Con tools_paging acceso, gli schemi COMPLETI degli
+    # strumenti già caricati nel prompt fisico vengono aggiunti in coda all'array `tools`, così la chiamata nativa
+    # a uno strumento caricato è ammessa dalla grammatica. Costo: il blocco <tools> sta in TESTA al prompt, quindi
+    # ogni nuovo caricamento invalida il prefisso cacheato (vedi IMPACT.md). Nessun autodetect: il percorso Strata
+    # non ne ha bisogno e resta quello di serie.
+    tools_paging_native_schemas: bool = False
+    # Variante che NON invalida il prefisso (issue #90, prova nativa in workspaces/mp-issue90-cache-native):
+    # il catalogo visibile va in `chat_template_kwargs.tools` in forma canonica (il template lo rende con
+    # precedenza su `tools`, common/chat.cpp:894-902) e l'array `tools` porta catalogo + schemi caricati, cioè
+    # SOLO grammatica e parser. Il prompt reso resta identico byte per byte, quindi il prefisso cacheato non si
+    # invalida a ogni caricamento. Opt-in e con gate: motore llama.cpp, /props con build_info, template con i
+    # marcatori dell'handler dedicato (nativetools.qualify). Gate non superato = comportamento di serie, con
+    # diagnostica esplicita: nessun ritorno silenzioso alla promozione costosa.
+    tools_paging_native_split: bool = False
+    # Stringa attesa dentro `build_info` del motore per accendere la separazione: di serie la REVISIONE
+    # misurata (llama.cpp 31288c9c6, build 11723), perché grammatica e parser sono stati qualificati su quella
+    # sorgente, non su «un llama.cpp qualunque». Vuota = nessun pin (l'operatore si assume la verifica); un
+    # altro valore = un'altra build qualificata da chi la usa.
+    tools_paging_native_split_build: str = "31288c9c6"
+    # sha256 atteso del `chat_template` del motore, prefisso ammesso (vuoto = solo i marcatori dell'handler
+    # dedicato). Il template provato è 7f0e529032c25183bcd66c7f238da2d377f43be754a94e2725a58c4e16d2ed67.
+    tools_paging_native_split_template_sha256: str = ""
+    # Nomi di base dei client documentati: pi / opencode / Claude Code (read bash edit write grep find ls) e
+    # Hermes (read_file write_file patch search_files terminal). Senza i nomi di Hermes il pager mandava in
+    # catalogo TUTTO il suo elenco e in testa restavano solo recall e tools (card t_3ebcb103). Un nome che il
+    # client non ha non cambia niente: la divisione degli altri client resta identica.
+    tools_core: tuple = ("read", "bash", "edit", "write", "grep", "find", "ls",
+                         "read_file", "write_file", "patch", "search_files", "terminal")
     tools_load_max: int = 5
+    # testa misurabile (card t_49579af0, toolheads.py): una riga di giornale `tool_heads` per conversazione e per
+    # cambio dell'elenco strumenti, con nomi e peso delle definizioni. SOLO nomi e numeri: nessun testo.
+    journal_tool_heads: bool = True
     # ricevute tipizzate al posto dell'«Inizio» nei segnaposti delle uscite nascoste
     typed_receipts: bool = True
     receipt_guard: bool = True           # blocca write/edit/bash che contengono ricevute/segnaposti copiati
@@ -257,7 +293,11 @@ class Config:
     # stima token
     chars_per_token: float = 3.5
     msg_overhead: int = 6
-    image_tokens: int = 1024
+    # One picture's bill, and it has to satisfy the rule the guard enforces: image_tokens >= vision.max_tokens + 2.
+    # piece_tokens charges image_tokens for the WHOLE marker region, so the two special tokens that stay in the
+    # prompt around the expansion (<|vision_start|>, <|vision_end|>) are inside this number. Strata's GPU default
+    # clamp is vision.max_tokens=1024, which therefore needs 1026: the old 1024 under-reserved 2 tokens per picture.
+    image_tokens: int = 1026
     reasoning_last_turn_only: bool = False  # template Strata: preserve_thinking indefinito => tiene tutto
     # salvataggio/ripristino automatico del segmento attivo (AUTOSAVE-RESULT.md)
     autosave: bool = False          # salva lo stato di Strata quando la conversazione che lo occupa resta ferma
@@ -307,6 +347,10 @@ class Config:
     # for NEW conversations: "en" (default) | "it". Saved per conversation at first use; conversations born before
     # 0.3.1 keep Italian (byte-identical prefix). Markers are recognized in both languages everywhere.
     prompt_language: str = "en"
+    # 0.3.22: richer receipts for NEW conversations (size of the output, error type, first error line). Saved per
+    # conversation at first use like the language: a conversation born before keeps the receipts it was masked with.
+    # Off by default until an A/B run shows the model uses them at least as well as the plain ones.
+    rich_receipts: bool = False
     # 0.3.3 window guard (window.py): every request to the engine satisfies prompt + max_tokens + window_margin <= W
     window_guard: bool = True
     window_margin: int = 64              # technical margin (Strata itself keeps 8)
@@ -316,11 +360,34 @@ class Config:
     recall_removal: str = "value"        # order of removal in the recall loop: value | reasoning | age
     final_drop_internal_tools: bool = True   # final call for lack of space: without the proxy's own tools
     notes_thinking: str = "auto"         # handoff notes: auto (Strata: thinking budget < max_tokens) | off | on
+    # 0.3.27 handoff notes: tool_choice of the notes request. "none" forbids a call but, on Strata and on llama-server,
+    # also drops the tools from the template: the prompt changes and the whole segment is read again first. "keep"
+    # (what "auto" resolves to) sends nothing and relies on the recovery of the notes from the reasoning / the call.
+    notes_tool_choice: str = "auto"
+    # 0.3.23 automatic configuration (autoconfig.py): the options that depend on the engine and on the machine
+    # are chosen at startup from harmless reads (engine version/window/saved state, RAM, optional VRAM) and
+    # printed with their reason by `check --explain-config` and by the startup banner. A field written in the
+    # config file always wins. false = every default is used exactly as written here.
+    auto_config: bool = True
+    # size of one saved engine state file, per token of window. 19.5 KB/token = the 20000 bytes/token that
+    # autosave.py already uses for its disk check, so the two agree; measured values range from 7.6 KB/token
+    # (gemma E2B) to ~115 KB/token (llama-server with Qwen3-0.6B), see docs/dev-notes/ROUTER-MODE-RESULT.md and
+    # ENGINES-RESULT.md. Used only to check that a state file fits in the free RAM before the saved-state
+    # options are switched on by themselves: a floor, not a promise, which is why it is a field.
+    state_kb_per_token: float = 19.5
 
     @classmethod
     def from_dict(cls, d: dict) -> "Config":
         names = {f.name for f in dataclasses.fields(cls)}
-        return cls(**{k: v for k, v in d.items() if k in names})
+        cfg = cls(**{k: v for k, v in d.items() if k in names})
+        # Un limite per le immagini che non limita nulla è un errore di battitura, non una scelta: si scoprirebbe
+        # solo con un prompt oltre la finestra. Si rifiuta già all'assemblaggio della configurazione (0 resta lecito,
+        # significa « immagini fuori»: il guard le rifiuta e l'avvio lo scrive dove tutti lo vedono).
+        it = cfg.image_tokens
+        if isinstance(it, bool) or not isinstance(it, int) or it < 0:
+            raise ValueError("image_tokens must be a non-negative integer (tokens charged for one picture: >= the "
+                             "engine's vision.max_tokens + 2), got %r" % (it,))
+        return cfg
 
 
 def H(*parts: str) -> str:
@@ -347,9 +414,9 @@ def content_text(content) -> str:
             if t in ("text", "input_text", "output_text"):
                 out.append(p.get("text") or "")
             elif t in ("image_url", "input_image", "image"):
-                url = p.get("image_url")
-                url = url.get("url") if isinstance(url, dict) else (url or p.get("data") or "")
-                out.append("<immagine:%s>" % H(str(url))[:16])
+                # The same extraction the render side uses (render.image_source): the archive row and a receipt's
+                # <immagine:..> have to name the same picture, one value read in one place.
+                out.append("<immagine:%s>" % H(str(image_source(p)))[:16])
     return "\n".join(out)
 
 
@@ -409,6 +476,19 @@ AUTO_SUFFIX = ":auto"
 def aid_for(idx: int, m: dict) -> str:
     """id d'archivio degli argomenti delle tool call di un messaggio assistant."""
     return "a" + H("args", str(idx), canon(m))[:12]
+
+
+def chain_ok(idx: str = "idx", rid: str = "rid") -> str:
+    """Filtro di catena del recall, come frammento SQL (stessi parametri di prima: un solo `?`).
+
+    `idx < ?` da solo escludeva due cose diverse con la stessa riga: i RAMI FRATELLI (modifiche,
+    rigenerazioni) e la domanda in corso -- che è giusto escludere -- ma anche tutto ciò che il
+    turno AGENTICO IN CORSO ha prodotto dopo l'ultimo messaggio dell'utente, cioè esattamente i
+    blocchi che il proxy ha appena mascherato e di cui ha dato l'id al modello. `cur_chain` tiene
+    gli id d'archivio del prefisso inviato ORA (meno la domanda in corso, visibile per intero):
+    un ramo fratello ha altri id (rid = hash di indice + contenuto) e resta fuori.
+    """
+    return "(%s < ? OR %s IN (SELECT rid FROM cur_chain))" % (idx, rid)
 
 
 def args_text(m: dict) -> str:
@@ -509,6 +589,34 @@ def is_human_user(m: dict) -> bool:
     return not (t.startswith("<tool_response>") and t.endswith("</tool_response>"))
 
 
+# ---------- control frames of the client in re-presented text (issue #61) ----------
+# A client can wrap a message in a frame the model is instructed to TRUST. Hermes' mid-turn steering is a
+# standalone role:"user" message wrapped in
+#   [OUT-OF-BAND USER MESSAGE - a direct message from the user, delivered once at this position; ...]
+#   ...
+#   [/OUT-OF-BAND USER MESSAGE]
+# (agent/prompt_builder.py: STEER_MARKER_OPEN / steer_user_row). When the proxy RE-PRESENTS that text at a
+# NEW position - automatic recall, pinned points, the verbatim first request, the handoff notes, a recall
+# result - the frame comes along intact, so the model reads the quotation as a FRESH delivery of the same
+# instruction and keeps answering it (issue #61: "delivered once, arrived 5+ times").
+# Fix: relabel the frame in every copy the proxy itself writes. Same words, visibly a quotation; the real
+# delivery, in its own place in the conversation, is never touched. This is the convention Hermes uses when
+# it republishes model text as role=user ("[member-quoted OUT-OF-BAND USER MESSAGE").
+CONTROL_FRAME_NAMES = ("OUT-OF-BAND USER MESSAGE", "CONTEXT COMPACTION", "CONTEXT SUMMARY", "PRIOR CONTEXT")
+QUOTED_PREFIX = "quoted "
+_CONTROL_FRAME_RE = re.compile(r"\[(?!%s)(/?)(%s)" % (re.escape(QUOTED_PREFIX),
+                                                      "|".join(re.escape(n) for n in CONTROL_FRAME_NAMES)))
+
+
+def quote_control_frames(text: str) -> str:
+    """Rietichetta i marcatori di controllo del client in un testo che il proxy RIPRESENTA in una posizione
+    nuova: «[OUT-OF-BAND USER MESSAGE …]» -> «[quoted OUT-OF-BAND USER MESSAGE …]». Pura e idempotente;
+    il testo resta leggibile per intero, cambia solo l'etichetta della cornice."""
+    if not isinstance(text, str) or "[" not in text:
+        return text
+    return _CONTROL_FRAME_RE.sub(lambda m: "[%s%s%s" % (QUOTED_PREFIX, m.group(1), m.group(2)), text)
+
+
 # ---------- 📌 punti fermi / 🗑 usa e getta (NEXT.md 11-12) ----------
 _PIN_LINE = re.compile(r"^[ \t]*(?:\U0001F4CC|!!)[ \t]*(.+)$", re.M)
 _PIN_BLOCK = re.compile(r"\[\[importante\]\](.*?)\[\[/importante\]\]", re.S | re.I)
@@ -573,6 +681,18 @@ def head_text(text: str, n: int = 140) -> str:
     return t[:n] + ("…" if len(t) > n else "")
 
 
+# ---------------------------------------------------------------- guards on the estimate's calibration
+# The estimate drives masking: estimating *less* than the real prompt makes the proxy mask too late and
+# lets the engine cut the prompt in silence, so every guard here is biased towards overestimating.
+CALIB_ALPHA = 0.3               # weight of a new sample in the exponential average
+CALIB_MIN_EST_TOKENS = 1000     # under this the estimate is too noisy to teach anything
+CALIB_MIN_SAMPLES = 5           # accepted samples needed before the factor may be lowered
+CALIB_MIN_RATIO = 0.25          # real/estimated outside [MIN, MAX] is not a calibration sample
+CALIB_MAX_RATIO = 4.0
+CALIB_FLOOR = 0.5               # lower clamp (see CHANGELOG: not raised to 1.0)
+CALIB_CEILING = 2.0
+
+
 def receipt(info: dict | None, result: str, is_error=None, lang: str = "it") -> str:
     """Ricevuta di una riga degli effetti di una chiamata: «write src/a.js: riuscito»."""
     if not info:
@@ -584,17 +704,22 @@ class TokenCounter:
     """Stima token: tokenizer HF (tokenizers) se disponibile, altrimenti caratteri / chars_per_token.
     `scale` si calibra con i prompt_tokens reali restituiti da Strata."""
 
-    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None):
+    def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None,
+                 min_samples: int = CALIB_MIN_SAMPLES):
         self.cpt = chars_per_token
         self.scale = 1.0
+        self.samples = 0            # accepted calibration samples (see calibrate)
+        self.min_samples = min_samples          # 1 reproduces the pre-0.3.22 rule (tests of old prompts)
+        self._pending = 1.0         # factor being learned; may only raise `scale` during warm-up
+        self.journal: Journal | None = None   # set by the server so rejected samples are visible
         self.tk = None
         self.kind = "chars/%.1f" % chars_per_token
         if tokenizer_path:
             try:
                 self.tk = load_tokenizer(tokenizer_path)
-                self.kind = "esatto:" + os.path.basename(os.path.abspath(tokenizer_path).rstrip("/"))
+                self.kind = "exact:" + os.path.basename(os.path.abspath(tokenizer_path).rstrip("/"))
             except Exception as e:  # noqa: BLE001
-                self.kind += " (tokenizer non caricato: %s)" % e
+                self.kind += " (tokenizer not loaded: %s)" % e
         self._cache: dict[str, int] = {}
         self.prompt_template = None
         if self.tk is not None and tokenizer_path:
@@ -622,29 +747,72 @@ class TokenCounter:
     def count(self, text: str) -> int:
         return int(self.raw(text) * self.scale + 0.5)
 
-    def calibrate(self, estimated: int, real: int, alpha: float = 0.3) -> None:
+    def calibrate(self, estimated: int, real: int, alpha: float = CALIB_ALPHA) -> None:
+        """Teach the scale from the engine's real prompt_tokens, with the guards above.
+
+        Until CALIB_MIN_SAMPLES accepted samples have been seen the factor may only grow: one early sample
+        can make the proxy overestimate (it masks a little sooner, costing window) but cannot make it
+        underestimate, which would mask too late and let the engine cut the prompt. Samples whose
+        real/estimated ratio is implausible are rejected and journalled instead of averaged in.
+        """
         if self.tk is not None:
             return          # conteggio esatto (template + tokenizer del pack): nessuna scala da correggere
-        if estimated > 1000 and real > 0:
-            r = real / estimated
-            self.scale = min(2.0, max(0.5, self.scale * ((1 - alpha) + alpha * r)))
+        if not (estimated > CALIB_MIN_EST_TOKENS and real > 0):
+            return
+        r = real / estimated
+        if not (CALIB_MIN_RATIO <= r <= CALIB_MAX_RATIO):
+            if self.journal is not None:
+                self.journal.log("calibration_rejected", estimated=int(estimated), prompt_tokens=int(real),
+                                 ratio=round(r, 4), min_ratio=CALIB_MIN_RATIO, max_ratio=CALIB_MAX_RATIO,
+                                 samples=self.samples, scale=round(self.scale, 4))
+            return
+        self.samples += 1
+        self._pending = min(CALIB_CEILING, max(CALIB_FLOOR, self._pending * ((1 - alpha) + alpha * r)))
+        self.scale = self._pending if self.samples >= self.min_samples else max(self.scale, self._pending)
+
+
+def _pack_descriptor(desc) -> bool:
+    """Il descrittore del tokenizer del pack di Strata non è un tokenizer HF: descrive come *costruirne* uno (nome
+    del modello come stringa e regex di split del pack), mentre in un file HF `model` è un oggetto."""
+    return (isinstance(desc, dict) and isinstance(desc.get("model"), str)
+            and isinstance(desc.get("pre_pattern"), str))
 
 
 def load_tokenizer(path: str):
-    """Tokenizer HF (`tokenizers`) per il conteggio esatto. Accetta un tokenizer.json HF oppure la cartella
-    tokenizer del pack di Strata (vocab.json + merges.txt + token_type.json + descrittore tokenizer.json, che NON è
-    in formato HF): in quel caso lo costruisce (tools/make_hf_tokenizer.py, verificato identico a Strata)."""
+    """Tokenizer HF (`tokenizers`) per il conteggio esatto. Accetta, indifferentemente come file o come cartella,
+    un tokenizer HF (tokenizer.json in formato HF) oppure il tokenizer del pack di Strata (descrittore
+    tokenizer.json + vocab.json + merges.txt + token_type.json, che NON è in formato HF): in quel caso lo
+    costruisce (tools/make_hf_tokenizer.py, verificato identico a Strata).
+    Il formato si riconosce dalla STRUTTURA del tokenizer.json, non dal tipo di percorso (issue #95: la cartella di
+    un modello HF veniva scambiata per un pack). Ciò che non si riconosce è un errore fedele al formato che si
+    stava leggendo: mai una reinterpretazione nell'altro formato, mai un declassamento silenzioso al conteggio
+    stimato (il chiamante, TokenCounter, resta non esatto e con --tokenizer esplicito l'avvio è rifiutato)."""
     from tokenizers import Tokenizer  # type: ignore
-    p = path
-    if os.path.isfile(p):
-        try:
-            return Tokenizer.from_file(p)
-        except Exception:  # noqa: BLE001  descrittore del pack: si costruisce dalla cartella
-            p = os.path.dirname(os.path.abspath(p))
-    if os.path.isdir(p) and os.path.exists(os.path.join(p, "vocab.json")):
+    if os.path.isdir(path):
+        directory, file = path, os.path.join(path, "tokenizer.json")
+        if not os.path.isfile(file):
+            raise ValueError("unrecognized tokenizer: %s (no tokenizer.json in the directory: neither a Hugging "
+                             "Face tokenizer nor a Strata tokenizer pack)" % path)
+    elif os.path.isfile(path):
+        directory, file = os.path.dirname(os.path.abspath(path)), path
+    else:
+        raise ValueError("unrecognized tokenizer: %s (no such file or directory)" % path)
+    try:
+        with open(file, encoding="utf-8") as f:
+            desc = json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError("unrecognized tokenizer: %s is not a valid JSON tokenizer file (%s)" % (file, e)) from e
+    if _pack_descriptor(desc):
+        missing = [n for n in ("vocab.json", "merges.txt", "token_type.json")
+                   if not os.path.isfile(os.path.join(directory, n))]
+        if missing:
+            raise ValueError("incomplete Strata tokenizer pack %s: missing %s" % (directory, ", ".join(missing)))
         from .packtok import build
-        return build(p)
-    raise ValueError("tokenizer non riconosciuto: %s" % path)
+        return build(directory)
+    try:
+        return Tokenizer.from_file(file)
+    except Exception as e:  # noqa: BLE001  non è un descrittore di pack: l'errore della libreria è l'errore vero
+        raise ValueError("unsupported Hugging Face tokenizer %s: %s" % (file, e)) from e
 
 
 class Journal:
@@ -737,6 +905,9 @@ class Store:
                 self.db.execute("INSERT INTO archive_fts(archive_fts) VALUES('rebuild')")
         except sqlite3.OperationalError:
             self.fts = False              # SQLite senza FTS5: resta la ricerca per sottostringa
+        # 0.3.24: id d'archivio del prefisso della richiesta in corso (vedi chain_ok). Tabella TEMP: vive
+        # nella connessione, non tocca il file e non sopravvive al riavvio (è stato di una richiesta).
+        self.db.execute("CREATE TEMP TABLE IF NOT EXISTS cur_chain(rid TEXT PRIMARY KEY)")
         self.lock = threading.RLock()
 
     def _in(self, sql: str, keys: list, extra: tuple = ()):
@@ -769,6 +940,18 @@ class Store:
         with self.lock:
             self.db.executemany("INSERT OR IGNORE INTO archive VALUES(?,?,?,?,?,?,?,?)", rows)
 
+    def set_chain(self, rids) -> None:
+        """Gli id d'archivio raggiungibili come «richiesta in corso» (vedi chain_ok): sostituiti a ogni richiesta."""
+        with self.lock:
+            self.db.execute("DELETE FROM cur_chain")
+            self.db.executemany("INSERT OR IGNORE INTO cur_chain VALUES(?)", [(r,) for r in rids])
+
+    def in_chain(self, rid: str) -> bool:
+        if not rid:
+            return False
+        with self.lock:
+            return self.db.execute("SELECT 1 FROM cur_chain WHERE rid=? LIMIT 1", (rid,)).fetchone() is not None
+
     def get(self, rid: str, conv: str | None = None):
         with self.lock:
             if conv:
@@ -783,7 +966,7 @@ class Store:
         with self.lock:
             return self.db.execute(
                 "SELECT rid, idx, role, name, content, tokens FROM archive WHERE conv=? AND instr(lower(content), "
-                "lower(?)) > 0 AND idx < ? ORDER BY idx DESC LIMIT ?",
+                "lower(?)) > 0 AND " + chain_ok() + " ORDER BY idx DESC LIMIT ?",
                 (conv, query, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
 
     def search_fts(self, conv: str, query: str, limit: int = 20, max_idx: int | None = None):
@@ -798,7 +981,8 @@ class Store:
             try:
                 return self.db.execute(
                     "SELECT a.rid, a.idx, a.role, a.name, a.content, a.tokens FROM archive_fts f "
-                    "JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? AND a.idx < ? "
+                    "JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? AND "
+                    + chain_ok("a.idx", "a.rid") + " "
                     "ORDER BY bm25(archive_fts) LIMIT ?",
                     (q, conv, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
             except sqlite3.OperationalError:
@@ -815,7 +999,7 @@ class Store:
                 rows = self.db.execute(
                     "SELECT a.rid, a.idx, a.role, a.name, a.content, a.tokens, -bm25(archive_fts) AS s "
                     "FROM archive_fts f JOIN archive a ON a.rowid = f.rowid WHERE archive_fts MATCH ? AND a.conv=? "
-                    "AND a.idx < ? ORDER BY s DESC, a.idx DESC LIMIT ?",
+                    "AND " + chain_ok("a.idx", "a.rid") + " ORDER BY s DESC, a.idx DESC LIMIT ?",
                     (q, conv, 10 ** 9 if max_idx is None else max_idx, limit)).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -886,7 +1070,8 @@ class Store:
         p = (path or "").strip()
         with self.lock:
             return self.db.execute(
-                "SELECT idx, op, path, outcome, rid_args, rid_out, head FROM fileops WHERE conv=? AND idx < ? AND "
+                "SELECT idx, op, path, outcome, rid_args, rid_out, head FROM fileops WHERE conv=? AND "
+                + chain_ok("idx", "rid_out") + " AND "
                 "(path=? OR path LIKE ? OR ? LIKE '%' || path) ORDER BY idx",
                 (conv, 10 ** 9 if max_idx is None else max_idx, p, "%" + p, p)).fetchall()
 
@@ -1016,6 +1201,10 @@ class Prepared:
     lang: str = "it"                   # 0.3.1: lingua dei testi del proxy in questa conversazione
     recall_aliases: frozenset = frozenset((RECALL_NAME, LEGACY_RECALL_NAME))  # chiamate risolte come recall
     tools_aliases: frozenset = frozenset((TOOLS_NAME, LEGACY_TOOLS_NAME))
+    # issue #90, modo separazione (tools_paging_native_split): array `tools` da mandare al motore = catalogo
+    # reso + schemi COMPLETI dei caricati. `tools` sopra resta la lista RESA nel prompt, cioè quella che contano
+    # la finestra, la stima e l'invalidazione. None = separazione non attiva (nessun campo nuovo nel corpo).
+    grammar_tools: list | None = None
 
 
 class Manager:
@@ -1033,7 +1222,12 @@ class Manager:
         self.rn, self.tn = cfg.recall_tool_name or RECALL_NAME, cfg.tools_tool_name or TOOLS_NAME
         # lingua dei testi del proxy nella conversazione corrente (impostata da prepare; 0.3.1)
         self.lang = norm_lang(cfg.prompt_language)
+        # ricevute estese nella conversazione corrente (impostata da prepare; 0.3.22)
+        self.rich = bool(cfg.rich_receipts)
         self._last_phys: dict = {}   # conv -> ultimo prompt fisico (misura dei token di cache invalidati)
+        # issue #90: qualifica del motore per la separazione catalogo-reso / array-di-grammatica (una volta)
+        self._split_gate = NativeSplitGate(cfg, journal)
+        self._tool_heads_fp: dict = {}   # conv -> impronta dell'elenco strumenti già registrato (evento tool_heads)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
         # ProfileProxy sets the concrete model here. Empty preserves the legacy hashes and conversation ids.
         self.conversation_namespace = ""
@@ -1053,6 +1247,18 @@ class Manager:
         lang = "it" if existed else norm_lang(self.cfg.prompt_language)
         self.store.kv_set(key, lang)
         return lang
+
+    def receipt_detail(self, conv: str, existed: bool) -> bool:
+        """Ricevute estese per la conversazione (0.3.22), con la stessa regola della lingua: la scelta è fatta alla
+        prima richiesta e ricordata (kv). Una conversazione che ha già un archivio ma nessuna scelta registrata è
+        nata prima: conserva le ricevute con cui è stata mascherata, prefisso identico byte per byte."""
+        key = RECEIPTS_KEY + conv
+        v = self.store.kv_get(key)
+        if v in ("rich", "plain"):
+            return v == "rich"
+        rich = bool(self.cfg.rich_receipts) and not existed
+        self.store.kv_set(key, "rich" if rich else "plain")
+        return rich
 
     # ---------- stima ----------
     def piece_tokens(self, text: str) -> int:
@@ -1078,6 +1284,40 @@ class Manager:
     def tools_tokens(self, tools) -> int:
         return self.tc.count(json.dumps(tools, ensure_ascii=False)) if tools else 0
 
+    def tool_heads(self, conv: str, phys: list, tools: list | None, base=(), catalog=(),
+                   paging: bool = False) -> dict | None:
+        """Evento `tool_heads`: nomi e peso delle definizioni in testa, UNA riga per conversazione e per cambio
+        dell'elenco strumenti (toolheads.py). Di sola lettura: non tocca il prompt inviato al motore.
+
+        La testa è il primo pezzo del prompt reso (impalcatura del template + definizioni + sistema). Con il
+        tokenizer del pack il conto è esatto e coincide con quello di `estimate`; senza tokenizer è la stima col
+        ripiego caratteri/`chars_per_token`, e l'evento lo dichiara in `counting`.
+        """
+        fp = tools_fingerprint(tools)
+        if self._tool_heads_fp.get(conv) == fp:
+            return None
+        if len(self._tool_heads_fp) > 1024:
+            self._tool_heads_fp.clear()
+        self._tool_heads_fp[conv] = fp
+        try:
+            head, sys_text, tdefs = prompt_head(phys, tools, self.kw)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return None                       # testa non rappresentabile: niente evento, nessun rumore nel giornale
+        exact = self.tc.exact
+        if exact:
+            defs_n = [self.piece_tokens(def_text(t)) for t in tdefs]
+            sys_n = self.piece_tokens(sys_text) if sys_text else 0
+            head_n = self.piece_tokens(head)
+        else:
+            defs_n = [self.tc.count(json.dumps(t, ensure_ascii=False)) for t in tools or []]
+            sys_n = self.tc.count(sys_text) if sys_text else 0
+            head_n = self.tools_tokens(tools) + sys_n
+        rec = tool_heads_payload(fp, [tool_name(t) for t in tools or []], defs_n,
+                                 [self.tc.count(tool_desc(t)) for t in tools or []],
+                                 head_n, sys_n, exact, paging=paging,
+                                 base=[tool_name(t) for t in base or ()], catalog=list(catalog or ()))
+        return self.journal.log(TOOL_HEADS_EVENT, conv=conv, **rec)
+
     def estimate(self, msgs: list, tools) -> tuple[int, list[int]]:
         """-> (totale, token per messaggio). Con il tokenizer del pack: conteggio ESATTO del prompt che Strata
         tokenizza (render_pieces = template Jinja vero, verificato su 421 richieste di nibble2)."""
@@ -1092,7 +1332,9 @@ class Manager:
                         per[i] += n
                 total = fixed + sum(per)
                 if self.tc.prompt_template is not None:
-                    total = self.tc.raw(self.tc.prompt_template.render(msgs, tools, self.kw))
+                    # Il template del pack scrive un marcatore visivo per immagine: piece_tokens le assegna il
+                    # tetto cfg.image_tokens (il numero vero di token lo conosce solo il motore, a richiesta inviata).
+                    total = self.piece_tokens(self.tc.prompt_template.render(msgs, tools, self.kw))
                 return total, per
             except ValueError:
                 pass
@@ -1106,7 +1348,7 @@ class Manager:
         riconosciuto o l'opzione è spenta, l'inizio vero dell'uscita. Funzione pura: stesso pezzo -> stesso testo."""
         if self.cfg.typed_receipts:
             failed = outcome((info or {}).get("name") or "", orig) == "fallito"
-            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang)
+            kind, rec = typed_receipt(info, orig, failed, rid_args, self.rn, self.lang, self.rich)
             if rec:
                 return self.L(OUT_RECEIPT, OUT_RECEIPT_EN).format(origin=origin_text(info, self.lang), n=n, rid=rid,
                                                                   receipt=rec, rn=self.rn)
@@ -1170,8 +1412,14 @@ class Manager:
                 c0 = m.get("content")
                 name, path, rid = pend_notes.pop(m["tool_call_id"])
                 res = content_text(msgs[i].get("content"))
-                m = {**m, "content": call_note_text(name, path, rid, res, self.rn, self.lang) +
-                     (c0 if isinstance(c0, str) else content_text(c0))}
+                note = call_note_text(name, path, rid, res, self.rn, self.lang)
+                if isinstance(c0, str) or not n_images(c0):
+                    m = {**m, "content": note + (c0 if isinstance(c0, str) else content_text(c0))}
+                else:
+                    # La nota si antepone come parte di testo, le parti restano. Accorciare gli argomenti
+                    # di una chiamata non e' un motivo per togliere un'immagine promessa al motore (content_text
+                    # qui lascerebbe solo il suo segnaposto <immagine:hash>).
+                    m = {**m, "content": [{"type": "text", "text": note}] + list(c0)}
             tk = masks.get(hs[i] + THINK_SUFFIX)
             if tk and m.get("role") == "assistant" and isinstance(m.get("reasoning_content"), str):
                 # fix live 4/10: niente segnaposto nel ragionamento (il modello lo imitava al posto di ragionare);
@@ -1192,8 +1440,8 @@ class Manager:
             if strip and m.get("role") == "assistant":
                 m = dict(m)
                 c = content_text(m.get("content"))
-                if strip["strip_content"] and c.startswith(strip["strip_content"]):
-                    m["content"] = c[len(strip["strip_content"]):]
+                if strip["strip_content"] and c.startswith(strip["strip_content"]) and not n_images(m.get("content")):
+                    m["content"] = c[len(strip["strip_content"]):]   # con immagini dentro non si srotola: si paga il prefisso
                 r = m.get("reasoning_content")
                 if strip["strip_reasoning"] and isinstance(r, str) and r.startswith(strip["strip_reasoning"]):
                     m["reasoning_content"] = r[len(strip["strip_reasoning"]):]
@@ -1262,6 +1510,42 @@ class Manager:
         return "; ".join(out)
 
     # ---------- passo principale ----------
+    def promote_tools(self, tools, catalog: dict, phys: list, split: bool = False):
+        """Issue #90: con il modo di compatibilità opt-in, aggiunge all'array `tools` gli schemi completi degli
+        strumenti del catalogo già CARICATI nel prompt fisico corrente. Sempre ricalcolata da `tools` di base e dal
+        `phys` corrente: se un cambio di segmento o un pacchetto taglia il risultato del caricatore, la promozione
+        scompare da sola. Nessuno stato nuovo, nessuna mutazione del catalogo.
+
+        Con la separazione attiva (`split`) la promozione NON si applica alla lista resa: gli schemi vivono
+        nell'array di grammatica, e promuoverli anche nel testo rimetterebbe in testa al prompt proprio il blocco
+        che invalida il prefisso. I due flag accesi insieme non sono un cumulo: la separazione vince, e la cosa
+        è detta una volta nel giornale (`native_split_overrides_schemas`), non in silenzio.
+        """
+        if split:
+            if (self.cfg.tools_paging and self.cfg.tools_paging_native_schemas
+                    and not getattr(self, "_split_over_schemas_said", False)):
+                self._split_over_schemas_said = True
+                self.journal.log(
+                    "native_split_overrides_schemas",
+                    note="tools_paging_native_split is active: tools_paging_native_schemas stays off for the "
+                         "rendered catalog (loaded schemas live in the grammar array only)")
+            return tools
+        if not (self.cfg.tools_paging and self.cfg.tools_paging_native_schemas) or not catalog:
+            return tools
+        return promote_loaded_schemas(tools, catalog, self.pager.loaded_in(phys))
+
+    def native_split(self, upstream=None) -> bool:
+        """Issue #90: la separazione «catalogo reso / array di grammatica» è attiva per questo motore?
+        Configurazione opt-in PIU' gate qualificato (nativetools.Gate): nessun autodetect."""
+        return self._split_gate.active(upstream)
+
+    def grammar_tools(self, tools, catalog: dict, phys: list):
+        """Array `tools` del modo separazione: la lista RESA più gli schemi completi dei caricati. La lista
+        resa non viene toccata, quindi il prompt (e il prefisso cacheato) non cambia a ogni caricamento."""
+        if not catalog:
+            return tools
+        return promote_loaded_schemas(tools, catalog, self.pager.loaded_in(phys))
+
     def prepare(self, req: dict, upstream=None, hint: str | None = None) -> Prepared:
         cfg = self.cfg
         msgs = list(req.get("messages") or [])
@@ -1280,6 +1564,13 @@ class Manager:
         elif known < len(hs) - 1 and known >= 0 and self.store.has_successor(conv, known):
             # un messaggio in posizione known+1 era già stato visto, ma diverso: modifica/rigenerazione = ramo
             events.append(self.journal.log("branch", conv=conv, known=known, messages=len(msgs)))
+        # Persist first-use defaults before the chain makes this conversation discoverable.
+        # If archiving/counting/scanning fails, a retry must not mistake our own partial
+        # conversation for a pre-0.3.1 archive and inject legacy Italian instructions.
+        names = self.tool_names(conv, client_tools, legacy=existed)
+        self.rn, self.tn = names["recall"], names["tools"]
+        self.lang = self.prompt_lang(conv, existed)
+        self.rich = self.receipt_detail(conv, existed)
         self.store.add_chain(conv, hs)
         now = time.time()
         rows = [(rid_for(i, m), conv, i, m.get("role"), m.get("name") or m.get("tool_call_id"),
@@ -1290,22 +1581,32 @@ class Manager:
         rows += [(aid_for(i, m), conv, i, "assistant-tool-args", None, args_text(m), self.tc.count(args_text(m)), now)
                  for i, m in enumerate(msgs) if m.get("role") == "assistant" and m.get("tool_calls")]
         self.store.archive_many(rows)
+        # 0.3.24: la catena della richiesta IN CORSO (vedi chain_ok). Esclusa la domanda corrente, che il modello
+        # vede per intero: tutto il resto del prefisso resta richiamabile anche dopo l'ultimo messaggio dell'utente,
+        # perché è il turno agentico in corso che lo ha appena fatto mascherare.
+        cur_user = max((i for i, m in enumerate(msgs) if is_human_user(m)), default=None)
+        self.store.set_chain([r[0] for r in rows if not (r[2] == cur_user and r[3] == "user")])
         self.kw = template_kwargs(req)
         events.extend(self._scan_marks(conv, msgs, hs))
         events.extend(self._scan_fileops(conv, msgs))
 
-        names = self.tool_names(conv, client_tools, legacy=existed)
-        self.rn, self.tn = names["recall"], names["tools"]
-        self.lang = self.prompt_lang(conv, existed)
         tools = self._custom_desc(list(self.shorten_tools(client_tools) or []))
         catalog: dict = {}
+        base_tools: list = []
         if cfg.tools_paging:
             tools, catalog = self.pager.split(tools)
+            base_tools = list(tools)
         if cfg.inject_recall and not any((t.get("function") or {}).get("name") == self.rn for t in tools):
             from .recall2 import recall_tool
             tools.append(recall_tool(cfg, recall_tool_def(self.rn, self.lang), self.lang))
         if catalog:
             tools.append(self.pager.tools_tool(catalog, self.tn))
+        tools_base = list(tools)    # issue #90: la promozione si ricalcola SEMPRE da qui, mai in modo cumulativo
+        # issue #90, modo separazione: la lista RESA è il catalogo canonico (quel che il motore scrive davvero nel
+        # prompt), e non cresce mai coi caricamenti; gli schemi vanno nell'array di grammatica, calcolato in coda.
+        split = self.native_split(upstream)
+        if split:
+            tools_base = canonical_tools(tools_base) or []
 
         seg, start, notes_msg, _, had_segments = self._segment_for(conv, hs)
         if upstream is not None and hasattr(upstream, "ctx"):
@@ -1317,14 +1618,20 @@ class Manager:
                                            note="storia modificata prima del taglio: segmenti non applicabili"))
         pins_msg = self.store.segment_pins(conv, seg) if seg else None
         phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+        tools = self.promote_tools(tools_base, catalog, phys, split=split)
         est, per = self.estimate(phys, tools)
         virtual, _ = self.estimate(msgs, client_tools)
+        if cfg.journal_tool_heads:
+            ev = self.tool_heads(conv, phys, tools, base_tools, catalog, cfg.tools_paging)
+            if ev is not None:
+                events.append(ev)
 
         # ---- livello 1: masking a pacchetti ----
         if cfg.mask_enabled and est > cfg.mask_trigger:
             ev = self._mask_batch(conv, msgs, hs, phys, origin, per, est, seg or 0)
             if ev:
                 phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                tools = self.promote_tools(tools_base, catalog, phys, split=split)
                 est2, per = self.estimate(phys, tools)
                 # Δ MISURATO sulla stessa richiesta con/senza il pacchetto (GPT-ANSWER3 passo 1)
                 ev["tokens_saved_measured"] = est - est2
@@ -1352,6 +1659,7 @@ class Manager:
             ev = self._mask_current_tools(conv, msgs, hs, phys, origin, per, est, tools, resp, seg or 0)
             if ev:
                 phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                tools = self.promote_tools(tools_base, catalog, phys, split=split)
                 est2, per = self.estimate(phys, tools)
                 ev["tokens_saved_measured"] = est - est2
                 ev["est_after_measured"] = est2
@@ -1367,6 +1675,7 @@ class Manager:
             seg, start, notes_msg, _, _ = self._segment_for(conv, hs)
             pins_msg = self.store.segment_pins(conv, seg) if seg else None
             phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+            tools = self.promote_tools(tools_base, catalog, phys, split=split)
             est, per = self.estimate(phys, tools)
 
         # ---- richiamo automatico (spento di serie): pezzi nascosti pertinenti in coda, deciso una volta ----
@@ -1376,6 +1685,7 @@ class Manager:
                 events.append(ev)
                 if ev.get("injected"):
                     phys, origin = self.build(msgs, hs, start, notes_msg, pins_msg)
+                    tools = self.promote_tools(tools_base, catalog, phys, split=split)
                     est, per = self.estimate(phys, tools)
 
         # Recompute after masking, segmentation and auto-recall. Never raise a client's ceiling.
@@ -1423,7 +1733,8 @@ class Manager:
                         masked_saved=self.store.masks_saved(list(masks)), catalog=catalog,
                         invalidated=inv, recall_name=self.rn, tools_name=self.tn, lang=self.lang,
                         recall_aliases=self.call_aliases("recall", client_tools),
-                        tools_aliases=self.call_aliases("tools", client_tools))
+                        tools_aliases=self.call_aliases("tools", client_tools),
+                        grammar_tools=self.grammar_tools(tools, catalog, phys) if split else None)
 
     # ---------- nomi degli strumenti del proxy (0.2.0) ----------
     def tool_names(self, conv: str, client_tools, legacy: bool = False) -> dict:
@@ -1687,6 +1998,7 @@ class Manager:
             low = content.lower()
             p = min([low.find(t) for t in matched if low.find(t) >= 0], default=0)
             s = content[max(0, p - 300):p + 2400]
+            s = quote_control_frames(s)      # issue #61: la copia non deve sembrare una consegna nuova
             what = whatmap.get(role, role)
             b = "\n--- id=%s · %s %d (%s) · %d token%s%s\n" % (
                 rid, self.L("messaggio", "message"), idx + 1, what, tokens, self.L("", "s"),
@@ -1986,6 +2298,47 @@ class Manager:
                                 ids=[r[3] for r in rows][:50], pieces=pieces)
 
     # ---------- segmenti ----------
+    def handoff_text(self, msg: dict) -> tuple[str, str]:
+        """Text of the handoff notes from the engine's reply -> (notes, status): clean | recovered | fallback.
+
+        0.3.27: a model that answers the notes request with a tool call and no text (Qwen3.6 on Unsloth, twice in a
+        row) left the new segment with the empty fallback. Its reasoning and the call it attempted are what it was
+        about to do: they become the notes, marked as recovered, instead of being thrown away."""
+        content = msg.get("content") or ""
+        content = content if isinstance(content, str) else ""
+        think = ""
+        if "</think>" in content:                   # engines that leave the reasoning inside the content
+            think, content = content.rsplit("</think>", 1)
+            think = think.replace("<think>", "")
+        content = content.strip()
+        calls = msg.get("tool_calls") or []
+        if content and not calls:
+            return content, "clean"
+        reasoning = (msg.get("reasoning_content") or msg.get("reasoning") or think or "")
+        reasoning = reasoning.strip() if isinstance(reasoning, str) else ""
+        intents = []
+        for c in calls:
+            f = c.get("function") or {}
+            a = f.get("arguments")
+            a = a if isinstance(a, str) else json.dumps(a, ensure_ascii=False)
+            a = re.sub(r"\s+", " ", a or "").strip()
+            intents.append("- %s(%s)" % (f.get("name") or "?", a[:300] + ("\u2026" if len(a) > 300 else "")))
+        if not (content or reasoning or intents):
+            return "", "fallback"
+        cap = max(1000, int(self.cfg.notes_max_tokens) * 3)      # characters, about the notes' own token budget
+        parts = [self.L("[note ricostruite dal proxy: il modello non ha scritto le note in testo]",
+                        "[notes rebuilt by the proxy: the model did not write the notes as text]")]
+        if content:
+            parts.append(content)
+        if reasoning:
+            r = reasoning if len(reasoning) <= cap else "\u2026" + reasoning[-cap:]
+            parts.append(self.L("Ragionamento al momento del cambio di segmento:\n",
+                                "Reasoning at the segment switch:\n") + r)
+        if intents:
+            parts.append(self.L("Azione che stava per eseguire (non eseguita):\n",
+                                "Action it was about to take (not executed):\n") + "\n".join(intents))
+        return "\n\n".join(parts), "recovered"
+
     def choose_cut(self, msgs, origin, per, start):
         """Indice client c da cui parte la coda di B. Preferenza: prima di un messaggio user umano con coda
         <= tail_max; altrimenti confine di gruppo (assistant dopo tool/user: chiamate e risultati completi).
@@ -2053,9 +2406,11 @@ class Manager:
                                        window=cfg.window, cut_index=c, cut_kind=kind))
         # 1) note di passaggio in coda ad A (stesso system/tool/reasoning: il prefisso resta in cache)
         t0 = time.time()
-        notes, usage, finish, timings = "", {}, None, None
+        notes, usage, finish, timings, status = "", {}, None, None, "fallback"
         instr = {"role": "user", "content": self.L(NOTES_INSTRUCTION, NOTES_INSTRUCTION_EN).replace("{rn}", self.rn)}
         nbody = {**params, "tools": tools, "max_tokens": cfg.notes_max_tokens, "stream": False}
+        if str(getattr(cfg, "notes_tool_choice", "auto")) == "none":
+            nbody["tool_choice"] = "none"
         nt = str(getattr(cfg, "notes_thinking", "auto") or "auto")
         if nt == "off":
             ctk = params.get("chat_template_kwargs") if isinstance(params.get("chat_template_kwargs"), dict) else {}
@@ -2072,13 +2427,16 @@ class Manager:
                                            of=len(phys)))
         try:
             r = labeled_chat(upstream, {**nbody, "messages": src + [instr]}, "notes")
-            notes = (r["choices"][0]["message"].get("content") or "").strip()
+            notes, status = self.handoff_text(r["choices"][0].get("message") or {})
             usage = r.get("usage") or {}
             finish, timings = r["choices"][0].get("finish_reason"), r.get("timings")
         except Exception as e:  # noqa: BLE001
             events.append(self.journal.log("notes_error", conv=conv, error=str(e)[:300]))
+        if not notes:
+            status = "fallback"
         events.append(self.journal.log("notes", conv=conv, seg=seg + 1, ms=round((time.time() - t0) * 1000),
                                        tokens=self.tc.count(notes), usage=usage, finish=finish, timings=timings,
+                                       handoff_status=status,
                                        cached=(usage.get("prompt_tokens_details") or {}).get("cached_tokens")))
         if not notes:
             notes = self.L("(note non disponibili: usa %s per ricostruire i dettagli)",
@@ -2104,10 +2462,13 @@ class Manager:
                 events.append(self.journal.log("save", conv=conv, file=fn, ms=round((time.time() - t0) * 1000),
                                                result=r))
                 if cfg.data_dir:
-                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso)
+                    # il prompt fisico di A serve al consulto (A + domanda deve ricostruire lo stesso prefisso);
+                    # le immagini ci vanno come segnaposto con hash, non come base64. Il payload si costruisce
+                    # prima di aprire il file: un errore non deve mai lasciarli troncato a zero byte.
+                    side = {"conv": conv, "seg": seg, "file": fn, "messages": redact_images(phys),
+                            "tools": tools, "params": params}
                     with open(os.path.join(cfg.data_dir, fn + ".json"), "w", encoding="utf-8") as f:
-                        json.dump({"conv": conv, "seg": seg, "file": fn, "messages": phys, "tools": tools,
-                                   "params": params}, f, ensure_ascii=False)
+                        json.dump(side, f, ensure_ascii=False)
             except Exception as e:  # noqa: BLE001
                 events.append(self.journal.log("save_error", conv=conv, file=fn, error=str(e)[:300]))
         # 3) B = system + tool + [note + indice] + coda
@@ -2127,8 +2488,8 @@ class Manager:
                                                "## Archive index (most recent first)",
                                                "The conversation continues below.")
         if cfg.keep_first_user and first_user is not None and msgs.index(first_user) < c:
-            parts += ["", h_first, self._image_note(content_text(first_user.get("content")))]
-        parts += ["", h_notes, notes]
+            parts += ["", h_first, quote_control_frames(self._image_note(content_text(first_user.get("content"))))]
+        parts += ["", h_notes, quote_control_frames(notes)]
         idx = self.archive_index(msgs, c, conv)
         if idx:
             parts += ["", h_index, idx]
@@ -2153,7 +2514,7 @@ class Manager:
             return None, None
         lines, used, dropped = [], 0, 0
         for pid, idx, text, _, _ in reversed(rows):
-            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, text)
+            line = self.L("- (messaggio %d) %s", "- (message %d) %s") % (idx + 1, quote_control_frames(text))
             t = self.tc.count(line)
             if used + t > self.cfg.pins_max_tokens:
                 dropped += 1
@@ -2210,7 +2571,7 @@ class Manager:
         if not rid:
             return None
         r = self.store.get(rid, conv)
-        if r is None or (max_idx is not None and r[2] >= max_idx):
+        if r is None or (max_idx is not None and r[2] >= max_idx and not self.store.in_chain(rid)):
             return self.L("recall: id %s non trovato", "recall: id %s not found") % rid
         text = r[5] or ""
         try:
@@ -2316,6 +2677,10 @@ class Manager:
             except ValueError:
                 args = {"query": args}
         args = args if isinstance(args, dict) else {"query": str(args)}
+        return quote_control_frames(self._recall(conv, args, max_idx, meta, max_tokens))
+
+    def _recall(self, conv: str, args: dict, max_idx, meta, max_tokens) -> str:
+        """Scelta del motore di recall (il risultato passa da quote_control_frames in `recall`)."""
         if self.cfg.recall_struct or self.cfg.recall_multi or self.cfg.recall_flex:
             if getattr(self, "_recall2", None) is None:
                 from .recall2 import Recall2
@@ -2354,7 +2719,8 @@ class Manager:
             # l'uscita di strumento più recente, prima della domanda, in cui la domanda sceglie dei blocchi
             with self.store.lock:
                 cand = self.store.db.execute(
-                    "SELECT rid FROM archive WHERE conv=? AND role='tool' AND idx < ? ORDER BY idx DESC LIMIT 8",
+                    "SELECT rid FROM archive WHERE conv=? AND role='tool' AND " + chain_ok()
+                    + " ORDER BY idx DESC LIMIT 8",
                     (conv, 10 ** 9 if max_idx is None else max_idx)).fetchall()
             for (c,) in cand:
                 rc = self.store.get(c, conv)
@@ -2577,6 +2943,13 @@ class Manager:
         params = {k: v for k, v in req.items() if k not in ("messages", "tools", "stream", "stream_options",
                                                              "max_tokens", "max_completion_tokens", "n",
                                                              "tool_choice")}
+        if volatile_pictures(phys):
+            # Un'immagine da fuori (url, percorso) può cambiare contenuto sotto lo stesso nome, e il prefisso fisico
+            # la hasherebbe uguale: il KV ripristinato sarebbe l'embedding di un'altra immagine. Meglio rifare il
+            # prompt intero che riattivare uno stato di cui non si può garantire l'identità (i data: URI, che
+            # portano i byte con sé, continuano a essere ancorati).
+            events.append(self.journal.log("anchor_skip", conv=conv, seg=seg, reason="volatile_picture"))
+            return events
         old = self.store.anchor(conv, seg)
         t0 = time.time()
         if old:

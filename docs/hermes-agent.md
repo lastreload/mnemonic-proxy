@@ -10,6 +10,7 @@ Use a new profile: do not experiment in your normal assistant's profile.
 These commands apply only to `mnemonic-test`; they do not change the sticky
 active profile or copy any existing credentials, memories, or skills.
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes profile create mnemonic-test --no-alias --no-skills
 hermes -p mnemonic-test config set model.provider custom
@@ -31,20 +32,22 @@ Start the proxy as in the README, with a separate data directory if another
 proxy is already running. For exact counts, install the optional tokenizer
 support and pass the model's actual tokenizer file:
 
+<!-- readme-test: real-engine -->
 ```sh
-pip install 'mnemonic-proxy[exact]==0.3.17'
+pip install 'mnemonic-proxy[exact]'
 mnemonic-proxy --upstream http://127.0.0.1:8095 \
   --host 127.0.0.1 --port 8096 --data ./mnemonic-hermes-data \
   --tokenizer /path/to/model/tokenizer.json
 ```
 
-The startup log should contain `tokens=esatto` rather than an estimated counter.
+The startup log should contain `tokens=exact:` rather than an estimated counter.
 The default proxy window is 131072; set `window` and appropriately scaled
 thresholds in a JSON config if your engine has a smaller window. The proxy's
 window must never be larger than the engine's actual context capacity.
 
 Then run Hermes:
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes -p mnemonic-test chat
 ```
@@ -75,6 +78,15 @@ the engine-facing request and executes those calls internally. Do not register
 a second Hermes tool with that name. A successful proxy recall should not show
 up as an unknown tool in Hermes; a final response containing literal
 `<tool_call>` markup is not a successful final answer.
+
+If you turn the tool pager on (`"tools_paging": true`), check that `tools_core`
+contains Hermes' base names. Since 0.3.24 the defaults do
+(`read_file`, `write_file`, `patch`, `search_files`, `terminal`), so those five
+definitions stay in the prompt head and the rest of Hermes' toolset is loaded on
+demand through the proxy's own `tools` call. With the 0.3.23 defaults
+(`read bash edit write grep find ls`) no Hermes name matched, the whole toolset
+went to the catalog, and every definition the model needed was re-appended at
+the end of the history on each load.
 
 Inspect `GET /v1/strata/journal` or the proxy's `journal.jsonl`. For each
 `request`, compare `reused` with `prompt_tokens`; check masking and recall
@@ -117,6 +129,7 @@ through an SSH tunnel. This is not a claim about every Hermes or model version.
 
 For the reduced-window test the proxy config was:
 
+<!-- readme-test: illustrative; config: partial -->
 ```json
 {
   "window": 32768,
@@ -175,6 +188,7 @@ your normal profile.
 
 Stop your test proxy and SSH tunnel, and remove only the disposable profile:
 
+<!-- readme-test: real-engine -->
 ```sh
 hermes profile delete mnemonic-test
 ```

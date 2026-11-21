@@ -34,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import urllib.parse
 from typing import Any
 
 from .savedstate import FEATURES
@@ -110,6 +111,15 @@ class Engine:
     router_state: Any = dataclasses.field(default=None, repr=False, compare=False)   # router.Router
     flavor: str | None = None             # 0.3.8: generic engine that tells its context: ollama | lmstudio
     ctx_state: Any = dataclasses.field(default=None, repr=False, compare=False)      # enginectx.GenericWindow
+    # 0.3.23 automatic configuration (autoconfig.py), all from endpoints the proxy already calls:
+    version: str | None = None            # Strata /v1/status "engine", llama-server /props "build_info"
+    parallel: int = 0                     # requests served at once (> 1: the engine refuses save/restore)
+    upstream: str = ""                    # the --upstream URL, to tell a local engine from a remote one
+    machine: dict = dataclasses.field(default_factory=dict, repr=False, compare=False)  # Strata: machine/vram
+    # 0.3.24: where the data folder comes from (autoconfig.origin): fresh | auto | earlier, with its reason.
+    # Only an "earlier" folder keeps the automatic choices unapplied, as an upgrade must.
+    data_origin: str = ""
+    data_origin_why: str = ""
 
     # il contatore richieste di llama-server (id_task) cresce di più di 1 per richiesta: va riletto dopo
     @property
@@ -124,6 +134,8 @@ class Engine:
             d["router"] = self.router_state.summary() if self.router_state is not None else True
         if self.flavor:            # only Ollama / LM Studio (0.3.8)
             d["flavor"] = self.flavor
+        if self.version:           # 0.3.23: only when the engine reports it
+            d["version"] = self.version
         return d
 
 
@@ -163,6 +175,15 @@ def _slots_enabled(up, slot_id: int) -> bool | None:
 
 def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
     """Riconosce il motore dietro `up` (Upstream). Con `forced` diverso da auto prova solo quel tipo, ma legge
+    comunque n_ctx/salvataggi se gli endpoint rispondono. 0.3.23: annota anche l'URL del motore (locale o
+    remoto), la sua versione e quante richieste serve in parallelo, per la configurazione automatica."""
+    e = _detect(up, forced, slot_id)
+    e.upstream = str(getattr(up, "base", "") or "")
+    return e
+
+
+def _detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
+    """Riconosce il motore dietro `up` (Upstream). Con `forced` diverso da auto prova solo quel tipo, ma legge
     comunque n_ctx/salvataggi se gli endpoint rispondono."""
     kind = norm_kind(forced)
     s = _get_json(up, "/v1/status") if kind in ("auto", "strata") else None
@@ -174,7 +195,7 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
         # strata-poly, whose SAVE/RESTORE commands are unsupported.
         e = Engine("strata", slot_save=True, slot_id=slot_id, status_kind="strata", detected=kind == "auto")
         if s is None:
-            e.notes.append("/v1/status non risponde (motore spento o non raggiungibile)")
+            e.notes.append("/v1/status does not answer (engine down or unreachable)")
         else:
             e.model = s.get("model") or s.get("active_model") or None
             # Strata espone la finestra in context (native = max_positions = --max-context): la finestra
@@ -182,6 +203,19 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
             ctx = s.get("context")
             if isinstance(ctx, dict):
                 e.n_ctx = int(ctx.get("native") or ctx.get("max_positions") or 0) or None
+            # 0.3.23: la versione del motore e la concorrenza sono già in /v1/status (serve/server.py di Strata:
+            # "engine" = info["version"]; "concurrency" = batch slots). Con più di uno slot Strata rifiuta
+            # save/restore con 501, quindi la configurazione automatica non accende lo stato salvato.
+            ver = s.get("engine")
+            if isinstance(ver, (str, int, float)) and str(ver).strip():
+                e.version = str(ver).strip()
+            conc = s.get("concurrency")
+            if isinstance(conc, dict):
+                e.parallel = max(int(conc.get("serving") or 0), int(conc.get("requested") or 0))
+            # VRAM/RAM che il motore riferisce già: nessuno strumento esterno, nessuna richiesta in più
+            mach = s.get("machine")
+            if isinstance(mach, dict):
+                e.machine = mach
         return e
     models = _get_json(up, "/v1/models") if kind in ("auto", "ds4") else None
     ds4_models = [m for m in (models or {}).get("data") or [] if isinstance(m, dict)
@@ -193,7 +227,7 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
             e.model = m0.get("name") or m0.get("id")
             e.n_ctx = int(m0.get("context_length") or 0) or None
         else:
-            e.notes.append("/v1/models non risponde come ds4-server (motore spento o non raggiungibile)")
+            e.notes.append("/v1/models does not answer like ds4-server (engine down or unreachable)")
         return e
     props = _get_json(up, "/props") if kind in ("auto", "llama.cpp") else None
     if kind in ("auto", "llama.cpp") and isinstance(props, dict):
@@ -205,37 +239,49 @@ def detect(up, forced: str | None = "auto", slot_id: int = 0) -> Engine:
                    detected=kind == "auto")
         props = props or {}
         e.model = os.path.basename(str(props.get("model_path") or "")) or None
+        # 0.3.23: llama-server tells its build in /props ("build_info"), e.g. "6123 (abc1234)"
+        bi = props.get("build_info")
+        if isinstance(bi, str) and bi.strip():
+            e.version = bi.strip()
+        total = props.get("total_slots")
+        if isinstance(total, int) and total > 0:
+            e.parallel = total
         slots = _get_json(up, "/slots")
         if isinstance(slots, list):
             mine = next((x for x in slots if x.get("id") == slot_id), None)
             if mine is None:
-                e.notes.append("slot %d assente (slot: %s)" % (slot_id, [x.get("id") for x in slots]))
+                e.notes.append("slot %d is missing (slots: %s)" % (slot_id, [x.get("id") for x in slots]))
             else:
                 e.n_ctx = int(mine.get("n_ctx") or 0) or None
             if len(slots) > 1:
-                e.notes.append("%d slot (--parallel): il proxy fissa id_slot=%d nelle richieste" % (len(slots),
-                                                                                                   slot_id))
+                e.notes.append("%d slots (--parallel): the proxy pins id_slot=%d on every request"
+                               % (len(slots), slot_id))
         else:
             e.status_kind = None
-            e.notes.append("/slots non disponibile (server con --no-slots): niente stato del motore")
+            e.notes.append("/slots not available (server started with --no-slots): no engine state")
         if e.n_ctx is None:
             dgs = props.get("default_generation_settings") or {}
             e.n_ctx = int(dgs.get("n_ctx") or 0) or None
         en = _slots_enabled(up, slot_id)
         e.slot_save = bool(en) and e.status_kind is not None
         if en is False:
-            e.notes.append("salvataggi spenti: avviare llama-server con --slot-save-path DIR")
+            e.notes.append("saves are off: start llama-server with --slot-save-path DIR")
         return e
     e = Engine("openai", slot_save=False, slot_id=slot_id, status_kind=None, detected=kind == "auto")
     # 0.3.8: Ollama / LM Studio expose the context they run with (enginectx.py); other generic engines: unchanged
-    from .enginectx import NAME, detect_flavor, read_context
+    from .enginectx import NAME, detect_flavor, loaded_contexts, pick
     fl = detect_flavor(up)
     if fl:
         e.flavor = fl
-        e.model, n = read_context(up, fl)
+        ctxs = loaded_contexts(up, fl)
+        e.model, n = pick(ctxs or {}, None)
         e.n_ctx = n or None
-        if not n:
+        if ctxs is None:
+            e.notes.append("%s: runtime model information unavailable; loaded state and context unknown" % NAME[fl])
+        elif not ctxs:
             e.notes.append("%s: no model loaded, its context is read before the first request" % NAME[fl])
+        elif not n:
+            e.notes.append("%s: model loaded, context not reported" % NAME[fl])
     return e
 
 
@@ -284,6 +330,26 @@ def budget_adjustments(cfg) -> list[tuple[str, int, int]]:
             if int(getattr(cfg, field) or 0) > cap]
 
 
+def _scale(cfg, explicit, ratio: float) -> dict:
+    """Scale the window-sized thresholds the user did not write by `ratio`. -> {field: new value}.
+
+    Lifted out of `apply` in 0.3.24 so the two callers — a window read from the engine and a window written
+    in the config for an engine that reports none — compute it in exactly one place.
+    """
+    scaled = {}
+    for f in SCALED:
+        if f in explicit or not hasattr(cfg, f):
+            continue
+        v = getattr(cfg, f)
+        if isinstance(v, int) and v > 0:
+            nv = max(64, SCALED_MIN.get(f, 0) if ratio < 1 else 0, int(v * ratio))
+            nv = min(nv, v) if ratio < 1 else nv
+            if nv != v:
+                setattr(cfg, f, nv)
+                scaled[f] = nv
+    return scaled
+
+
 def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=print) -> list[str]:
     """Adatta la configurazione al motore: spegne le funzioni senza supporto, finestra da n_ctx. -> avvisi."""
     explicit = set(explicit or ())
@@ -301,6 +367,12 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         cfg.mask_tool_args = False
         warn.append("engine ds4 replays sampled tool calls by id: disabled mask_tool_args (set "
                     "ds4_exact_tool_replay=false only if ds4-server runs with --disable-exact-dsml-tool-replay)")
+    # 0.3.27: no tool_choice on the handoff notes request by default, on any engine. With "none" both Strata
+    # (serve/server.py) and llama-server (measured through Unsloth: an 11,717-token prompt became 11,462 and was read
+    # again, 13.2 s instead of 1.5 s) drop the tools from the template, so the whole segment would be read again
+    # before the notes. A model that still answers with a call is handled by the recovery in Manager.handoff_text.
+    if str(getattr(cfg, "notes_tool_choice", "auto")) == "auto":
+        cfg.notes_tool_choice = "keep"
     if engine.kind == "strata" and engine.n_ctx and cfg.window > engine.n_ctx and "window" in explicit:
         warn.append("config window %d exceeds engine n_ctx %d: using the engine window" % (cfg.window, engine.n_ctx))
         explicit.discard("window")
@@ -310,20 +382,26 @@ def apply(cfg, engine: Engine, journal=None, explicit: set | None = None, log=pr
         ratio = engine.n_ctx / float(cfg.window or BASE_WINDOW)
         old = cfg.window
         cfg.window = engine.n_ctx
-        scaled = {}
-        for f in SCALED:
-            if f in explicit or not hasattr(cfg, f):
-                continue
-            v = getattr(cfg, f)
-            if isinstance(v, int) and v > 0:
-                nv = max(64, SCALED_MIN.get(f, 0) if ratio < 1 else 0, int(v * ratio))
-                nv = min(nv, v) if ratio < 1 else nv
-                if nv != v:
-                    setattr(cfg, f, nv)
-                    scaled[f] = nv
+        scaled = _scale(cfg, explicit, ratio)
         warn.append("window from engine n_ctx: %d (was %d); thresholds scaled x%.3f" % (cfg.window, old, ratio))
         if journal is not None:
             journal.log("engine_window", window=cfg.window, was=old, scaled=scaled)
+    elif "window" in explicit and 0 < int(cfg.window or 0) < BASE_WINDOW:
+        # 0.3.24: a plain OpenAI-compatible engine reports no context, so `window` has to be written — and
+        # until now the %d-sized defaults stayed behind it, so a 32K setup had to repeat every single
+        # threshold by hand (examples/config.openai-32k.json, whose values ARE this scaling). Scale them
+        # here exactly as the engine-n_ctx branch above, so `{"window": 32768}` is a complete 32K config.
+        # 0.3.26: also when the engine does report an n_ctx bigger than the written window (Strata 0.2.13 with
+        # 131072 and {"window": 32768}): the 131K thresholds stayed behind it (mask_trigger 80000 above the
+        # window, reserve 8192) and every request switched segment.
+        ratio = int(cfg.window) / float(BASE_WINDOW)
+        scaled = _scale(cfg, explicit, ratio)
+        if scaled:
+            warn.append("window %d written in the config (%s); thresholds scaled x%.3f from the %d defaults"
+                        % (cfg.window, "engine n_ctx %d" % engine.n_ctx if engine.n_ctx else "the engine reports none",
+                           ratio, BASE_WINDOW))
+            if journal is not None:
+                journal.log("config_window", window=cfg.window, scaled=scaled)
     # una risposta minima che da sola riempie (quasi) la finestra fa scattare un cambio di segmento a ogni richiesta
     for field, was, value in budget_adjustments(cfg):
         setattr(cfg, field, value)
@@ -363,15 +441,43 @@ def generic_slack(cfg, engine: Engine, explicit=(), exact: bool = False) -> floa
     return GENERIC_SLACK
 
 
-def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engine:
+def setup(cfg, up, journal=None, explicit=None, counter=None, log=print, decisions=None,
+          machine=None, data_dir: str = "", origin=None, mark: bool = False) -> Engine:
     """All'avvio del server: rileva (o forza) il motore, lo collega all'Upstream, adatta la configurazione e, se
-    chiesto e possibile, usa /tokenize del motore per contare i token."""
+    chiesto e possibile, usa /tokenize del motore per contare i token.
+
+    0.3.23: subito dopo `apply` sceglie i valori che dipendono dal motore e dalla macchina (autoconfig.py).
+    `decisions`, se è una lista, raccoglie le scelte fatte (il banner d'avvio le stampa); `machine` evita di
+    rileggere RAM/VRAM quando chi chiama le ha già lette.
+
+    0.3.24: `origin` è la provenienza della cartella dati (`autoconfig.origin`), letta da chi chiama **prima**
+    di creare la cartella o di scriverci; se manca viene letta qui. Solo una cartella "precedente" protegge le
+    scelte come un aggiornamento; `mark` (solo il server) registra nella cartella appena creata che è nata con
+    la configurazione automatica, così le scelte non cambiano al riavvio successivo."""
     eng = detect(up, getattr(cfg, "engine", "auto"), int(getattr(cfg, "slot_id", 0) or 0))
     if hasattr(up, "saved_state"):
         up.saved_state.bind(journal)  # breaker warnings have their own stderr sink
     if hasattr(up, "set_engine"):
         up.set_engine(eng, getattr(cfg, "slot_dir", "") or "")
     apply(cfg, eng, journal, explicit, log)
+    from . import autoconfig
+    mach = autoconfig.Machine.read(eng) if machine is None else machine
+    where, why = autoconfig.origin(data_dir) if origin is None else origin
+    eng.data_origin, eng.data_origin_why = where, why
+    chosen = autoconfig.decide(cfg, eng, explicit or (), mach,
+                               exact=bool(counter is not None and counter.exact),
+                               existing=(where == autoconfig.ORIGIN_EARLIER))
+    # a folder recognised as new, or one 0.3.23 created (recognised from its journal, no mark yet): record it,
+    # so from now on the provenance never depends on the journal
+    if mark and (where == autoconfig.ORIGIN_FRESH or (where == autoconfig.ORIGIN_AUTO
+                                                       and not os.path.exists(autoconfig.mark_path(data_dir)))):
+        if autoconfig.write_mark(data_dir, cfg, chosen):
+            eng.data_origin = autoconfig.ORIGIN_AUTO
+    if decisions is not None:
+        decisions.extend(chosen)
+    if journal is not None and chosen:
+        journal.log("auto_config", machine=mach.summary(), data_folder=where,
+                    decisions=[d.summary() for d in chosen if d.changed])
     if eng.kind == "openai":
         # 0.3.8: generic engines (Ollama, LM Studio, anything OpenAI-compatible): estimate slack and truncation
         # watch; for Ollama / LM Studio also the real context before every request
@@ -396,7 +502,7 @@ def setup(cfg, up, journal=None, explicit=None, counter=None, log=print) -> Engi
         up.router = eng.router_state
     if counter is not None and getattr(cfg, "engine_tokenize", False) and eng.tokenize and not counter.exact:
         counter.tk = RemoteTokenizer(up)
-        counter.kind = "esatto:/tokenize"
+        counter.kind = "exact:/tokenize"
     return eng
 
 
@@ -431,3 +537,78 @@ def slot_error_status(engine: Engine | None, action: str, status: int, body: byt
     if slot_dir and filename and not os.path.exists(os.path.join(slot_dir, filename)):
         return 404
     return status
+
+
+# --- saved state is optional: the session folder, and what the user is told about it ------------------
+# A user who followed the README thought `--slot-save-path` and a hand-made session folder were part of
+# the setup (r/LocalLLM). They are not: the proxy creates the folder when it can, and says so.
+
+LOCAL_HOSTS = ("", "127.0.0.1", "localhost", "::1", "[::1]", "0.0.0.0", "[::]", "::")
+
+# the saved-state options that really produce a save; `autorestore` alone is inert, so it does not
+# count as "saved state is on" (the same list `check` reports as "configured")
+SAVE_PRODUCING = ("slot_save", "mask_anchor", "autosave", "seal_experimental", "kv_archive")
+
+# what keeps working without saved state, and the single thing that does not
+BASE_MODE = ("masking, the verbatim archive, `recall` and segments with handoff notes keep working; "
+             "only the fast resume of a long session is lost")
+
+# how to turn saved state on later, per engine: the engine flag plus the config fields
+SAVED_STATE_LATER = {
+    "strata": "optional, later: restart Strata with --slot-save-path DIR (Strata >= 0.1.40) and add "
+              "\"slot_dir\": \"DIR\" to the config; the proxy then turns slot_save, mask_anchor and autosave "
+              "on by itself (see `check --explain-config`)",
+    "llama.cpp": "optional, later: restart llama-server with --slot-save-path DIR and add \"slot_dir\": \"DIR\" "
+                 "to the config; the proxy then turns slot_save, mask_anchor and autosave on by itself "
+                 "(see `check --explain-config`)",
+}
+SAVED_STATE_LATER_DEFAULT = ("optional, later: an engine that can write its KV state to disk "
+                             "(llama-server or Strata >= 0.1.40 with --slot-save-path DIR), then "
+                             "\"slot_dir\": \"DIR\" in the config and the proxy turns saved state on by itself")
+
+
+def saved_state_later(kind: str | None) -> str:
+    """One line telling how to enable saved state after the fact, for `kind`."""
+    return SAVED_STATE_LATER.get(kind or "", SAVED_STATE_LATER_DEFAULT)
+
+
+def upstream_is_local(url: str) -> bool:
+    """True when `url` points at this host, so a path in the config is a path the proxy can see and create.
+    An unparsable or hostless URL counts as local (the proxy is started next to its engine by default)."""
+    try:
+        host = (urllib.parse.urlsplit(url or "").hostname or "")
+    except ValueError:
+        return False
+    return host.lower() in LOCAL_HOSTS
+
+
+def mkdir_hint(path: str) -> str:
+    if os.name == "nt":
+        return "create it by hand: mkdir \"%s\"" % path
+    return "create it by hand: mkdir -p %s" % path
+
+
+def ensure_slot_dir(slot_dir: str, upstream: str = "") -> tuple[str, str]:
+    """Create the engine's session folder if it is missing, so the user does not have to.
+
+    Only when the engine runs on this host: with a remote engine the local path is not the engine's
+    `--slot-save-path`, and creating an empty folder would hide that mismatch instead of reporting it.
+
+    -> (outcome, detail):
+         ""        nothing to do (no slot_dir configured)
+         "exists"  it was already there
+         "created" the proxy created it (with its parents)
+         "remote"  not created: the engine is on another host
+         "failed"  it could not be created; detail = the OS error
+    """
+    if not slot_dir:
+        return "", ""
+    if os.path.isdir(slot_dir):
+        return "exists", ""
+    if not upstream_is_local(upstream):
+        return "remote", ""
+    try:
+        os.makedirs(slot_dir, exist_ok=True)
+    except OSError as e:
+        return "failed", str(e)
+    return "created", ""

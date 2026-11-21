@@ -1,9 +1,13 @@
 """Level 3 of the README tests: the documentation must be exhaustive.
 
 Every subcommand, every command-line option and every `Config` field is read from the code.
-Anything that neither appears in README.md nor is listed in `tools/readme_internal.txt`
+Anything that appears in none of the documentation pages (`README.md` plus `docs/*.md`, as
+listed by `tools/readme_blocks.doc_files()`) and is not listed in `tools/readme_internal.txt`
 (with a reason) fails this test: a new public option cannot be added without documenting it
-or declaring it internal.
+somewhere the reader can find, or declaring it internal.
+
+Since 0.3.25 the reference tables live in `docs/configuration.md` instead of the README, so
+the search runs over the whole set of pages rather than over the landing page alone.
 
 Standard library only, CPU, a fraction of a second.
 """
@@ -29,12 +33,26 @@ def _tool(name):
     return mod
 
 
+blocks_mod = _tool("readme_blocks")
 cli = _tool("readme_cli")
 
 
 def readme_text():
-    with open(README, encoding="utf-8") as f:
-        return f.read()
+    """All the documentation pages as one text: a name is documented if any page names it."""
+    out = []
+    for path in blocks_mod.doc_files(REPO):
+        with open(path, encoding="utf-8") as f:
+            out.append(f.read())
+    return "\n".join(out)
+
+
+def per_page_text():
+    """{"README.md": text, "docs/install.md": text, …}, to say where a name was found."""
+    out = {}
+    for path in blocks_mod.doc_files(REPO):
+        with open(path, encoding="utf-8") as f:
+            out[blocks_mod.rel(path, REPO)] = f.read()
+    return out
 
 
 def internal_entries():
@@ -51,7 +69,7 @@ def internal_entries():
 
 
 def mentioned(text, name):
-    """Is `name` named in the README, as a whole word?"""
+    """Is `name` named in the documentation, as a whole word?"""
     return re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w-])", text) is not None
 
 
@@ -66,7 +84,7 @@ class CoverageTests(unittest.TestCase):
         pass
 
     def assertDocumented(self, entries):
-        """entries: list of (key, name). Each must be in the README or declared internal."""
+        """entries: list of (key, name). Each must be in a documentation page or internal."""
         undocumented = []
         for key, name in entries:
             if key in self.internal:
@@ -75,8 +93,8 @@ class CoverageTests(unittest.TestCase):
             if not mentioned(self.text, name):
                 undocumented.append(key)
         self.assertEqual([], sorted(undocumented),
-                         "not in README.md and not in tools/readme_internal.txt:\n  "
-                         + "\n  ".join(sorted(undocumented)))
+                         "in no documentation page (README.md, docs/*.md) and not in "
+                         "tools/readme_internal.txt:\n  " + "\n  ".join(sorted(undocumented)))
 
     # ------------------------------------------------------------- subcommands
 
@@ -117,9 +135,23 @@ class CoverageTests(unittest.TestCase):
         self.assertDocumented([("config:" + f, f) for f in fields])
 
     def test_a_missing_field_would_be_caught(self):
-        """The check must be able to fail: a name that is not in the README must not pass."""
+        """The check must be able to fail: a name that is not in the documentation must not pass."""
         self.assertFalse(mentioned(self.text, "no_such_config_field"))
         self.assertTrue(mentioned(self.text, "mask_trigger"))
+
+    def test_the_search_really_covers_the_docs_pages(self):
+        """After the split most reference names live in `docs/`, not in README.md.
+
+        If this test ever read README.md alone it would pass trivially by exempting
+        everything: assert the opposite, that the pages carry the weight.
+        """
+        pages = per_page_text()
+        self.assertIn("docs/configuration.md", pages)
+        only_in_docs = [f for f in self.config_fields()
+                        if not mentioned(pages["README.md"], f) and mentioned(self.text, f)]
+        self.assertGreater(len(only_in_docs), 30,
+                           "the configuration reference should be in docs/, not in the landing page")
+        self.assertTrue(mentioned(pages["docs/configuration.md"], "mask_trigger"))
 
     def test_word_boundaries_are_respected(self):
         """`auto_recall` must not be considered documented by `auto_recall_hint` alone."""

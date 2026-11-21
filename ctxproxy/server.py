@@ -14,6 +14,7 @@ Disconnessione del client (Esc in pi): il proxy chiude lo stream verso Strata, c
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 import os
@@ -27,8 +28,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import answerfix, compat
 from .core import (LEGACY_RECALL_NAME, RECALL_NAME, Config, Journal, Manager, Store, TokenCounter, content_text,
                    is_human_user)
+from .nativetools import GRAMMAR_KEY
 from .paging import guard_msg, is_guarded, receipt_contaminated
-from .render import template_kwargs
+from .render import count_images, redact_images, redact_text, template_kwargs
 from .savedstate import select_model
 from .upstream import Upstream, UpstreamError
 from .window import (ALL_BANDS, CALL_ALLOWANCE, FINAL_NOTE_EN, FINAL_NOTE_IT, LIMIT_NOTE_EN, LIMIT_NOTE_IT,
@@ -82,6 +84,7 @@ class Proxy:
         self.lock = threading.Lock()
         self.autosaver = None
         self.engine = None          # engines.Engine | None (impostato da main; None = Strata)
+        self._split_skip_said = False   # issue #90: avviso «il cliente manda già il suo catalogo», una volta
         # 0.3.3: window guard on the innermost Upstream (wrappers - Tracker, ArchivingUpstream - delegate to it)
         self.wguard = WindowGuard(cfg, self.mgr, journal)
         base = upstream
@@ -206,7 +209,10 @@ class Proxy:
         """mode off: plain pass-through (one round, no prompt management)."""
         t0 = time.time()
         try:
-            r = self._round(req, emit, None) if emit else self.up.chat(req)
+            # 0.3.32: `off: True` dice al lettore di stream che questa è la modalità di passaggio diretto:
+            # nessuna chiamata trattenuta, nessuna intercettata. Il non-stream era già un passaggio diretto.
+            r = self._round(req, emit, {"sent_role": False, "client_calls": 0, "final": False, "off": True}) \
+                if emit else self.up.chat(req)
         except UpstreamError as e:
             return e.status, _err_body(e), {}
         self._log_request("off", None, r, t0, 0, 0)
@@ -279,6 +285,11 @@ class Proxy:
             if guard_on:
                 final, tools_r = self._plan_round(p, phys0, loop, body, rnd, floor, lu_full, st)
                 phys = phys0 + clean(loop)
+            # issue #90: schemi dei soli strumenti già caricati nel prompt fisico di QUESTO giro
+            tools_r = self.mgr.promote_tools(tools_r, p.catalog, phys,
+                                             split=getattr(p, "grammar_tools", None) is not None)
+            # modo separazione: `tools_r` resta la lista RESA (prompt, conteggi), la grammatica va a parte
+            body_r = self._send_body(p, body, self._round_grammar(p, phys, final))
             self._live(p, phys, rnd, body)
             if stream_state is not None:
                 stream_state["internal"] = self._internal_names(p, phys)
@@ -286,10 +297,10 @@ class Proxy:
             self.wguard.where = "final" if final else ("answer" if rnd == 0 else "recall_round")
             try:
                 if emit:
-                    resp = self._round({**answerfix.stream_body(self, p, body, phys, rnd, tools_r, no_think),
+                    resp = self._round({**answerfix.stream_body(self, p, body_r, phys, rnd, tools_r, no_think),
                                         "messages": phys, "tools": tools_r}, emit, stream_state)
                 else:
-                    resp = answerfix.chat(self, p, body, phys, rnd, tools_r, no_think)
+                    resp = answerfix.chat(self, p, body_r, phys, rnd, tools_r, no_think)
             except UpstreamError as e:
                 self.journal.log("upstream_error", conv=p.conv, status=e.status, error=str(e)[:300])
                 return e.status, _err_body(e), {}
@@ -310,6 +321,7 @@ class Proxy:
             if not mine:
                 break
             others = [c for c in calls if c not in mine]
+            deliver = None            # #90: turno misto servito senza rilanciare il modello (vedi sotto)
             if guard_on and final and not others and tries < FINAL_ATTEMPTS \
                     and not (msg.get("content") or "").strip():
                 # 0.3.5: the final round (no internal tools offered) returned ONLY internal calls - the model saw
@@ -346,19 +358,48 @@ class Proxy:
                     phys = phys0 + clean(loop)
                     continue
             if others or rnd > self.cfg.max_recall_rounds or final:
-                # chiamate miste (o troppi giri, o giro finale per spazio): al client vanno solo le sue; la recall
-                # non eseguita sparisce.
-                msg["tool_calls"] = others or None
-                if not others:
-                    msg.pop("tool_calls", None)
-                    resp["choices"][0]["finish_reason"] = "stop"
-                self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
-                                 names=sorted({(c.get("function") or {}).get("name") for c in mine}), final=final,
-                                 retry=made > 0, retry_no_room=tries > made, attempts=made, thinking_off=no_think)
-                break
+                # chiamate miste (o troppi giri, o giro finale per spazio).
+                # fix #90: in un turno misto le chiamate di PAGINAZIONE (caricatore `tools` e chiamata a uno
+                # strumento del catalogo non ancora caricato) non si scartano: sono letture di definizioni, senza
+                # effetti collaterali. Si eseguono qui, al client vanno solo le sue chiamate e il modello NON
+                # viene rilanciato in questo turno (riemetterebbe azioni che il client ha già ricevuto): trova le
+                # definizioni al turno dopo, reinserite con gli altri eventi interni. Fuori dai giri interni
+                # disponibili (tetto giri, giro finale per spazio) resta lo scarto di prima.
+                load = [c for c in mine if c not in blocked
+                        and (c.get("function") or {}).get("name") not in p.recall_aliases] \
+                    if others and not (rnd > self.cfg.max_recall_rounds or final) else []
+                # 0.3.32: in un turno misto le chiamate BLOCCATE dalla guardia non svaniscono più. Restano nel
+                # gruppo interno: il modello riceve `guard_msg` al TURNO SUCCESSIVO (reinserito con gli altri
+                # eventi interni), senza essere rilanciato adesso e senza che il client veda la chiamata. Per
+                # loro il tetto dei giri e il giro finale non hanno ragione d'essere — non c'è nessun rilancio
+                # da limitare — e lo spazio lo controlla `_fit_other` più sotto.
+                guarded = [c for c in mine if c in blocked] if others else []
+                if not load and not guarded:
+                    # la recall non eseguita sparisce (invariato: vedi test_mixed_calls_*)
+                    msg["tool_calls"] = others or None
+                    if not others:
+                        msg.pop("tool_calls", None)
+                        resp["choices"][0]["finish_reason"] = "stop"
+                    self.journal.log("recall_dropped", conv=p.conv, count=len(mine), mixed=bool(others), round=rnd,
+                                     names=sorted({(c.get("function") or {}).get("name") for c in mine}),
+                                     final=final, retry=made > 0, retry_no_room=tries > made, attempts=made,
+                                     thinking_off=no_think)
+                    break
+                deliver = others
+                rest = [c for c in mine if c not in load and c not in guarded]
+                if rest:
+                    # recall non eseguita nello stesso turno misto: scartata come prima
+                    self.journal.log("recall_dropped", conv=p.conv, count=len(rest), mixed=True,
+                                     round=rnd, names=sorted({(c.get("function") or {}).get("name")
+                                                              for c in rest}),
+                                     final=final, retry=made > 0, retry_no_room=tries > made, attempts=made,
+                                     thinking_off=no_think)
+                mine = [c for c in mine if c in load or c in guarded]
+                n_strip = len(strip_c)
             # ciclo tool lato server: assistant(recall) + risultati, poi di nuovo a Strata
-            amsg = {"role": "assistant", "content": msg.get("content") or "", "tool_calls": mine}
-            if msg.get("reasoning_content"):
+            amsg = {"role": "assistant", "content": "" if deliver is not None else (msg.get("content") or ""),
+                    "tool_calls": mine}
+            if msg.get("reasoning_content") and deliver is None:
                 amsg["reasoning_content"] = msg["reasoning_content"]
             new = [amsg]
             if emit:
@@ -397,16 +438,23 @@ class Proxy:
                     # the assistant message so the tool protocol stays coherent
                     self.journal.log("recall_skipped", conv=p.conv, round=rnd, name=cname, args=str(a)[:300],
                                      reason=st.reason)
+                    if c in blocked:
+                        # la guardia ha bloccato la chiamata ma il messaggio NON è stato consegnato al modello
+                        self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500],
+                                         delivered=False, reason="search_closed")
                     continue
                 if c in blocked:
                     out = guard_msg(p.lang).replace("{rn}", p.recall_name)
                     if guard_on:
                         out = self._fit_other(p, phys0, loop, new, body, rnd, floor, lu_full, out, st)
                         if out is None:
+                            self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname,
+                                             args=str(a)[:500], delivered=False, reason="no_room")
                             continue
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     done.append(c)
-                    self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500])
+                    self.journal.log("receipt_guard", conv=p.conv, round=rnd, name=cname, args=str(a)[:500],
+                                     delivered=True)
                     if emit:
                         info = ("\n[gestore del contesto: chiamata %s bloccata (copia di una ricevuta)]\n"
                                 if p.lang == "it" else
@@ -423,7 +471,8 @@ class Proxy:
                     new.append({"role": "tool", "tool_call_id": c.get("id"), "content": out})
                     done.append(c)
                     if emit:
-                        info = "\n[%s: definizioni caricate]\n" % cname
+                        info = ("\n[%s: definizioni caricate]\n" if p.lang == "it" else
+                                "\n[%s: definitions loaded]\n") % cname
                         self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                         strip_r[-1] += info
                     continue
@@ -485,7 +534,9 @@ class Proxy:
                 recalls.append({k: rec[k] for k in ("args", "tokens")})
                 recall_logs.append((rec, out))
                 if emit:
-                    info = "\n[%s %s: %d risultati]\n" % (cname, _short(a), len(meta))
+                    # #88: la lingua della conversazione, come per gli altri segnaposti di questo giro
+                    info = ("\n[%s %s: %d risultati]\n" if p.lang == "it" else
+                            "\n[%s %s: %d results]\n") % (cname, _short(a), len(meta))
                     self._emit_delta(emit, stream_state, resp, {"reasoning_content": info})
                     strip_r[-1] += info
             if guard_on and len(done) < len(mine):
@@ -506,6 +557,13 @@ class Proxy:
             else:
                 phys += new
                 internal += new
+            if deliver is not None:
+                # fix #90: al client solo le sue chiamate, intatte; testo e ragionamento di questo giro restano
+                # suoi (non ne teniamo copia interna, quindi niente strip: altrimenti andrebbero persi).
+                msg["tool_calls"] = deliver
+                del strip_c[n_strip:]
+                del strip_r[n_strip:]
+                break
         if guard_on:
             internal = clean(loop)
         # controllo post-risposta (K) e pulizia del ragionamento di T/K (answerfix.py)
@@ -571,15 +629,54 @@ class Proxy:
         return max(1, min(f, max(1, int(self.cfg.window) // 4)))
 
     def _final_tools(self, p, phys):
-        """Final call for lack of space: the client's tools only (the proxy's own are not offered)."""
-        if not getattr(self.cfg, "final_drop_internal_tools", True) or not p.tools:
+        """Final call for lack of space: the client's tools only (the proxy's own are not offered).
+        Issue #90: gli strumenti del catalogo già caricati sono strumenti DEL CLIENT, quindi restano offerti
+        (con il modo di compatibilità acceso anche con il loro schema completo).
+
+        Modo separazione: la lista RESA nel prompt NON cambia al giro finale (è il senso della correzione: il
+        prefisso cacheato resta valido). La revoca degli strumenti interni vive nell'array di grammatica
+        (`_round_grammar`), dove conta davvero: il modello non può più chiamarli."""
+        if getattr(p, "grammar_tools", None) is not None:
             return p.tools
+        if not getattr(self.cfg, "final_drop_internal_tools", True) or not p.tools:
+            return self.mgr.promote_tools(p.tools, p.catalog, phys)
         names = self._internal_names(p, phys)
         out = [t for t in p.tools if ((t or {}).get("function") or {}).get("name") not in names]
+        out = self.mgr.promote_tools(out, p.catalog, phys)
         return out or None
 
     def _wcount(self, phys, tools, body) -> int:
         return self.wguard.count(phys, tools, template_kwargs(body))
+
+    def _round_grammar(self, p, phys, final: bool):
+        """Issue #90, modo separazione: l'array `tools` del giro, cioè SOLO grammatica e parser delle chiamate =
+        catalogo reso + schemi completi degli strumenti già caricati nel prompt fisico di questo giro, meno gli
+        strumenti interni quando il giro è finale. None = separazione non attiva (nessun campo nuovo nel corpo).
+
+        La lista resa (il prompt) non entra qui: è `p.tools`, identica in tutti i giri."""
+        if getattr(p, "grammar_tools", None) is None:
+            return None
+        base = p.tools
+        if final and getattr(self.cfg, "final_drop_internal_tools", True) and p.tools:
+            names = self._internal_names(p, phys)
+            base = [t for t in p.tools if ((t or {}).get("function") or {}).get("name") not in names]
+        return self.mgr.grammar_tools(base, p.catalog, phys)
+
+    def _send_body(self, p, body, grammar) -> dict:
+        """Corpo del giro con l'array di grammatica agganciato (campo privato, rimosso da Upstream prima
+        dell'invio). Se il CLIENTE manda già `chat_template_kwargs.tools`, il suo catalogo non si sovrascrive:
+        la separazione salta per questa richiesta, e lo dice."""
+        if grammar is None:
+            return body
+        ctk = body.get("chat_template_kwargs")
+        if isinstance(ctk, dict) and "tools" in ctk:
+            if not self._split_skip_said:
+                self._split_skip_said = True
+                self.journal.log("native_split_skip", conv=p.conv, reason="client_kwargs_tools",
+                                 note="the client sends its own chat_template_kwargs.tools: not overwritten, "
+                                      "schemas not promoted")
+            return body
+        return {**body, GRAMMAR_KEY: grammar}
 
     def _check_floor(self, p, phys0, body, floor, st) -> None:
         """F (0.3.5): explicit check P0 + F + margin <= W before the loop. prepare() tries a segment switch but does
@@ -637,14 +734,17 @@ class Proxy:
         reason = "" if search_ok else (st.reason or "round_limit") if st.force_final else "round_limit"
         final = not search_ok
         extra = 0
+        # issue #90: l'array del giro include gli schemi già caricati, così la guardia di spazio li CONTA
+        tools_now = self.mgr.promote_tools(p.tools, p.catalog, phys0 + clean(loop),
+                                           split=getattr(p, "grammar_tools", None) is not None)
         if search_ok:
             H = self._frame_tokens(p, phys0 + clean(loop), body)
             extra = max(st.s_est, CALL_ALLOWANCE + RESULT_R + floor) + H
-            while not fits(extra, p.tools):
+            while not fits(extra, tools_now):
                 if not self._remove(p, loop, question, SEARCH_BANDS, "search", r_search):
                     final, reason = True, "space"
                     break
-        tools = p.tools
+        tools = tools_now
         if final:
             # closed for space or for the round limit: no internal tools (a recall there would be dropped and the
             # answer left empty); the model is told why
@@ -930,9 +1030,15 @@ class Proxy:
 
     def _round(self, body, emit, state):
         """Un giro in streaming da Strata. Inoltra subito ragionamento/testo/tool call del client; trattiene le
-        chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning)."""
+        chiamate recall. -> risposta non-stream ricostruita (+ _sent_content/_sent_reasoning).
+
+        0.3.32: `state["off"]` = modalità `off`, passaggio trasparente (niente trattenute, niente intercettazioni).
+        Dalla prima chiamata trattenuta in poi le chiamate del client ancora da iniziare non si inoltrano a pezzi:
+        escono intere a fine flusso, in ordine di indice del motore, così l'ordine di consegna coincide con quello
+        del motore anche su Messages e Responses (dove l'indice del blocco si assegna all'arrivo)."""
         if state is None:
             state = {"sent_role": False, "client_calls": 0, "final": False}
+        off = bool(state.get("off"))
         call = self.up.chat_stream(body)
         content, reasoning = [], []
         # Hold only a possible native wrapper at the start of a closed-search answer.
@@ -941,6 +1047,7 @@ class Proxy:
         holding_content = bool(state.get("final"))
         sent_c, sent_r = [], []
         calls: dict[int, dict] = {}      # indice upstream -> {id, name, args, mine, cidx}
+        holding = False                  # dalla prima trattenuta: le chiamate nuove del client si bufferizzano
         finish, usage, timings, meta = None, None, None, {}
         last_ka = time.monotonic()
         try:
@@ -980,14 +1087,17 @@ class Proxy:
                     c = calls.get(i)
                     if c is None:
                         name = f.get("name") or ""
-                        c = calls[i] = {"id": tc.get("id"), "name": name,
-                                        "args": "", "mine": name in state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
-                                        "cidx": None, "held": self.cfg.receipt_guard and is_guarded(name)}
-                        if not c["mine"] and not c["held"]:
+                        c = calls[i] = {"id": tc.get("id"), "name": name, "args": "", "cidx": None,
+                                        "mine": not off and name in state.get(
+                                            "internal", (RECALL_NAME, LEGACY_RECALL_NAME)),
+                                        "held": not off and self.cfg.receipt_guard and is_guarded(name)}
+                        if c["held"]:
+                            holding = True
+                        elif not c["mine"] and not holding:
                             c["cidx"] = state["client_calls"]
                             state["client_calls"] += 1
                     c["args"] += f.get("arguments") or ""
-                    if not c["mine"] and not c["held"]:
+                    if c["cidx"] is not None:   # già iniziata verso il client: continua a pezzi
                         x = {"index": c["cidx"], "function": {"arguments": f.get("arguments") or ""}}
                         if tc.get("id"):
                             x["id"] = tc["id"]
@@ -1018,14 +1128,19 @@ class Proxy:
                 held_content, state.get("internal", (RECALL_NAME, LEGACY_RECALL_NAME)))):
             self._emit_delta(emit, state, meta, {"content": held_content})
             sent_c.append(held_content)
-        # chiamate con effetti trattenute dalla guardia: inoltrate intere solo se pulite
+        # Chiamate trattenute dalla guardia (solo se pulite) e chiamate del client bufferizzate perché
+        # arrivate dopo una trattenuta: inoltrate intere, in ordine di indice del motore (i buchi di indice
+        # non contano, l'ordine sì), così il client le riceve nell'ordine in cui il modello le ha emesse.
         for _, c in sorted(calls.items()):
-            if c.get("held") and not receipt_contaminated(c["name"], c["args"]):
-                c["cidx"] = state["client_calls"]
-                state["client_calls"] += 1
-                self._emit_delta(emit, state, meta, {"tool_calls": [
-                    {"index": c["cidx"], "id": c["id"], "type": "function",
-                     "function": {"name": c["name"], "arguments": c["args"]}}]})
+            if c["mine"] or c["cidx"] is not None:
+                continue
+            if c["held"] and receipt_contaminated(c["name"], c["args"]):
+                continue                      # bloccata: non esce, il modello lo saprà dal gruppo interno
+            c["cidx"] = state["client_calls"]
+            state["client_calls"] += 1
+            self._emit_delta(emit, state, meta, {"tool_calls": [
+                {"index": c["cidx"], "id": c["id"], "type": "function",
+                 "function": {"name": c["name"], "arguments": c["args"]}}]})
         msg = {"role": "assistant", "content": "".join(content)}
         if reasoning:
             msg["reasoning_content"] = "".join(reasoning)
@@ -1155,12 +1270,14 @@ class Proxy:
             if resp is not None:
                 ch = (resp.get("choices") or [{}])[0]
                 m, u = ch.get("message") or {}, resp.get("usage") or {}
-                r = {"done": True, "finish_reason": ch.get("finish_reason"), "content": m.get("content"),
-                     "reasoning_content": m.get("reasoning_content"), "tool_calls": m.get("tool_calls"),
+                r = {"done": True, "finish_reason": ch.get("finish_reason"), "content": redact_text(m.get("content")),
+                     "reasoning_content": redact_text(m.get("reasoning_content")),
+                     "tool_calls": redact_text(m.get("tool_calls")),
                      "completion_tokens": u.get("completion_tokens"), "prompt_tokens": u.get("prompt_tokens"),
                      "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens"),
                      "prompt_read": (resp.get("timings") or {}).get("prompt_n")}
-            rec = {"ts": round(time.time(), 3), "conv": p.conv, "seg": p.seg, "round": rnd, "messages": phys,
+            rec = {"ts": round(time.time(), 3), "conv": p.conv, "seg": p.seg, "round": rnd,
+               "messages": redact_images(phys),
                    "n_messages": len(phys), "tools": [(t.get("function") or {}).get("name") for t in p.tools or []],
                    "est_tokens": p.est_tokens, "virtual_tokens": p.virtual_tokens, "masked": p.masked,
                    "masked_tokens": p.masked_tokens, "events": [e.get("event") for e in p.events],
@@ -1179,8 +1296,13 @@ class Proxy:
         est = p.est_tokens if p else None
         real = u.get("prompt_tokens")
         tw = getattr(self.up, "truncwatch", None)
-        if p and rnd == 0 and real and not (tw is not None and tw.cut(est, real)):
+        # How many pictures this request's physical prompt carried (never journalled when zero, so
+        # text-only traffic keeps byte-identical journal lines).
+        pics = count_images(p.messages) if (p and rnd == 0) else 0
+        if p and rnd == 0 and real and not pics and not (tw is not None and tw.cut(est, real)):
             # 0.3.8: a prompt cut by the engine is not a calibration sample (it would teach a ratio of 0.2-0.5)
+            # neither is a prompt with pictures: its engine count holds the vision tokens the estimate
+            # replaced with cfg.image_tokens, so the ratio would teach the wrong scale to every later text request.
             self.tc.calibrate(p.est_tokens, real)
         inv = (p.invalidated or {}) if p and rnd == 0 else {}
         self.journal.log("request", mode=kind, conv=p.conv if p else None, round=rnd, messages=nmsg,
@@ -1191,7 +1313,8 @@ class Proxy:
                          completion_tokens=u.get("completion_tokens"), ms=round((time.time() - t0) * 1000),
                          finish=resp["choices"][0].get("finish_reason"),
                          invalidated_suffix_tokens=inv.get("tokens", 0) if p else None,
-                         invalidated_cause=inv.get("cause") if p else None)
+                         invalidated_cause=inv.get("cause") if p else None,
+                         **({"images": pics} if pics else {}))
         if p and rnd == 0 and any(e.get("event") == "mask" for e in p.events or []):
             # 0.3.3, measure only: after a mask, prefix the proxy expected the engine to reuse vs what it reused
             # (hybrid engines restart from the live session or the longest checkpoint that is a prefix)
@@ -1246,7 +1369,10 @@ def sse_from_response(r: dict):
 
 
 def is_loopback(host: str) -> bool:
-    """Admin endpoints accept only this machine (the proxy has no client authentication; see #28: 0.0.0.0)."""
+    """Admin endpoints accept only this machine. Without `--client-key-file` the proxy has no client
+    authentication (see #28: 0.0.0.0)."""
+    if host == "localhost":
+        return True
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
@@ -1255,12 +1381,31 @@ def is_loopback(host: str) -> bool:
     return (mapped or ip).is_loopback
 
 
-def make_handler(proxy: Proxy):
+def authorized(headers, key: str) -> bool:
+    """Does the request carry `key`? An empty `key` means the proxy is open (the default: bound to 127.0.0.1).
+    Accepts the bearer token of the OpenAI SDKs and the `x-api-key` of the Anthropic ones."""
+    if not key:
+        return True
+    auth = headers.get("Authorization", "").encode()
+    if auth[:7].lower() == b"bearer " and hmac.compare_digest(auth[7:].strip(), key.encode()):
+        return True
+    return hmac.compare_digest(headers.get("x-api-key", "").strip().encode(), key.encode())
+
+
+def make_handler(proxy: Proxy, client_key: str = ""):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
         def log_message(self, fmt, *a):  # meno rumore
             pass
+
+        def _refused(self) -> bool:
+            """401 when the proxy is behind a key and the request does not carry it."""
+            if authorized(self.headers, client_key):
+                return False
+            self._send(401, {"error": {"message": "missing or invalid API key",
+                                       "type": "authentication_error"}})
+            return True
 
         def _send(self, status, obj, headers=None, raw=None, ctype="application/json"):
             data = raw if raw is not None else json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -1281,6 +1426,8 @@ def make_handler(proxy: Proxy):
             self._send(st, None, raw=data, ctype=hdr.get("Content-Type", "application/json"))
 
         def do_GET(self):
+            if self._refused():
+                return
             parts = self.path.split("?")[0].strip("/").split("/")
             if parts[:3] == ["v1", "strata", "archive"] and len(parts) == 4:
                 store = proxy.store_for(rid=parts[3]) if hasattr(proxy, "store_for") else proxy.store
@@ -1333,13 +1480,15 @@ def make_handler(proxy: Proxy):
 
         def do_POST(self):
             n = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(n) if n else b""
+            body = self.rfile.read(n) if n else b""   # drained before the 401, so keep-alive stays aligned
+            if self._refused():
+                return
             path = self.path.split("?")[0].rstrip("/")
             if path.startswith("/v1/strata/marks"):
                 try:
                     st, out = proxy.mark_action(json.loads(body or b"{}"))
                 except (ValueError, KeyError, TypeError) as e:
-                    st, out = 400, {"error": {"message": "richiesta non valida: %s" % e}}
+                    st, out = 400, {"error": {"message": "invalid request: %s" % e}}
                 return self._send(st, out)
             if path == "/v1/strata/saved-state/reset":
                 if not is_loopback(self.client_address[0]):      # module lookup at call time (patched in tests)
@@ -1380,7 +1529,7 @@ def make_handler(proxy: Proxy):
             try:
                 req = json.loads(body or b"{}")
             except ValueError:
-                return self._send(400, {"error": {"message": "JSON non valido"}})
+                return self._send(400, {"error": {"message": "invalid JSON"}})
             hint = self.headers.get("X-Strata-Conversation") or req.get("prompt_cache_key")
             if not req.get("stream"):
                 try:
@@ -1466,6 +1615,12 @@ def build_parser(prog="mnemonic-proxy", description=None):
     ap.add_argument("--config", help="JSON file with Config fields (window, thresholds, feature flags)")
     ap.add_argument("--tokenizer", help="HF tokenizer.json for exact token counts (optional; default chars/3.5)")
     ap.add_argument("--api-key", default="", help="API key sent to the upstream engine (optional)")
+    ap.add_argument("--api-key-file", help="file holding the key sent to the upstream engine; keeps the secret out "
+                                           "of the command line (overrides --api-key)")
+    ap.add_argument("--client-key-file", help="file holding the key clients must send; keeps the secret out of the "
+                                             "command line and out of the process list. The proxy checks every request "
+                                             "against it, so the key can be a different one from --api-key: giving "
+                                             "clients the engine key would let them reach the engine directly.")
     ap.add_argument("--engine", choices=["auto", "strata", "llama.cpp", "ds4", "openai"], default=None,
                     help="engine type (default: from the config file, otherwise auto-detected)")
     ap.add_argument("--version", action="version", version="mnemonic-proxy " + __version__)
@@ -1490,6 +1645,105 @@ def load_config(a) -> tuple[dict, Config]:
     return raw_cfg, cfg
 
 
+def config_error_line(name, exc) -> str:
+    """One line about a `--config` that cannot be read: what is wrong and the three real options.
+
+    0.3.23 (friction A1): the Install block of the README used to pass `--config config.json` without ever
+    telling anybody to create it, and the proxy answered with a raw FileNotFoundError traceback. The file is
+    optional, so the message has to say so.
+    """
+    from . import initconfig as examples
+    if isinstance(exc, FileNotFoundError):
+        return "%s does not exist. %s" % (name, examples.missing_config_fix(name))
+    return "%s cannot be read: %s -> fix the JSON file, or drop --config: the proxy works with the defaults" \
+        % (name, exc)
+
+
+def build_init_config_parser():
+    """The `init-config` parser: the minimal starting configuration, and the one-click launcher."""
+    from . import initconfig as examples
+    ap = argparse.ArgumentParser(
+        prog="mnemonic-proxy init-config",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Write a MINIMAL config.json for one engine: only what the proxy cannot work out by "
+                    "itself, so the automatic configuration stays in charge of the rest. `--full` writes the "
+                    "complete documented example instead (from the copy inside the package, no network), "
+                    "`--launcher` also writes the one-click starter for this platform. Engines:\n"
+                    + "\n".join(examples.list_lines()))
+    ap.add_argument("--engine", required=True, choices=list(examples.ENGINES),
+                    help="which engine the configuration is for")
+    ap.add_argument("--dir", default=".", help="folder to write config.json in (created if missing, default .)")
+    ap.add_argument("--force", action="store_true", help="overwrite an existing config.json / launcher")
+    ap.add_argument("--name", default="config.json", help="file name to write (default config.json)")
+    ap.add_argument("--full", action="store_true",
+                    help="write the complete documented example instead of the minimal file (every field "
+                         "explicit, which switches the automatic configuration off)")
+    ap.add_argument("--slot-dir", default="",
+                    help="the engine's --slot-save-path folder, for saved state (%s): the one thing the "
+                         "proxy cannot discover" % ", ".join(examples.slot_dir_engines()))
+    ap.add_argument("--launcher", action="store_true",
+                    help="also write %s (%s off Windows): one click to start the proxy in front of an engine "
+                         "that is already running" % (examples.launcher_name("Windows"),
+                                                      examples.launcher_name("Linux")))
+    ap.add_argument("--upstream", default="http://127.0.0.1:8095",
+                    help="--launcher: the engine's address to bake into it (default %(default)s)")
+    ap.add_argument("--port", type=int, default=8096,
+                    help="--launcher: the port the proxy listens on (default %(default)s)")
+    ap.add_argument("--data", default="", help="--launcher: the proxy's data folder (default: data next to it)")
+    ap.add_argument("--tokenizer", default="",
+                    help="--launcher: the model's tokenizer for an exact token count (left commented out "
+                         "when not given)")
+    return ap
+
+
+def init_config_main(argv=None) -> int:
+    """`mnemonic-proxy init-config --engine ...`: the config file the README asks for, written for real."""
+    from . import initconfig as examples
+    a = build_init_config_parser().parse_args(argv)
+    slot_dir = a.slot_dir or None
+    try:
+        target = examples.write_config(a.engine, a.dir, force=a.force, filename=a.name,
+                                       full=a.full, slot_dir=slot_dir)
+    except FileExistsError as e:
+        print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)" % e,
+              file=sys.stderr, flush=True)
+        return 1
+    except (OSError, KeyError, ValueError) as e:
+        print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
+        return 1
+    name, why = examples.ENGINES[a.engine]
+    if a.full:
+        print("wrote %s (%s in full, for %s)" % (target, name, why))
+        print("every field is explicit there, so the automatic configuration has nothing left to choose: "
+              "delete the lines you do not mean to pin")
+        if not slot_dir and examples.has_slot_dir_placeholder(a.engine):
+            print("set \"slot_dir\" to the engine's --slot-save-path folder (it is a placeholder in there) or "
+                  "remove it: saved state stays off until it is a real folder")
+    else:
+        print("wrote %s (minimal, for %s)" % (target, why))
+        print("%s" % examples.minimal_note(a.engine))
+        if not slot_dir and examples.accepts_slot_dir(a.engine):
+            print("saved state (optional): re-run with --slot-dir DIR, the engine's --slot-save-path folder")
+        print("every field in full: mnemonic-proxy init-config --engine %s --full" % a.engine)
+    if a.launcher:
+        try:
+            started = examples.write_launcher(a.dir, force=a.force, upstream=a.upstream, port=a.port,
+                                              data=a.data, config=os.path.abspath(target),
+                                              tokenizer=a.tokenizer)
+        except FileExistsError as e:
+            print("mnemonic-proxy init-config: %s already exists, nothing written (use --force to overwrite)"
+                  % e, file=sys.stderr, flush=True)
+            return 1
+        except OSError as e:
+            print("mnemonic-proxy init-config: %s" % e, file=sys.stderr, flush=True)
+            return 1
+        print("wrote %s: start your engine, then run it (the proxy checks the engine and the port first)"
+              % started)
+    print("check it with: mnemonic-proxy check --upstream %s --port %d --data %s --config %s"
+          % (a.upstream, a.port, a.data or "./data", target))
+    return 0
+
+
 def main(argv=None):
     from . import __version__
     argv = list(sys.argv[1:] if argv is None else argv)
@@ -1503,19 +1757,69 @@ def main(argv=None):
     if argv and argv[0] == "forget":
         from .forget import main as forget_main
         raise SystemExit(forget_main(argv[1:]))
+    if argv and argv[0] == "init-config":
+        raise SystemExit(init_config_main(argv[1:]))
     a = build_parser().parse_args(argv)
-    raw_cfg, cfg = load_config(a)
+    resolve_keys(a)   # reject invalid explicit key files before config, data directory or lock
+    try:
+        raw_cfg, cfg = load_config(a)
+    except (OSError, ValueError) as e:
+        # 0.3.23: a --config that is not there is a one-line message with the three real options, never a
+        # FileNotFoundError traceback (friction A1 of the "new user" trial).
+        raise SystemExit("mnemonic-proxy: %s" % config_error_line(a.config, e)) from None
+    # 0.3.24: where the data folder comes from has to be read BEFORE this start creates it or writes into it
+    # (the folder and the journal below are created by this very process): a folder born with the automatic
+    # configuration keeps its choices at every restart, an earlier folder keeps how it ran. autoconfig.origin
+    # is read-only and never creates the mark.
+    from . import autoconfig as _autoconfig
+    origin = _autoconfig.origin(a.data)
     os.makedirs(a.data, exist_ok=True)
     from .datalock import DataLock
     try:
         with DataLock(a.data):
-            return serve(a, raw_cfg, cfg)
+            return serve(a, raw_cfg, cfg, origin=origin)
     except ValueError as e:
         raise SystemExit("mnemonic-proxy: %s" % e) from None
 
 
-def serve(a, raw_cfg, cfg):
+def resolve_keys(a):
+    """Read the two key files into the keys used at runtime, so the server and `check` see the same ones.
+    A missing or empty file is a startup error, never a silently open request."""
+    if a.api_key_file is not None:
+        a.api_key = read_key_file(a.api_key_file, "--api-key-file")
+    a.client_key = read_key_file(a.client_key_file, "--client-key-file")
+
+
+def read_key_file(path, label):
+    """Only None means absent; invalid explicit files never fall back to another key."""
+    if path is None:
+        return ""
+    if path == "":
+        raise SystemExit("mnemonic-proxy: %s path is empty" % label)
+    try:
+        with open(path, encoding="utf-8") as f:
+            key = f.read().strip()
+    except UnicodeError:
+        raise SystemExit("mnemonic-proxy: %s: invalid UTF-8" % label) from None
+    except OSError as e:
+        raise SystemExit("mnemonic-proxy: cannot read %s: %s" % (label, e)) from None
+    if not key:
+        raise SystemExit("mnemonic-proxy: %s is empty" % label)
+    return key
+
+
+def serve(a, raw_cfg, cfg, origin=None):
     """Run only while main owns the data directory's maintenance lock."""
+    # The archive is plaintext, so an open proxy on a reachable address is an open archive. The key clients are
+    # checked against comes from a file (--client-key-file): a separate one also keeps the engine's key from being
+    # handed to whoever is allowed to use the proxy.
+    if not hasattr(a, "client_key"):
+        resolve_keys(a)   # direct callers; main has already read each file once
+    client_key = a.client_key
+    if not client_key and not is_loopback(a.host):
+        print("[mnemonic-proxy] warning: bound to %s with no client key: anyone who can reach this port reads and "
+              "writes the archive and the engine. Add --client-key-file or bind to 127.0.0.1." % a.host,
+              file=sys.stderr, flush=True)
     if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
         cfg.data_dir = os.path.abspath(a.data)
     counter = TokenCounter(cfg.chars_per_token, a.tokenizer)
@@ -1531,11 +1835,30 @@ def serve(a, raw_cfg, cfg):
         profile_specs, default_profile = load_profiles(raw_cfg, cfg, a.tokenizer)
     up = Upstream(a.upstream, a.api_key)
     journal = Journal(os.path.join(a.data, "journal.jsonl"), stderr=True)
+    counter.journal = journal        # rejected calibration samples must be visible in the journal
+    from .engines import SAVE_PRODUCING, ensure_slot_dir, mkdir_hint
     from .engines import setup as setup_engine, window_mismatch, window_problems
-    engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter,
-                          log=lambda m: print(m, file=sys.stderr, flush=True))
-    # The active engine model can be unrelated to any requested profile.
-    # Validate each selected model before building its prompt, not at startup.
+    # Keep the 0.3.34 setup; individual profile windows are checked on selection.
+    decisions: list = []
+    engine = setup_engine(cfg, up, journal, explicit=set(raw_cfg), counter=counter, decisions=decisions,
+                          log=lambda m: print(m, file=sys.stderr, flush=True), data_dir=a.data,
+                          origin=origin, mark=True)
+    if (cfg.slot_save or cfg.live_dump) and not cfg.data_dir:
+        cfg.data_dir = os.path.abspath(a.data)
+    # 0.3.22: only create a local session directory for the legacy runtime here.
+    if not profile_specs and any(getattr(cfg, k, False) for k in SAVE_PRODUCING):
+        outcome, detail = ensure_slot_dir(cfg.slot_dir, a.upstream)
+        if outcome == "created":
+            print("[mnemonic-proxy] created the session folder %s (slot_dir); it must be the engine's "
+                  "--slot-save-path" % cfg.slot_dir, file=sys.stderr, flush=True)
+            journal.log("slot_dir_created", slot_dir=cfg.slot_dir)
+        elif outcome in ("failed", "remote"):
+            why = ("could not create it: " + detail if outcome == "failed"
+                   else "the engine is not on this host, so it was not created")
+            print("[mnemonic-proxy] warning: slot_dir %s does not exist, %s. %s. Saved state will fail until "
+                  "then; everything else works." % (cfg.slot_dir, why, mkdir_hint(cfg.slot_dir)),
+                  file=sys.stderr, flush=True)
+            journal.log("slot_dir_missing", slot_dir=cfg.slot_dir, outcome=outcome, error=detail)
     small = [] if profile_specs else window_problems(cfg, engine, set(raw_cfg))
     if engine.router_state is not None:
         # 0.3.7: which model saved which slot file must survive a proxy restart (data folder, always)
@@ -1564,27 +1887,52 @@ def serve(a, raw_cfg, cfg):
                              "running on Python %d.%d. Set \"kv_archive\": false or upgrade Python."
                              % sys.version_info[:2])
         enable_kv_archive(proxy)
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy))
+    srv = ThreadingHTTPServer((a.host, a.port), make_handler(proxy, client_key))
     # Request threads stay daemonic: with HTTP/1.1 keep-alive an idle client connection would otherwise block
     # shutdown forever. The data lock is released by the OS when the process exits.
     srv.daemon_threads = True
-    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s" % (
+    saved_on = bool(engine.slot_save and any(getattr(cfg, k, False) for k in SAVE_PRODUCING))
+    print("[mnemonic-proxy] %s:%d -> %s (engine %s, saved state %s) mode=%s window=%s tokens=%s anchor=%s auth=%s" % (
         a.host, a.port, a.upstream, engine.kind + (" router" if engine.router else ""),
-        "yes" if engine.slot_save else "no", a.mode,
+        "yes" if saved_on else "off (optional)" if engine.slot_save else "no", a.mode,
         "per model (n_ctx)" if engine.router else ("%s (read from %s before each request)" % (
-            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor),
+            cfg.window, engine.flavor) if engine.flavor else cfg.window), proxy.tc.kind, cfg.mask_anchor,
+        "api key required" if client_key else "open"),
           file=sys.stderr, flush=True)
     for summary in profile_specs:
         s = summary.summary()
         print("[mnemonic-proxy] profile %s: tokenizer=%s template=%s slot_dir=%s window=%s (%s)" % (
             s["profile"], s["tokenizer"], s["template"], s["slot_dir"] or "-", s["window"], s["window_source"]),
               file=sys.stderr, flush=True)
+    if not saved_on:
+        from .engines import BASE_MODE, saved_state_later
+        print("[mnemonic-proxy] saved state off: the proxy works without it (%s). %s"
+              % (BASE_MODE, saved_state_later(engine.kind)), file=sys.stderr, flush=True)
+    # 0.3.23: no silent choice. What the automatic configuration picked for this engine and this machine,
+    # with the reason and the way to force it otherwise (`check --explain-config` prints the full picture).
+    # 0.3.24: one line first on which of the three cases this data folder is, so a restart that changes the
+    # applied values can never be a surprise.
+    if cfg.auto_config:
+        from .autoconfig import origin_line as _origin_line
+        print("[mnemonic-proxy] auto config: %s"
+              % _origin_line(origin[0] if origin else engine.data_origin, engine.data_origin_why),
+              file=sys.stderr, flush=True)
+    for d in decisions:
+        if d.changed:
+            from .autoconfig import fmt as _fmt_value
+            print("[mnemonic-proxy] auto config: %s = %s, %s%s"
+                  % (d.field, _fmt_value(d.value), d.why,
+                     " (to force it otherwise: %s)" % d.override if d.override else ""),
+                  file=sys.stderr, flush=True)
     from . import __version__
-    startup = {"version": __version__, "window": cfg.window, "margin": cfg.window_margin,
-               "guard": cfg.window_guard, "template": "pack" if counter.prompt_template else "builtin-qwen"}
-    if profile_specs:
-        startup["profiles"] = [s.summary() for s in profile_specs]
-    journal.log("startup", **startup)
+    journal.log("startup", version=__version__, window=cfg.window, margin=cfg.window_margin,
+                guard=cfg.window_guard, template="pack" if counter.prompt_template else "builtin-qwen",
+                image_tokens=cfg.image_tokens)
+    if cfg.image_tokens <= 0:
+        # A picture cannot be priced at zero: the guard will refuse those requests. Said at startup, so it is not
+        # discovered in the middle of a turn (the bound is the operator's, the engine does not publish its clamp).
+        print("[mnemonic-proxy] image_tokens=%d: requests carrying a picture will be refused; set image_tokens to "
+              "an upper bound >= the engine's vision.max_tokens + 2" % cfg.image_tokens, file=sys.stderr, flush=True)
     print("[mnemonic-proxy] events: stderr + %s; recent events: /v1/strata/journal" % journal.path,
           file=sys.stderr, flush=True)
     try:

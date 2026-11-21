@@ -7,7 +7,8 @@ drops the middle. Their default contexts are small (Ollama 4096, LM Studio 8192)
 context the engine really runs with and never builds a prompt for a bigger window.
 
 Recognition (in `engines.detect`, only after Strata, ds4 and llama-server were ruled out):
-  Ollama     GET /api/version -> {"version": ...}; context of a loaded model: GET /api/ps -> models[].context_length
+  Ollama     GET /api/version -> {"version": ...} AND valid GET /api/ps -> {"models": [...]}, even when empty;
+             context of a loaded model: models[].context_length
              (the runtime context, the CONTEXT column of `ollama ps`; NOT /api/show, whose `<arch>.context_length`
              is the training context, e.g. 262144 for Qwen3-4B).
   LM Studio  GET /api/v0/models -> data[] with `state`; context of a loaded model: `loaded_context_length`
@@ -68,7 +69,9 @@ def _get(up, path, timeout=10.0):
 def detect_flavor(up) -> str | None:
     """ollama | lmstudio | None (unknown generic engine: unchanged behaviour)."""
     v = _get(up, "/api/version", 5.0)
-    if isinstance(v, dict) and isinstance(v.get("version"), str):
+    if isinstance(v, dict) and isinstance(v.get("version"), str) and loaded_contexts(up, "ollama") is not None:
+        # /api/version is also exposed by gateways; only a coherent /api/ps
+        # establishes Ollama's runtime protocol. An empty models array is valid.
         return "ollama"
     m = _get(up, "/api/v0/models", 5.0)
     if isinstance(m, dict) and isinstance(m.get("data"), list) and any(
@@ -85,17 +88,23 @@ def _int(v) -> int:
 
 
 def loaded_contexts(up, flavor: str) -> dict[str, int] | None:
-    """{model: runtime context} of the loaded models (0 = loaded, context not reported); None = no answer."""
+    """Loaded model runtime contexts (0 = context unreported); {} = none loaded;
+    None = endpoint unavailable, unsupported or malformed (not evidence of no models).
+    """
     if flavor == "ollama":
         ps = _get(up, "/api/ps")
-        if not isinstance(ps, dict):
+        if not isinstance(ps, dict) or not isinstance(ps.get("models"), list):
             return None
         out = {}
-        for m in ps.get("models") or []:
-            if isinstance(m, dict):
-                n = _int(m.get("context_length") or m.get("num_ctx"))
-                for k in {m.get("name"), m.get("model")} - {None, ""}:
-                    out[str(k)] = n
+        for m in ps["models"]:
+            if not isinstance(m, dict):
+                return None
+            names = [m.get(k) for k in ("name", "model") if isinstance(m.get(k), str) and m[k]]
+            if not names:
+                return None
+            n = _int(m.get("context_length") or m.get("num_ctx"))
+            for name in names:
+                out[name] = n
         return out
     if flavor == "lmstudio":
         ms = _get(up, "/api/v0/models")

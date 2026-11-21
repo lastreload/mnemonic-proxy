@@ -10,7 +10,7 @@ from ctxproxy import core, server
 class TestTokenizerStartup(unittest.TestCase):
     def test_explicit_tokenizer_failure_stops_before_upstream_or_listener(self):
         for error in (ModuleNotFoundError("No module named 'tokenizers'"),
-                      ValueError('tokenizer non riconosciuto: missing.json'),
+                      ValueError('unrecognized tokenizer: missing.json'),
                       ValueError('invalid tokenizer JSON')):
             with self.subTest(error=str(error)), tempfile.TemporaryDirectory() as d:
                 with patch('ctxproxy.core.load_tokenizer', side_effect=error), \

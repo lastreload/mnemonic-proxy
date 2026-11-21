@@ -160,12 +160,18 @@ def forget_parser() -> argparse.ArgumentParser:
     return _no_exit(build_forget_parser())
 
 
+def init_config_parser() -> argparse.ArgumentParser:
+    from ctxproxy.server import build_init_config_parser
+    return _no_exit(build_init_config_parser())
+
+
 def mcp_parser() -> argparse.ArgumentParser:
     from ctxproxy.mcp_server import build_mcp_parser
     return _no_exit(build_mcp_parser())
 
 
-SUBCOMMAND_PARSERS = {"demo": demo_parser, "check": check_parser, "forget": forget_parser}
+SUBCOMMAND_PARSERS = {"demo": demo_parser, "check": check_parser, "forget": forget_parser,
+                      "init-config": init_config_parser}
 
 
 def options(ap: argparse.ArgumentParser) -> list[str]:
@@ -186,6 +192,7 @@ def all_parsers() -> dict:
         "mnemonic-proxy check": check_parser(),
         "mnemonic-proxy demo": demo_parser(),
         "mnemonic-proxy forget": forget_parser(),
+        "mnemonic-proxy init-config": init_config_parser(),
         "mnemonic-mcp": mcp_parser(),
     }
 

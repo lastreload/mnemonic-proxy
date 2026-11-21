@@ -1,13 +1,703 @@
 # Changelog
 
-## Unreleased
+## 0.3.34 — 2026-11-21
 
-- Add request-selected model profiles (#27): exact names or patterns bind tokenizer and pack chat template,
-  `slot_dir`, engine-discovered/configured window and optional thresholds. Unknown models fail with HTTP 400
-  unless an exact `default_profile` is configured. Each concrete model has isolated conversation accounting,
-  archive/store and saved-state ownership; switching back resumes its own history. Internal recall, notes,
-  retry, seal/anchor and autosave calls retain the originating model. `check`, `check --live` and startup report
-  loaded profiles. The no-profile request path remains byte-identical to 0.3.21.
+- **Model-native reasoning effort (#100).** Prompt counting no longer promotes `high` or unknown values to
+  `xhigh` before rendering a model's own chat template. Spark's valid `high` now stays `high`; unsupported
+  efforts remain unsupported and name the original value. Top-level `reasoning_effort`, nested
+  `reasoning.effort`, template effort overrides and explicit thinking-off switches keep their precedence;
+  boolean `false` is no longer mistaken for a missing top-level effort. The upstream request is not rewritten.
+  The built-in Qwen/Strata renderer retains its own historical effort aliases and defaults.
+- **Count failures are not context overflow (#100).** An unrenderable or otherwise uncountable prompt is still
+  refused before sending, with HTTP 400 `type=prompt_count_error`, `code=prompt_count_failed` and the cause,
+  rather than inventing `prompt = window` arithmetic. Actual context exhaustion still uses
+  `context_window_exceeded` / `window_guard`; output clamping, image checks and the final count barrier remain
+  active. Messages/Responses adapters and already-open streams retain their existing error envelopes while
+  carrying the count-failure cause.
+
+## 0.3.33 — 2026-11-20
+
+- **Optional client authentication and file-based keys**, contributed by LawiK974 in #99, with startup and
+  dashboard safeguards added before integration. `--client-key-file FILE` enables a constant-time key check on
+  every GET/POST path, including `/health` and the archive endpoints: clients send `Authorization: Bearer KEY`
+  or `x-api-key`. `--api-key-file FILE` supplies the separate upstream engine key and overrides inline `--api-key`;
+  neither upstream option enables client authentication. Keys stay out of command-line arguments.
+- **No migration for existing local setups.** Without a client-key flag the proxy remains open on loopback;
+  a public bind without authentication warns but is not blocked. Upgrading and restarting needs no new key
+  configuration. HTTP authentication is not encryption or network isolation: keep the service local or arrange
+  HTTPS/tunneling and access controls separately.
+- **Invalid key files stop startup before side effects.** Explicit empty paths, invalid UTF-8, missing/unreadable
+  files and empty/whitespace-only content never fall back to another key. The CLI reads each file once, before
+  configuration, data-directory locking or network probes. Files are read at startup, not watched; restart to
+  change a key.
+- **The standalone dashboard uses explicit separate keys:** `--api-key-file` for Strata, `--proxy-api-key-file`
+  for the proxy. Sharing a file requires both flags. GET/POST require a loopback Host on the listener's port;
+  mutation requests require JSON and matching Origin/Fetch Metadata when supplied. Headless JSON clients remain
+  supported. Pre-body rejections close the connection; ambiguous framing is refused. No UI/session/CORS changes.
+  Custom/public hosts, reverse proxies with an external authority and dashboard tunnels using a different local
+  port are intentionally unsupported. These are cross-origin guards, not local-user authentication or a general
+  denial-of-service defense. The proxy API's separate forwarding contract is unchanged.
+- README upgrade guidance and the [configuration](docs/configuration.md#optional-client-authentication-and-key-files),
+  [security](docs/security.md) and [dashboard](docs/tools.md#dashboard-optional-needs-the-git-clone) guides describe
+  optional authentication, independent keys and deployment limits. Dashboard remains a clone-only tool, not part
+  of the PyPI wheel. PR #92 and unrelated fixes are not included.
+
+## 0.3.32 — 2026-11-17
+
+- **`--mode off` is a plain pass-through in streaming too.** The mode is documented in three places as «plain
+  pass-through, nothing archived or masked», and the non-streaming path has always been exactly that: one request,
+  one answer. The streaming path, however, went through the same stream reader as the managed mode, where the
+  receipt guard holds every `write`/`edit`/`bash`-family call until its arguments are complete: in `off` a clean
+  call lost its incremental delivery, and a call whose arguments contained a receipt or a placeholder — the
+  shortened form of an old argument, a line with only `…` — **disappeared**. In `off` there is no internal loop,
+  so nothing could tell the model why: the client got `finish_reason: "tool_calls"` with no call at all, while the
+  same prompt without `stream` delivered the call. The same branch also swallowed a client call that happened to
+  be named like the proxy's internal recall tool, which in `off` has no consumer either. The stream reader now
+  knows the mode: in `off` nothing is held, inspected or intercepted, so streaming and non-streaming deliver the
+  same calls with the same arguments, receipt-looking text included, byte for byte. `off` adds no guard message
+  and no journal event, as before.
+- **The client receives the model's tool calls in the model's own order.** With `receipt_guard` on (the default),
+  a call the guard must inspect is held until the end of the round — its arguments can only be judged complete.
+  The calls the model emitted *after* it were meanwhile forwarded immediately, so the engine's `[write, read]`
+  arrived as `[read, write]`: the client could execute a later call first, and an agent that chains them (write
+  then read back) saw its own actions inverted. Renumbering the call index would not have been enough: on
+  Messages and Responses the block index is assigned when the block opens (`content_block_start`,
+  `response.output_item.added`), so the order on the wire *is* the arrival order. From the first held call on, the
+  calls not yet started are now held as well and delivered whole at the end of the round, in the order of the
+  engine's indices (gaps in those indices do not matter, the order does); the indices handed to the client stay
+  contiguous from 0. A call already streaming when the held one appears keeps streaming: its index is already with
+  the client and cannot be withdrawn. Nothing is released early: a held call is still judged on its complete
+  arguments, and a contaminated one is still never delivered. Cost, in exchange for the order: the calls that
+  follow a held one lose the incremental streaming of their arguments. As a side effect, those calls now reach the
+  native adapters as a single complete delta, so they can no longer run into the «interleaved arguments» case the
+  two adapters have to discard.
+- **In a mixed turn the call blocked by the receipt guard no longer vanishes without telling the model.** When the
+  model emitted its own calls together with the client's, the blocked ones were excluded from the internal group,
+  logged as `recall_dropped` and dropped: the client correctly never saw the call, but the model was never
+  relaunched in that turn (#90), so it never learned that its `write` had not been executed — it saw a call with
+  no result and, in the live sessions, repeated it. The blocked calls now stay in the internal group: the model
+  gets the usual `guard_msg` as the result of that call, reinserted with the other internal events, so it reads it
+  at the **next** turn, once, with the `tool_call_id` paired to the call in the internal assistant message. The
+  turn still costs one generation, the client still receives only its own calls, once, and the blocked call is
+  still never delivered. The round cap and the final round no longer empty the group for blocked calls: there is
+  no relaunch of the model to limit there, and the room is checked by `_fit_other` as before. When the message
+  cannot be delivered — no room for it, or the search already closed — the call leaves the group as before, and
+  the `receipt_guard` event now says so: `delivered: false` with a `reason` (`no_room`, `search_closed`), and
+  `delivered: true` when the model will read it. One blocked call alone in the final round still goes through
+  `_final_retry`, which answers every call of the round with the closed-search text: the model gets a message,
+  but the wrong one. Unchanged here, on purpose.
+  Tests: `tests/test_guard_delivery.py` (14) — HTTP integration with the in-process fake engine and a real
+  temporary archive: `off` with a contaminated `write` and with an internally-named call (streaming vs
+  non-streaming, all three APIs), delivery order with the held call first and last, split and interleaved
+  argument deltas with gaps in the engine's indices, an internal call in the same round, contiguous client
+  indices, the mixed turn (one generation, one `receipt_guard` with `delivered`, the paired feedback at the next
+  turn, tool-call pairing of the whole physical prompt), the blocked call never reaching the client, an engine
+  error surfacing inside an `off` stream, and a client disconnect while calls are held.
+
+## 0.3.31 — 2026-11-17
+
+- **The streaming "recall results" placeholder follows the conversation language (#88).** After each recall call
+  served internally, the streaming path writes a line into `reasoning_content` — `[recall 'db-s3-007': 8 …]` —
+  that the client shows inside the model's `thinking` box. The last word was unconditionally Italian
+  (`risultati`), so an English conversation saw Italian text that came from the proxy, not from the model: the
+  symptom reported in #88. It now has the same language branch as its three siblings in the same round
+  (definitions loaded, call blocked by the receipt guard, closed search), which 0.3.28 had already localized:
+  `… : 8 results]` in an English conversation, unchanged word for word in an Italian one. The string dates back
+  to 0.1.0, before the language selection of 0.3.1, so this is not a regression of a recent release. Nothing
+  else changes: the line is a stream delta to the client, never part of the physical prompt, the archive, a
+  receipt or the hash chain, so existing conversations keep their stable prefix byte for byte, and recalled
+  archive content — Italian included — is delivered verbatim. The 0.3.28 note said this placeholder was tied to
+  a frozen fixture: `tests/fixtures/closed-search-recall.json` records that text in a `reasoning_content` field
+  no test reads (only `content` is used), and the fixture is left untouched. An audit of every proxy-written
+  string on the recall path (`core.recall` and its pages, `recall2`, the leaf selector, the pager receipts, the
+  window notices, the closing notes) found no other unconditional Italian text.
+  Test: `tests/test_issue88_recall_language.py` (15) — HTTP integration with the in-process fake engine and a
+  real temporary archive: English, Italian preserved, an empty search (`0 results`), a renamed recall tool
+  (`mem0_search`), recalled Italian content delivered intact, the non-streaming path still without the line,
+  a resumed conversation, and a guard over every structural placeholder of the stream.
+
+## 0.3.30 — 2026-11-17
+- **`--tokenizer` accepts the model folder, not just the file (#95).** The format was decided by the kind of path:
+  a file was tried as a Hugging Face tokenizer and anything else, including a *directory*, went to the Strata pack
+  builder — so a plain Hugging Face model folder was read as a pack and startup failed on a missing
+  `token_type.json`. The format is now read from the structure of the `tokenizer.json` at that path (file or
+  folder): `model` as an object is a Hugging Face file, `model` as a string with `pre_pattern` is a pack
+  descriptor, built from the adjacent `vocab.json`, `merges.txt` and `token_type.json`. Each failure keeps the
+  format it belongs to — invalid JSON, a Hugging Face file the installed `tokenizers` cannot open, a pack with the
+  missing files named — instead of surfacing as the other format's error, and an explicit `--tokenizer` that cannot
+  be loaded still refuses startup rather than falling back to an estimate.
+- **Tool definitions render on templates written for the wrapped OpenAI form (#95).** The template received the
+  definitions unwrapped (the contents of `function`, the Qwen/Strata convention); a template that reads
+  `tool.function` — both Spark-X2.6-4B templates do — got `Undefined` and the render failed, so with a tokenizer
+  loaded every request in `--mode tools` was refused by the window guard with HTTP 400, even when the client sent
+  no tools (the proxy injects its own). The definitions now also answer `tool.function` with themselves, without
+  `function` becoming a key: `keys()`, `items()` and `tojson` of the whole tool are byte for byte what they were,
+  so the prompts of the templates already supported do not change. Measured once on Linux/CPU, llama.cpp b11514
+  (`de7fa0a3c`) with `Sharp-Spark-X2.6-4B-Q4_K_XL`: tokenizer loaded from the folder, the GGUF's own template,
+  `--mode tools`, five requests (no client tools, client tools, `tool_choice: required`, a full tool round,
+  streaming) all accepted with the counted prompt equal to the backend's `usage.prompt_tokens`
+  (505, 556, 556, 581, 581; delta 0) and no `count_error`. One quantization, one engine build and one template:
+  not a claim about every model or every backend.
+- **Exact counting needs the template of the weights served.** Documented in `docs/install.md`: for a GGUF the
+  template inside the GGUF can differ from the stock one in the model's Hugging Face repository (on one
+  Spark-X2.6-4B conversation, 314 rendered tokens against 170, and only the GGUF's matched the backend's
+  `/apply-template` byte for byte), so a tokenizer folder pointing at the wrong template gives an exact count of
+  the wrong prompt.
+- Refs #95. Tests: `tests/test_issue95_tokenizer_formats.py` (12) and `tests/test_issue95_tool_rendering.py` (11),
+  16 of which fail on the previous code; the equality of the already supported prompts is checked against a golden
+  generated before the fix.
+
+## 0.3.29 — 2026-11-15
+
+- **Tool definitions loaded at runtime can be called natively without re-reading the cached prefix** — new opt-in
+  mode `tools_paging_native_split`, off by default. With `tools_paging` on, llama.cpp builds the tool-call grammar
+  and parser only from the request's `tools` array, so a definition the model loaded at runtime is described in the
+  prompt and still not callable: the model keeps calling the `tools` loader. The existing answer
+  (`tools_paging_native_schemas`) puts the loaded schemas back into `tools`, which the template renders at the
+  **head** of the prompt, so every load changes the head and the engine re-reads the whole cached prefix. The new
+  mode sends the two lists apart: the visible catalog, in canonical form and stable for the whole turn, goes to
+  `chat_template_kwargs.tools` (rendered with precedence over `tools`, `common/chat.cpp:894-902`), while `tools`
+  carries catalog plus loaded schemas, i.e. grammar and parser only. Token counts, window guard and state signature
+  follow the rendered list. Measured once, on llama.cpp build 11723 revision `31288c9c6` with Qwen3.5-9B-Q8 and a
+  98,304-token context, inside the real Kilo Code extension in VS Code: two consecutive loads kept the cached prefix
+  (`cache_n` 36,258 and 36,912; 133 and 425 tokens read; prompt processing 362 ms and 841 ms) where the schema
+  promotion re-read the head (37,124 and 38,020 tokens read; 49.0 s and 50.3 s of prompt processing). Those are
+  prompt-processing figures from one run per arm, not total request latency and not a general speed-up.
+- **The mode is gated, never auto-detected.** Besides the two options it qualifies the engine once (engine kind +
+  URL): `llama.cpp`, `/props` with a `build_info` containing `tools_paging_native_split_build` — whose default is now
+  the measured revision `31288c9c6`, since that is the source the grammar and parser were qualified against — and a
+  chat template that uses the dedicated tool-call handler. The new
+  `tools_paging_native_split_template_sha256` pins the exact template as well (empty by default: markers only). When
+  the gate does not pass, the proxy keeps the standard behaviour with one warning and a `native_split_gate` journal
+  line carrying the reason: never a silent fallback to the expensive promotion.
+- **Conflicts are explicit.** A client that sends its own `chat_template_kwargs.tools` keeps it and the split is
+  skipped for that request (`native_split_skip`). With `tools_paging_native_split` **and**
+  `tools_paging_native_schemas` both on, the split wins and the promotion stays off for the rendered catalog —
+  promoting schemas there would put back the very head that invalidates the prefix — journalled once as
+  `native_split_overrides_schemas`; with the gate closed the explicitly requested promotion is kept.
+- **Documentation**: a dedicated section in `docs/configuration.md` (problem, split, JSON example, engine setup,
+  gate and pins, diagnostics, conflicts, how to switch the mode off), three troubleshooting rows and the declared
+  limits in `docs/limits.md`.
+- Default behaviour, Strata and `tools_paging` off are unchanged (explicit tests). Refs #90: this is a measured
+  mechanism on one engine, one model and one template, not a confirmed fix of the reporter's case, which was never
+  reproduced here.
+
+## 0.3.28 — 2026-11-15
+
+- **Tool definition requests are no longer lost when the model also calls a client tool in the same turn.**
+  When the model emitted, in one turn, a pager call (the `tools` loader, or a direct call to a catalog tool whose
+  definition is not loaded yet) together with a tool call for the client, the pager call was dropped: not executed
+  and not reported back to the model. With `tools_paging` on, the model could ask for the same definitions again
+  and again without ever receiving them. Pager calls are pure definition lookups with no side effects, so in a
+  mixed turn they are now executed: the client still receives only its own calls, unchanged (id, name, arguments,
+  `finish_reason`), the model is not re-run in that turn, and it finds the definitions in the next turn, re-inserted
+  with the other internal events. Recall calls, calls blocked by the receipt guard, the internal round cap and the
+  final round for lack of space keep the previous behaviour. Refs #90: the reporter's session was not reproduced
+  with a real model, so this is a loop mechanism that is now fixed, not a confirmed cause.
+- **The streaming "definitions loaded" placeholder follows the conversation language.** In the streaming path the
+  placeholder written into `reasoning_content` when tool definitions are loaded was unconditionally Italian, even in
+  an English conversation; it now behaves like its twin branch for a call blocked by the receipt guard. Other
+  Italian placeholders are untouched: the recall results placeholder in `server.py` is still unconditional and is
+  tied to a frozen test fixture. Refs #88. Test for both fixes: `tests/test_issue88_mixed_paging.py` (13).
+
+## 0.3.27 — 2026-11-14
+
+- **New conversations keep their configured defaults after an interrupted first preparation.** Language, tool
+  names and receipt format are now saved before the conversation's chain becomes discoverable. Previously, an
+  interruption in that window could make a new English conversation resume with legacy Italian instructions and
+  tool names. Existing conversations and archived text are unchanged; already misclassified archives are not
+  migrated. Regression tests capture the HTTP payload after an injected failure and database reopen, and cover
+  language hints, legacy compatibility and segment handoff. This fixes a reproduced interruption path related
+  to #88, not a confirmed cause of the reporter's model switching language. Test: `tests/test_language_recovery.py`.
+
+
+- **Handoff notes that come back as a tool call are no longer lost.** With Qwen3.6 on Unsloth the model answered
+  the notes request twice in a row with a tool call and no text, and the new segment started with the empty
+  fallback. Now, when there is no text, the model's reasoning and the call it attempted become the notes, marked
+  as rebuilt by the proxy; the empty fallback is used only when there is nothing at all. On a real Unsloth session
+  (Qwen3.6-35B-A3B, 32K) one of four switches came back this way (reasoning ran to the token limit) and the new
+  segment started from the model's own account of what it had done. A reasoning block left inside the content
+  (`<think>…</think>`) is no longer copied into the notes. The `notes` journal event carries `handoff_status`:
+  `clean`, `recovered` or `fallback`. New option `notes_tool_choice` (`auto` = send nothing): `tool_choice: "none"`
+  was considered and measured, but both Strata and llama-server then drop the tools from the template, so the
+  segment is read again before the notes (Unsloth: 11,717 -> 11,462 tokens, cached 0, 13.2 s instead of 1.5 s);
+  it stays available as `"none"`. Analysis and the minimal cascade proposed by an external review agent.
+  Test: `tests/test_notes_handoff.py`.
+## 0.3.26 — 2026-11-11
+
+- **Dashboard: Strata's API key** (`--api-key-file`): when Strata requires a key, the dashboard sends it as a
+  Bearer header to `/status` and `/metrics`, which otherwise answered with an error. The key is read from a file,
+  never from the command line; a missing or empty file stops the start with a clear error. By LawiK974 (#83).
+- **A `window` below the engine's n_ctx scales the thresholds** (found on Strata 0.2.13). With an engine that
+  reports its context (Strata, llama-server, ds4) and a smaller `window` written in the config, the window was
+  used but the thresholds stayed at their 131K defaults: `mask_trigger` 80000 above a 32768 window, `tail_max`
+  24000, `reserve` 8192. Ordinary masking never ran and each new segment started already too full: in an agent
+  session on Strata 0.2.13 with `{"window": 32768}`, ten segment switches in a row, one per request (about 30 s of
+  handoff notes each). The 0.3.24 scaling covered only engines that report no context; it now covers both. Fields
+  written in the config still win. Test: `tests/test_explicit_window_scaling.py` (fails before the fix: no
+  ordinary mask, the current output hidden on every request).
+- **DeepSeek Harness**: tested (`dsh` 0.2.2-rc.1, headless profile, in front of Unsloth with Qwen3.6-35B-A3B and a
+  64K window): a custom `openai-completions` provider pointed at the proxy, dsh's compaction and tool-result pruning
+  off. 7 requests, 0 errors, exact answers after masking, the hidden code brought back with `recall` in the next turn.
+  Setup and numbers in [DeepSeek Harness](docs/agents.md#deepseek-harness-chat-completions). Asked for by
+  u/Due-Advantage-9777.
+
+## 0.3.25 — 2026-11-11
+
+- **Dashboard**: the strings #74 left untranslated (the error chip, the `chars` / `placeholder` labels of the
+  live-prompt header, the copy button's tooltip) go through the language switch; the automatic language is
+  French or Italian when the browser asks for it and English otherwise; `<html lang>` follows the choice. Test:
+  the three language tables have the same keys. By LawiK974 (#78).
+- **Docs, opencode**: why the example turns opencode's timeouts off, and that this is for a local engine only;
+  in front of a hosted API keep them finite, since a silent connection would stall the session with no error.
+  Pointed out by u/FallElectronic3774 (#77).
+- **Unsloth**: tested in front of `unsloth run` (Unsloth 2026.11.3, Qwen3.6-35B-A3B, 32K window): recognised as
+  llama-server through Unsloth's API, window read from it, masking, `recall`, segment switches, streaming and the
+  three APIs work; no saved state (the API does not pass on slot save/restore). Setup in
+  [install](docs/install.md#install), numbers in [Unsloth, measured](docs/engines.md#unsloth-measured).
+- **`check` sends `--api-key` on every probe**: the "engine reachable" line asked `/health` and `/v1/models`
+  without it, so an engine with authentication (Unsloth) showed `/v1/models 401` there. Detection already sent the
+  key. Test: `tests/test_check_api_key.py`.
+- **Docs**: the README is now a short landing page and everything else moved, text unchanged, into
+  `docs/`: [install](docs/install.md), [agents](docs/agents.md), [engines](docs/engines.md),
+  [configuration](docs/configuration.md), [how it works](docs/how-it-works.md),
+  [benchmarks](docs/benchmarks.md), [limits](docs/limits.md), [security](docs/security.md),
+  [troubleshooting](docs/troubleshooting.md), [tools](docs/tools.md), [development](docs/development.md) and
+  [credits](docs/credits.md). The old 2,020-line page had everything a reader could want and nothing they
+  could find: a first-time reader met the install lines, the AgentLongBench tables and the 60-field
+  configuration reference on the same scroll. Only link targets changed in the moved text; headings keep
+  their anchors, so a `#…` link that used to point into the README now points into the page that holds it.
+  `tools/docs_coverage_check.py` checks line by line that nothing was lost (lines 1-66, the old opening,
+  are the part the new page replaces on purpose).
+- **Docs tests**: the three levels of the README tests now cover `README.md` **and** `docs/*.md`
+  (`docs/dev-notes/` excluded), through the single definition in `tools/readme_blocks.doc_files()`.
+  Internal links are resolved across pages, not only inside one file (`tools/readme_blocks.py --links`),
+  every page must be reachable from the landing page, and the exhaustiveness level looks for a subcommand,
+  option or `Config` field in any page rather than in the README alone. `docs/hermes-agent.md` and
+  `docs/manual-forget.md` entered the tested set and their blocks carry `readme-test` labels now.
+  The `readme-run` CI job and `tools/readme_run.sh` stage `docs/*.md` next to `README.md`.
+- **Docs**: the README tells readers who already run an engine and an agent where to go, right after the demo:
+  the per-agent table (address to use, setting that turns the agent's own auto-compaction off) now sits under its
+  own heading, [Connect your agent](README.md#connect-your-agent), right after the install lines instead of after
+  the engine notes. Table content unchanged.
+
+## 0.3.24 — 2026-11-03
+
+- **`init-config` writes a minimal file and leaves the automatic configuration in charge** (reported by the first
+  Windows user). `mnemonic-proxy init-config --engine strata` used to copy `examples/config.example.json` out:
+  sixteen explicit fields, among them `window` 131072, a `/path/to/strata/sessions` placeholder,
+  `slot_save`/`mask_anchor`/`autosave` true, `notes_max_tokens` 12288, `response_floor` 16384, `live_dump` true
+  (the whole prompt to disk) and `seal_experimental` true. A field written in the config always wins over
+  `autoconfig.py`, so the command `check` itself suggests *switched the automatic configuration off*: on an engine
+  with a 115K window, or on a machine without the RAM for a session file, it handed the user a wrong setup.
+  The file now holds only what nothing can work out:
+  - `--engine strata`, `llama-server`, `llama-server-32k`, `llama-server-router`, `ds4` -> `{}`. The window comes
+    from the engine; the saved-state options, the exact token count and the window-sized budgets are chosen from
+    the engine and the machine, and reported line by line at startup and by `check --explain-config`.
+  - `--slot-dir DIR` (Strata and llama-server) adds `"slot_dir"` and nothing else: it is the engine's own
+    `--slot-save-path`, the one thing the proxy cannot discover, and the one thing
+    `autoconfig.saved_state_gate` asks for before it turns saved state on by itself. Without it no placeholder is
+    written: a `/path/to/...` in there is worse than an absent field.
+  - `--engine openai-32k` -> `{"window": 32768}`: a plain OpenAI-compatible engine reports no context at all.
+  - `--engine official-strata` -> `{"slot_save": false, "autosave": false}`: the engine *can* save state, so base
+    mode is a choice only the user can make.
+  - **`"auto_config": true` is never written**, although it is exactly what the file leaves in charge. It is
+    already the default, so on a new data folder it adds nothing; on a folder that already holds conversations it
+    would *remove* a protection — the automatic choices are only applied there when `auto_config` is explicit,
+    precisely so an upgrade cannot change how a running setup behaves.
+  - `--full` still writes the complete documented example from inside the package (no network), now with
+    `--slot-dir` substituted into its `slot_dir` placeholder when given, and a line saying that every explicit
+    field is one the automatic configuration no longer decides. The shipped `examples/*.json` are unchanged.
+  - `check`'s hints and `--config`-not-found message name the minimal command (and `--full`) instead of
+    "download the example".
+- **One click, any engine: `init-config --launcher`.** Writes `start-mnemonic-proxy.bat` on Windows and
+  `start-mnemonic-proxy.sh` elsewhere, next to the config, with the `--upstream`, `--port`, `--data`, `--config`
+  and (optional) `--tokenizer` that were actually passed. It starts **only the proxy** — the engine's command line
+  stays the user's — and in this order: it stops with one line if the engine does not answer, runs `check` once (a
+  port already taken is reported there, with the fix), then the proxy. Every value is a variable at the top of the
+  file and can be overridden from the environment; the `TOKENIZER` line is present but commented out unless
+  `--tokenizer` was given; no personal path anywhere; on Windows it ends with `pause`, so a console opened by a
+  double-click does not vanish with the error in it. `examples/start-windows.bat` (which also *starts*
+  llama-server) is unchanged. Windows CI runs the generated `.bat` end to end against a fake engine, as it already
+  did for `start-windows.bat`.
+- **A `window` written in the config now scales the thresholds too.** The window-sized defaults (`mask_trigger`,
+  `mask_target`, `keep_recent_tokens`, `min_batch_tokens`, `tail_max`, `reserve`, `default_response`,
+  `pins_max_tokens`, `recall_struct_max_tokens`, `auto_recall_max_tokens`, …) scaled only when the window was read
+  from the engine; with a generic engine, which reports none, they stayed at their 131072 sizes behind a
+  `"window": 32768` — so `mask_trigger` 80000 never fired on a 32K window. They are now scaled from `BASE_WINDOW`
+  by the same formula (one `engines._scale`, two callers), and a threshold written by the user still wins. The
+  numbers `examples/config.openai-32k.json` spells out are exactly this scaling, so `{"window": 32768}` is a
+  complete 32K configuration; a startup warning says it happened.
+- **The automatic choices no longer change between two restarts of the same installation.** Reported by the first
+  Windows user: first start on an empty data folder with a 115000-token window applied `response_floor = 14375`
+  and `notes_max_tokens = 10781` (`[mnemonic-proxy] auto config: response_floor = 14375 …`); an hour later, on
+  the **same** folder, `check` printed `auto config 2 choices not applied: this data folder already has
+  conversations`, `kept response_floor = 0`, `kept notes_max_tokens = 7187`, so the next restart would have run
+  with different values than the first. The cause: `autoconfig.existing_install` answered "does this folder hold
+  conversations?" and every folder gets conversations — including the ones 0.3.23 had just created with the
+  choices applied. The rule it implements is about **upgrades** (a PolyStrata release before v0.1.45-poly.7 ends
+  the engine at the first save, and it answers like Strata), i.e. about installations that predate the automatic
+  configuration.
+  - **Where the data folder comes from is now recorded in the data folder**, in `autoconfig.json`
+    (`autoconfig.MARK_FILE`: mark version, proxy version, window, the values applied, when), kept apart from the
+    presence of conversations. `autoconfig.origin` answers with one of three cases and its reason, read-only:
+    **new** (the folder is not there yet, or is empty) → the choices are applied and the mark is written;
+    **created with the automatic configuration** (the mark is there) → the choices keep being applied at every
+    start, conversations or not; **from an earlier setup** (files but no mark) → the choices are reported, marked
+    `kept`, and nothing changes, exactly as in 0.3.23.
+  - **Folders created by 0.3.23 get their choices back.** 0.3.23 applied the choices to new folders but wrote no
+    mark, so those folders (the reporter's among them) would have stayed "earlier" for good. Their journal is the
+    record: `journal.jsonl` is append-only and the server logs `auto_config` before `startup`, so the **first**
+    start in the journal tells which version created the folder. A folder whose first start is a 0.3.23 start
+    whose `auto_config` event applied at least one choice counts as created with the automatic configuration, and
+    the next start writes the mark (`autoconfig.born_with_0323`). Anything else stays earlier: an older first
+    start, a first 0.3.23 start that applied nothing (an old folder whose journal was deleted), an unreadable line
+    before the first start, no journal.
+  - **The answer is taken before the start can spoil it.** `server.main` reads the provenance *before*
+    `os.makedirs` and before the journal is opened (both are created by the very process that is deciding), and
+    passes it to `engines.setup`, which writes the mark only for a folder recognised as new.
+  - **Conservative on every doubt, which 0.3.23 could not be.** An old folder whose archive happens to be empty
+    now counts as an earlier folder instead of a new one; so do a folder that cannot be listed and an
+    `autoconfig.json` that cannot be read. An `auto_config` event alone in an old `journal.jsonl` is not a consent
+    (only the first-start rule above is).
+    `check` reads the provenance and **never** writes the mark, so a `check` run before the first start cannot
+    make an earlier folder look automatic. Saved state is still never switched on by itself on a folder that
+    predates the automatic configuration (PolyStrata guarantee, `tests/test_autoconfig.py`).
+  - **One line says which case it is**, in `check` (`data folder origin`), in the startup log
+    (`[mnemonic-proxy] auto config: …`) and in the `auto_config` journal event (field `data_folder`). What
+    happens when the choices change between two starts of the same "automatic" folder is now written in the
+    README: every gate is re-evaluated each time, switching **off** (less RAM available → `slot_save`/`autosave`
+    back to `false`) is always safe, and switching saved state **on** where it was off is only ever done on a new
+    folder or on one this mechanism created itself — never on an earlier one.
+  - New `tests/test_autoconfig_sticky.py`: the reported sequence end to end (two real starts of the proxy on the
+    same folder with a conversation archived in between, then `check`, all three with `response_floor = 14375`
+    and `notes_max_tokens = 10781`), plus the provenance cases above.
+
+- **The recall of the current turn: the proxy handed out ids it then refused.** A single human prompt followed by
+  hundreds of tool calls — `opencode run`, a Hermes worker, any headless agent — is the shape where masking does
+  the most work, and it was exactly the shape where recall was blind. `server.py` passed `max_idx=last_user` (the
+  index of the last human message) to every recall and the archive filter was `idx < max_idx`, so **every block
+  masked after that message was unreachable for the rest of the turn**: its receipt was in the prompt, its id was
+  valid, its text was in the archive, and `recall(id=…)` answered `not found`. It became reachable only when a new
+  user message arrived — i.e. once the turn it belonged to was over. The same filter also hid the turn's own
+  `query` hits and the turn's `path` timeline.
+  - **Measured on our own journals, after the fact** (136 journals: 31 syntaxis sessions, the 104 journals of the
+    AgentLongBench bench run and the 0.3.23 production journal, read only, indices compared against the human
+    message recorded in each `recall` event): of 205 id calls, **32 asked for a block past the last human message
+    and all 32 came from one opencode session** — the one the README
+    quotes as "44 recall calls all used". In that session the filter itself refused none of the 32: they all used
+    `mode=output`, whose path (`Recall2.around`) applied no filter at all, so the 21 output ids (`r…`) got only
+    the pointer to their arguments id (that is what `mode=output` does for an output) and the 11 arguments ids got
+    700-char excerpts. A plain `recall(id=…)` of any of those blocks would have answered `not found`, which is
+    what a Windows user hit. The filter did empty the session's 4 `path` calls, although the file had been read
+    in that very turn. The 10 `emergency=current_tool` masks of
+    that session are unreachable by construction: that mask archives the LAST message of the request. The bench
+    run refuses nothing (140 id calls, 0 refused) because its driver sends every round as a new user message, so
+    `last_user` always sits at the end: this is a defect of the single-prompt shape, not of long sessions as such.
+  - **Two code paths, two different rules.** `Recall2.around` (`mode=output/call/neighbors`) resolved ids with
+    **no chain filter at all**; `_recall_page`/`recall_legacy`/`search`/`fileops` applied `idx < max_idx`. So the
+    same block answered or not depending on the mode. Both paths now apply the same rule. (In the opencode session
+    the "no text" answers were not this filter: `mode=output` on an output id returns a pointer by design, and the
+    arguments id returns 700-char excerpts. That behaviour is a separate defect, listed below.)
+  - **The fix is a chain filter, not a wider window.** `idx < max_idx` was doing two jobs with one line: keeping
+    out sibling branches (edits, regenerations) and the current question, which is right, and keeping out the
+    current agentic turn, which is not. New `chain_ok()` (`core.py`) turns the filter into
+    `(idx < ? OR rid IN (SELECT rid FROM cur_chain))`, where `cur_chain` is a TEMP table holding the archive ids
+    of the prefix sent **now**, minus the current question (which the model sees in full). Same parameter list, so
+    every query keeps its signature. A sibling branch has different ids (`rid` = hash of index + content), so it
+    stays out; a test regenerates a turn and proves the abandoned text is still unreachable.
+  - **No change to the prompt.** The filter only decides what a recall answer may contain; masking, segments,
+    anchors and the prompt sent to the engine are untouched — checked hash by hash on a 40-request masking run with
+    no recall. `tests/test_recall_current_turn.py` (12 tests, 10 of them failing on the previous code) covers ids,
+    `emergency=current_tool`, `query`, `path`, the structured engine, the arguments/output symmetry, the exclusion
+    of the current question, the exclusion of sibling branches on both paths and one end-to-end request through
+    `Proxy.chat` with the recall issued in the middle of the turn. Adjacent defects found while measuring and left
+    for separate cards (ids resolved without a conversation, sibling branches below `max_idx`, `mode=output`
+    returning a pointer instead of text, arguments-id excerpts cut at 700 characters) are listed in the report.
+
+- **The first Windows user: the console no longer mangles what the commands print.** On a PowerShell window whose
+  code page is not UTF-8, `mnemonic-proxy`, `demo`, `check`, `init-config` and `mnemonic-mcp` produced output the
+  user could not read: `compat.console_safe` switched the stream to `errors="backslashreplace"`, so the receipt
+  brackets `⟪ ⟫` arrived as the literal text `\u27ea` `\u27eb`, and the characters the code page *can* encode
+  (`·`, `—`, `«»`) were written as single bytes that the terminal then read back with another code page (`?`).
+  A non-UTF-8 stdout/stderr is now wrapped in `compat.AsciiConsole`: what reaches the terminal is **pure ASCII**
+  with readable stand-ins (`⟪`/`«` -> `<<`, `⟫`/`»` -> `>>`, `·` -> `-`, `—` -> `--`, `📌` -> `[pin]`, `✅` ->
+  `[ OK ]`), and accents in paths are folded (`Projet par défaut` -> `Projet par defaut`) instead of being left to
+  a code-page guess. `chcp 65001` brings the real characters back.
+  - **Console only, byte for byte.** A UTF-8 stream is returned untouched — the same object, the same bytes as
+    every earlier version. The text sent to the engine, the verbatim archive, the journal and `last_request.json`
+    never pass through this layer: an identity test runs the same `demo` on a UTF-8 and on a simulated `cp1252`
+    console and compares the archived content of the two runs byte for byte (`tests/test_windows_console.py`).
+    `mnemonic-mcp` wraps **stderr only**: the stdio protocol writes JSON on `sys.stdout.buffer` and stays UTF-8.
+- **Italian strings that reached the English output.** The startup line said `tokens=esatto:<tokenizer>` and
+  `(tokenizer non caricato: …)`; with `engine_tokenize` it said `esatto:/tokenize`. They are now `exact:` and
+  `(tokenizer not loaded: …)`. Also translated: the six engine notes `check` prints (`/v1/status does not answer`,
+  `/v1/models does not answer like ds4-server`, `slot %d is missing`, `%d slots (--parallel): the proxy pins
+  id_slot=…`, `/slots not available (server started with --no-slots)`, `saves are off: start llama-server with
+  --slot-save-path DIR`), the HTTP 400 bodies `invalid request: …`, `invalid JSON` and `unsupported role: …`
+  (Anthropic Messages and Responses), the `truncation_guard` journal reason `no room for reasoning`, and the
+  `kvarchive` errors and `--codecs` help. The Italian texts the proxy writes **into the prompt** are untouched:
+  they are selected by `prompt_language` and old conversations depend on them byte for byte.
+- **`tools_paging` is now usable with Hermes.** `tools_core` defaulted to `read bash edit write grep find ls`:
+  no Hermes tool name matched, so with the pager on the whole Hermes toolset went to the catalog and the prompt
+  head kept only `recall` and `tools` — every definition the model needed came back at the end of the history on
+  each load. The defaults now also contain Hermes' base names (`read_file`, `write_file`, `patch`,
+  `search_files`, `terminal`), so Hermes gets a base of five like opencode. The change is additive: a name the
+  client does not have moves nothing, and a test checks that the split for opencode, pi and Claude Code's names
+  is identical with the old defaults and the new ones.
+- **The client auto-compaction reminder names every documented client.** `check` listed only pi and Claude Code;
+  it now also prints opencode (`"compaction": {"auto": false}`) and Hermes (`compression.enabled false`, the real
+  Hermes key — not `compaction.*`). The README's agent table gained the missing opencode row, and the
+  troubleshooting table gained both clients and the Windows console symptom.
+
+- **The prompt head is measurable: one journal line with the names and the weight of the tool definitions.** The
+  head — template scaffolding + tool definitions + system prompt — is the largest single occupant of an
+  interactive prompt (19 166 tokens median, 24.8 % of the prompt in the measurement of card `t_d1134087`), yet it
+  was **recorded nowhere**: the `request` event carries aggregate counters only and the archive holds messages,
+  not tools. Consequence: the two levers that act on the head (`tooldefs_desc_max`/`tooldefs_param_max` and
+  `tools_paging`) could not be measured even after the fact, and a production journal with `tools_paging` on but
+  **0** `tool_not_loaded` and **0** `tools_search` over 599 requests did not say whether the pager had ever run.
+  New event **`tool_heads`** (`ctxproxy/toolheads.py`, switch `journal_tool_heads`, on by default), written **once
+  per conversation and once per change of the tool list** — not per request: fingerprint of the list, number of
+  tools, for each tool its **name** plus the tokens of the full definition and of its `description` alone, the
+  counted head total (`head_tokens` = `defs_tokens` + `system_tokens` + `frame_tokens`) and, with the pager on,
+  which tools stayed in the head (`base`) and which went to the catalog (`catalog`). `counting` declares `exact`
+  (pack tokenizer + real template) or `estimated` (chars/`chars_per_token`); the counter is the one the proxy
+  already uses for the window.
+  - **Names and numbers only.** No definition text, no `description` text, no system prompt. The guarantee is
+    structural, not a promise: `toolheads.payload()` never receives the tools, only their names and lists of
+    integers, so it has no text to copy; the only text-dependent value is the non-invertible fingerprint. Two
+    predicates (`toolheads.leaks`, `toolheads.unknown_strings`) prove it in `tests/test_tool_heads.py`.
+  - **Why the pager looks silent in production.** `ToolPager.split` and its call site in `core.py` journal
+    nothing; `tools_search` and `tool_not_loaded` are written in `server.py` only when the **model** calls
+    `tools` or an unloaded tool. So an empty journal could not distinguish "the pager never ran" from "the pager
+    ran and the model never touched the catalog". `tool_heads` now records the split itself. The split also
+    depends entirely on the client's naming: with opencode's documented tools, `tools_core` keeps 5 in the head
+    (`bash edit write read grep`) and sends 6 to the catalog; with Hermes' tool names it kept **none** until the
+    `tools_core` defaults gained them later in this same release (entry above) — a test covers both.
+  - **Measured cost, no behaviour change.** About 450 bytes per line, one line per 200 requests in the test, and
+    the line's size does not grow with the length of the definitions; the prompt sent to the engine is
+    byte-identical with the event on or off (identity test, pager on and off). `render.prompt_head` factors the
+    head out of `render_pieces` with no change to the rendered text.
+
+- **A version string is not a protocol: llama-swap gateways are no longer taken for Ollama.** A gateway that
+  exposes `GET /api/version` but answers HTTP 404 to `GET /api/ps` was identified as Ollama, reported "no model
+  loaded" and suggested `ollama run`. Recognition now requires both the version answer and a coherent `/api/ps`
+  models array (an empty array is valid: no model loaded); an unsupported, failed or malformed answer leaves the
+  engine generic instead of empty. `check` now distinguishes an empty runtime list, unavailable runtime metadata
+  and a loaded model whose context is not reported, uses the runtime metadata — never the `/v1/models` catalog —
+  as loaded-state evidence for Ollama and LM Studio, and reports a generic gateway's catalog as model
+  availability with the loaded state unverified. A generic window is labelled unverified whether it comes from
+  the config or from the default: the proxy cannot discover a gateway's per-model contexts. The minimum-window
+  and known-context mismatch guards are unchanged.
+
+## 0.3.23 — 2026-11-02
+
+- **Pictures in pack mode: forwarded to the engine and budgeted, no longer refused (issue #60, patch by
+  @lupus0).** With `--tokenizer` on a Strata pack, a request with a picture used to fail with a misleading 400
+  ("prompt 131072 + margin 64 leaves no room in the window"). Now the template writes one vision marker per
+  picture and the guard prices each one at `image_tokens`, an upper bound (`image_tokens >= vision.max_tokens + 2`;
+  default **1026**, Strata's GPU clamp of 1024 plus the two markers that stay; 302 for a CPU reader clamped to 300).
+  `window_guard` events for such prompts carry `guarantee=image_bounded`; text-only prompts stay `exact` and
+  byte-identical. Fail-closed where the count could not be honest: a picture in a `system` message, a picture with
+  no readable source, a template without a vision branch, video and audio are refused with the real reason. Picture
+  bytes never reach disk (`live_dump` and the KV sidecar name a picture by hash), and saved-state identity includes
+  the pictures. Tested live on Strata 0.1.50 with a CPU picture reader: 0.3.22 returned the 400; with the patch the
+  model read the test picture correctly, at about 230 prompt tokens per picture. Review fix on top: the default was
+  1024, which broke the rule on a GPU reader (an under-count of 2 per picture).
+- **When a count fails, the client gets the real reason** instead of the window message above (same patch).
+
+- **The proxy no longer re-delivers a client's out-of-band message (issue #61).** Reported by @akohlsmith with
+  Hermes over Slack: a mid-turn steering message he sent **once** ("there is no vision model running on port
+  8080; the proxy is 8001 …") reached the model **5+ times**, in new positions, sometimes after a segment
+  change, while Hermes' own session database held exactly one copy of it. The model kept acknowledging the
+  rule because every copy still looked like a fresh delivery.
+  - **Why.** Hermes delivers a `/steer` as a standalone `role:"user"` message wrapped in a frame the model is
+    told to trust: `[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this
+    position; …] … [/OUT-OF-BAND USER MESSAGE]` (`agent/prompt_builder.py`, `steer_user_row`). The proxy
+    re-presents archived text at **new** positions — handoff notes (the notes instruction asks the model for
+    the user's constraints "almost verbatim", so a compliant model copies the frame too), `keep_first_user`'s
+    *First user request (verbatim)*, the 📌 pinned-points block, automatic recall pieces, a `recall` result —
+    and the frame came along intact. Three of those blocks are themselves `role:"user"` messages, so the copy
+    was indistinguishable from the real thing. With `auto_recall: true` the same frame appeared **twice in one
+    physical prompt**; with the default configuration it appeared once per prompt but moved to a new position
+    at every segment change, which is the same thing seen one turn at a time.
+  - **Fix** (`core.quote_control_frames`, pure and idempotent): in every copy the proxy itself writes, a
+    client control frame is relabelled — `[OUT-OF-BAND USER MESSAGE …]` becomes
+    `[quoted OUT-OF-BAND USER MESSAGE …]`, `[/OUT-OF-BAND USER MESSAGE]` becomes
+    `[quoted /OUT-OF-BAND USER MESSAGE]`. Same words, whole text, visibly a quotation. This is the convention
+    Hermes itself uses when it republishes model text as `role=user` (`[member-quoted …]`). Also covered:
+    `CONTEXT COMPACTION`, `CONTEXT SUMMARY`, `PRIOR CONTEXT`.
+  - **The real delivery is never touched**: in its own place in the conversation the user's message stays byte
+    for byte what the client sent. Existing conversations keep their prefix: notes, pinned-points blocks and
+    automatic-recall insertions are stored when they are built, and stored text is replayed unchanged — only
+    newly built blocks carry the new label. Masked tool-output placeholders and receipts are deliberately left
+    alone, because recomputing them would change the prefix of every live conversation.
+  - Tests: `tests/test_issue61_steer_echo.py` (notes, verbatim first request, pinned points, automatic recall,
+    `recall` result, and the invariant "at most one intact frame per physical prompt").
+- **The first run of a new user, fixed where it actually broke.** A trial of the README by a fresh user on a
+  clean machine (`docs/dev-notes/README-NEWUSER-RESULT.md`) got stuck before the proxy ever ran. Eight frictions,
+  all of them now closed; `main` also reports its version as `0.3.23.dev0` instead of claiming to be the last
+  release.
+  - **A `--config` file that does not exist is a sentence, not a traceback.** The Install block told the user to
+    pass `--config config.json` and never to create it; the proxy answered with a raw `FileNotFoundError`
+    traceback and `check` stopped at the first line advising *"fix the JSON file"* about a file that was not
+    there. Now the proxy prints one line with the three real options (create it, with the command; or drop
+    `--config`: the defaults work), and `check` reports it as one `❌ config` line **and goes on with every other
+    check** against the defaults — the engine is what the user came to verify.
+  - **`mnemonic-proxy init-config --engine strata|llama-server|ds4|openai-32k`** writes `config.json` from the
+    example that now ships *inside* the package (`ctxproxy.examples`, mapped from the repository's `examples/`).
+    No clone, no network, nothing to copy by hand; `--dir`, `--name` and `--force` are there, and an existing
+    file is never overwritten without `--force`. `pip install mnemonic-proxy` does not create an `examples/`
+    folder, so every hint that names an example now prints either this command or the full
+    `raw.githubusercontent.com` URL **of the version that is installed** (`vX.Y.Z` for a release, `main` for a
+    `.dev` build, so a copied link is never a 404).
+  - **The configuration hint follows the engine that was detected.** `check` without a `--config` used to say
+    *"for llama-server use examples/config.llama-server.json"* in front of any engine, Strata included. It now
+    says what to do for Strata, llama-server, ds4-server or a generic OpenAI engine — and stays generic when the
+    engine never answered.
+  - **`check`'s three outcomes are documented**: `READY` (exit 0), `READY with warnings` (exit 2) and
+    `NOT READY` (exit 1); the README only mentioned the first.
+  - **The automatic-configuration summary stays one line** on a data folder that already has conversations:
+    *"N choices not applied: this data folder already has conversations, so an upgrade keeps how they ran"*,
+    with each value and reason left to `check --explain-config`, instead of repeating the same sentence once per
+    field.
+  - **The fake engine is reachable the way the README says**: `python3 -m ctxproxy.fake_engine` (it moved into
+    the package in 0.3.2; `tests/fake_engine.py` is only an import shim), and the Install section now shows how
+    to try `check` and the proxy with no engine installed at all.
+  - Smaller documentation fixes from the same trial: how to get `uv` when it is missing, that
+    `pip install git+…` needs `git` on PATH, and that `$XDG_CONFIG_HOME/opencode/opencode.json` is usually
+    `~/.config/opencode/opencode.json`.
+  - The shutdown test `test_sigint_exits_promptly_with_idle_keepalive_connection` no longer fails on a loaded
+    machine: it waits for the proxy to really serve (up to 60 s) and then gives the shutdown a budget scaled to
+    that same machine's measured start-up time. What it proves is unchanged — an idle keep-alive connection must
+    not block shutdown, and a hang still fails.
+
+- **Automatic configuration: the proxy now chooses the engine/machine-dependent options, out loud.** Reported
+  on r/LocalLLM: *"why is the default config not the recommended config? It would be so nice if it could detect
+  the engine version, context size, VRAM + RAM and apply the best settings by itself"*, by a user who had
+  enabled saved state by hand and then found a 2 GB state file eating the RAM he needed for the model. The
+  answer was "because those values depend on your engine and your machine, and the proxy did not look". It
+  looks now (`ctxproxy/autoconfig.py`), and nothing is silent: every choice carries its reason and the way to
+  force it otherwise.
+  - **What is read**, all from endpoints and files already in use, no new dependency and no telemetry: the
+    engine version (Strata `/v1/status` → `engine`, e.g. `0.1.51`; llama-server `/props` → `build_info`), the
+    context window, saved-state support, how many requests the engine serves at once (Strata `concurrency`,
+    llama-server `total_slots`), whether the engine is on this host, RAM total and available (Linux
+    `/proc/meminfo`, macOS `sysctl` + `vm_stat`, Windows `GlobalMemoryStatusEx`), the free disk of `slot_dir`,
+    and — only when it comes for free — VRAM from the GPU figures Strata already reports, otherwise
+    `nvidia-smi` if it happens to be on PATH. Nothing is required: an unknown figure never blocks a choice.
+  - **What is decided**, when the user did not write it: `slot_save`, `mask_anchor` and `autosave` (the engine
+    offers saved state, it is on this host, `slot_dir` is set, and one state file fits in the available RAM —
+    `autosave` also needs the disk); `response_floor` = `window / 8` and `notes_max_tokens` =
+    `window * 3 / 32` (16384 and 12288 at 131072, 4096 and 3072 at 32768), from a 16384 window up;
+    `engine_tokenize` when the engine counts exactly and no `--tokenizer` was given. So the recommended
+    saved-state setup is now reached by writing **one** field, `slot_dir`.
+  - **The sizing number is explicit and has a source**: a state file costs about 19.5 KB per token of window
+    (`state_kb_per_token` — the 20000 bytes/token `autosave.py` already uses for its own disk check, so the two
+    agree), so 131072 tokens ≈ 2.4 GiB. The measured spread is wide (37–73 KB/token for Qwen3.5 35B-A3B,
+    7.6–9 KB/token for gemma E2B, ~115 KB/token for llama-server with Qwen3-0.6B), which is why it is a field
+    and why the rule is a floor and not a promise. With less RAM available than that, the saved-state options
+    stay off *and say why*, instead of filling the RAM the model needs. That is the r/LocalLLM case, decided
+    for the user.
+  - **Nothing that changes the prompt is touched.** An old conversation must be replayed byte for byte, so the
+    recommendations that change what the proxy writes into the prompt (`mask_reasoning`, `mask_tool_args`,
+    `recall_struct`, `recall_flex`, `recall_multi`, `tools_paging`) keep their default and the README now says
+    *why*, together with the three that stay opt-in because of what they spend (`seal_experimental`,
+    `kv_archive`, `live_dump`). Making them defaults needs the same per-conversation storage as the receipts.
+  - **Seen without starting anything**: `mnemonic-proxy check --explain-config` prints what was read, every
+    option chosen, every option left alone, each with its reason and its override; `--json` carries the same
+    under `auto_config`. The startup log prints the applied choices as `[mnemonic-proxy] auto config: …` and
+    `journal.jsonl` gets one `auto_config` event. `"auto_config": false` turns the whole mechanism off.
+  - **Upgrades keep what was running**: the choices are applied only on a fresh data folder. When the data folder
+    already has archived conversations they are reported (`kept`, with the value that would be picked and why)
+    and nothing changes, unless `"auto_config": true` is written. The proxy cannot tell a PolyStrata release
+    before v0.1.45-poly.7 from Strata, and there the first save on a `strata-poly` model ends the engine: an
+    upgrade must never turn saved state on by itself (`tests/test_autoconfig.py`, `TestExistingInstall`).
+  - Because `check` now reports the configuration the server would really run with, a Strata or llama-server
+    setup with `slot_dir` goes from *"supported by the engine, not enabled in the proxy config"* to
+    *"supported by the engine, configured in the proxy (slot_save, mask_anchor, autosave)"* with no edit.
+    Below a 16384 window nothing is decided: the proxy already refuses to start there without an explicit
+    opt-in, and the documented choice is the scaled defaults.
+  - Measured output engine by engine, the Strata 0.1.51 source reads behind the `concurrency` rule, and what is
+    deliberately *not* decided: `docs/dev-notes/AUTOCONFIG-RESULT.md`.
+
+## 0.3.22 — 2026-11-01
+
+- **Guards on the calibration of the token estimate.** The factor that corrects the chars/3.5 estimate from the
+  engine's `usage.prompt_tokens` could be moved to its full extent by a single sample, in either direction; a
+  sample that pulls it *down* makes the proxy estimate less than the real prompt, mask too late, and risk a prompt
+  the engine cuts in silence. Now a sample is accepted only above 1,000 estimated tokens and with a real/estimated
+  ratio inside 0.25–4.0 (outside it the sample is rejected and journalled as `calibration_rejected`), and until 5
+  samples have been accepted the factor may only grow, never shrink. Masking decisions are unchanged on the
+  language scenario: only the token counts the proxy prints move, by under 5% on blocks masked during the warm-up
+  (`tests/test_calibration_guards.py`), and the 0.3.0 byte-identity lock still holds for the old rule
+  (`TokenCounter(min_samples=1)`).
+
+  The lower clamp stays **0.5**, deliberately. Replaying 68 recorded local sessions (3,446 first-round requests
+  counted by estimate) the factor ran below 1.0 in 525 of them (15.2%), down to 0.514; the warm-up guard alone
+  brings that to 409 (−22%). Raising the clamp to 1.0 would remove them all, but it only moves the share of
+  requests whose estimate is below the real prompt from 66.5% to 63.6%, while the 95th percentile of
+  estimated/real goes from 1.047 to 1.211: window given away for almost no protection. chars/3.5 is already a
+  pessimistic baseline for prose (unlike the 4.0 of the tool this guard was modelled on), so a factor below 1.0 is
+  a legitimate correction, and prudence against a cut prompt belongs to `window_estimate_slack` and to the
+  `engine_truncated` detection, which already excludes a cut prompt from calibration (0.3.8).
+
+- **Setup: saved state is optional, and the session folder is the proxy's job.** Reported on r/LocalLLM: the
+  setup looked like it required `--slot-save-path` in the Strata configuration and a session folder created by
+  hand. It never did, and now nothing suggests it does.
+  - The proxy **creates `slot_dir` itself** (with its parents) when it is missing, both in `check` and at
+    startup, and says so (`slot_dir … (created by the proxy)`; `created the session folder …`). When it cannot,
+    the message carries the exact `mkdir -p` command. It does **not** create it when the engine is not on this
+    host: the local path would not be the engine's `--slot-save-path`, so `check` keeps failing with that
+    reason instead of hiding the mismatch behind an empty folder. `check --live` still verifies that the state
+    file really appears in `slot_dir`.
+  - `check` no longer calls base mode "disabled": with an engine that supports saved state but a config that
+    does not enable it, the line now reads *supported by the engine, not enabled in the proxy config: the proxy
+    works without it* and names what keeps working (masking, the verbatim archive, `recall`, segments with
+    handoff notes) and the one thing that is lost (the fast resume of a long session), plus how to turn it on
+    later. The old hint pointed Strata users at a llama-server example file.
+  - The **startup banner** reports the configuration, not just the engine: `saved state yes` only when a
+    save-producing option is on, otherwise `saved state off (optional)` followed by one line saying what still
+    works and how to enable it later. Before, a Strata engine printed `saved state yes` even with every
+    saved-state option set to `false`.
+  - **README**: a new *Strata in two commands* section — `pip install` plus one `mnemonic-proxy` line, no
+    configuration file, no folder to create, no engine flag — with saved state as a clearly optional later
+    step that gives the exact Strata command line and the three config fields. The engine table, Requirements
+    and Troubleshooting no longer present `--slot-save-path` and `slot_dir` as part of the basic setup, and T1
+    no longer tells the user to `mkdir` the proxy's own data folder.
+  - New tests: `tests/test_setup_optional_saved_state.py` (folder creation, the remote-engine refusal, the
+    unwritable-parent message, the `check` and startup wording, and the README's minimal path executed against
+    the fake Strata engine).
+
+- **README: opencode** — opencode 1.19.5 tested live against the proxy on Strata (Qwen3.8 Flash Next IQ3_XXS),
+  one 1 h 32 min session: 554 requests, real history up to 1.17 M tokens against a physical prompt of at most
+  108K, 51 masks, 3 segment switches, 44 `recall` calls by the model all served and used, 669 tool calls with no
+  empty result and no HTTP error. Masking costs ~5 s of extra prefill on the request where it happens (median
+  7.0 s against 1.9 s) and nothing on the next one. New *opencode (Chat Completions)* section with the minimal
+  copyable configuration (`provider` + `npm`, not the newer plural `providers`), the real auto-compaction switch
+  (`"compaction": {"auto": false}`) and the limits found; new *opencode on Strata, measured* table under *Tested
+  combinations*; opencode moved from the untested clients to the tested ones in the engines table.
+
+- **Richer receipts for a hidden tool output.** A receipt said what the call did and how it ended; it did not say
+  how big the output was, which kind of error it was, nor where the failure *started*. It now also carries the
+  output's size in lines and UTF-8 bytes, the error type (`AssertionError`, `command not found`, …) and the
+  **first** error line, cut at 160 characters — the last lines are still there for a failure. An output whose kind
+  is not recognised gets a receipt too (size, error fields and its first line) instead of only the first 140
+  characters. Every field is read off the archived bytes with fixed rules: no model, no clock, no counter, so the
+  same output always gives the same receipt and the placeholder stays a fixed point inside the cacheable prefix.
+
+  Measured cost (with `rich_receipts: true`) on the regression fixture of an oversized tool result: the prompt after
+  masking goes from 8,885 to 8,897 estimated tokens, +12 tokens for one receipt. The receipt is in the stable prefix, so it is paid once per
+  masked block.
+
+  Like the receipt language in 0.3.1, the choice is made at a conversation's first request and remembered: a
+  conversation that already has an archive keeps the receipts it was masked with, so its prefix stays byte-identical
+  and the engine's KV cache is not invalidated.
+
+  **Off by default** (`rich_receipts: false`): the cost is measured, the benefit is not. A richer receipt could also
+  make a model reason on the first error line instead of recalling the full output, so it stays opt-in until an
+  A/B run shows it does not hurt. Set `rich_receipts: true` to try it on new conversations.
 
 ## 0.3.21 — 2026-11-01
 

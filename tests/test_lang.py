@@ -49,14 +49,17 @@ class TestScenario(unittest.TestCase):
             os.makedirs(os.path.join(d, name))
         cls.en = run_session(os.path.join(d, "en"))
         cls.legacy = run_session(os.path.join(d, "legacy"), legacy_until=1)
-        cls.it = run_session(os.path.join(d, "it"), {"prompt_language": "it"})
+        # 0.3.22: the 0.3.0 golden predates the richer receipts, so the Italian-by-configuration session asks
+        # for the 0.3.21 receipts explicitly (tests/test_richer_receipts.py covers the new ones).
+        cls.it = run_session(os.path.join(d, "it"), {"prompt_language": "it", "rich_receipts": False})
         # 0.3.3: the 0.3.0 golden is byte-identical with the window guard off; with it on (default) exactly one
         # request differs - the handoff-notes request of the 40K segment step, whose prompt A + instruction was over
         # the window (40092 > 40000 - 64): the guard shortens A from the end (see test_guard_changes_only_notes).
         for name in ("legacy_off", "it_off"):
             os.makedirs(os.path.join(d, name))
         cls.legacy_off = run_session(os.path.join(d, "legacy_off"), {"window_guard": False}, legacy_until=1)
-        cls.it_off = run_session(os.path.join(d, "it_off"), {"prompt_language": "it", "window_guard": False})
+        cls.it_off = run_session(os.path.join(d, "it_off"), {"prompt_language": "it", "window_guard": False,
+                                                            "rich_receipts": False})
 
     @classmethod
     def tearDownClass(cls):

@@ -267,6 +267,10 @@ class TestRecall(Base):
         out = mgr.recall(p.conv, {"id": rid})
         self.assertIn("[continues: recall id=%s offset=100]" % rid, out)   # 0.3.1: English
         self.assertIn("not found", mgr.recall(p.conv, {"id": "rnonesiste"}))
+        # filtro di catena (0.3.24): il blocco è nella richiesta in corso, quindi max_idx non lo esclude;
+        # senza richiesta in corso (catena vuota) resta il solo taglio per indice.
+        self.assertIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
+        self.proxy.store.set_chain([])
         self.assertNotIn("riga 2 del file f2.txt", mgr.recall(p.conv, '{"query": "f2.txt"}', max_idx=1))
 
 
@@ -445,6 +449,34 @@ class TestLiveDump(Base):
     def setUp(self):
         super().setUp()
         self.proxy.cfg.data_dir = self.tmp.name
+
+    def test_picture_bytes_never_reach_the_dump(self):
+        # live_dump is a dashboard file read while requests run. A picture must be named the same way the
+        # journal and the KV sidecar name it - a hash - and a data: URI pasted into *text* (a tool printing a
+        # screenshot) is the same payload: it must not turn the file into megabytes of base64 either.
+        big = "data:image/png;base64," + "A" * 4096
+        path = os.path.join(self.tmp.name, "live", "last_request.json")
+        self.send([{"role": "user", "content": [{"type": "text", "text": "output: " + big},
+                                                 {"type": "image_url", "image_url": {"url": big}}]}])
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        self.assertNotIn("AAAA", raw)                     # no base64 run: not a part, not a quote in text
+        self.assertIn("<immagine:", raw)                  # one language with the journal: identity, not bytes
+        sent = self.eng.requests[-1]["messages"][-1]["content"]
+        self.assertEqual(sent[1]["image_url"]["url"], big)   # the engine still gets the picture itself
+        self.assertIn(big, sent[0]["text"])                  # and the quoted payload still reaches it as text
+
+    def test_a_picture_in_the_reply_is_folded_in_the_dump_too(self):
+        # the response fields are written by the same dump: a model echoing a data: URI must not put base64 on disk
+        big = "data:image/png;base64," + "B" * 4096
+        path = os.path.join(self.tmp.name, "live", "last_request.json")
+        self.eng.policy = lambda body: {"role": "assistant", "content": "ecco l'immagine: " + big}
+        r, _ = self.send([{"role": "user", "content": "mi mostri il banner?"}])
+        self.assertIn(big, r["choices"][0]["message"]["content"])      # the client gets the reply whole
+        with open(path, encoding="utf-8") as f:
+            raw = f.read()
+        self.assertNotIn("BBBB", raw)
+        self.assertIn("<immagine:", raw)
 
     def test_last_request_written_atomically(self):
         path = os.path.join(self.tmp.name, "live", "last_request.json")

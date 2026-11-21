@@ -40,6 +40,9 @@ CREATE INDEX IF NOT EXISTS temp.passages_conv ON passages(conv, idx);
 CREATE TEMP TABLE IF NOT EXISTS passages_done(rid TEXT, kind TEXT, PRIMARY KEY(rid, kind));
 CREATE VIRTUAL TABLE IF NOT EXISTS temp.p_raw USING fts5(t, content='', tokenize='unicode61 remove_diacritics 2');
 CREATE VIRTUAL TABLE IF NOT EXISTS temp.p_norm USING fts5(t, content='', tokenize='unicode61 remove_diacritics 2');
+-- 0.3.24: il filtro di catena del recall (core.chain_ok) legge questa tabella. Qui resta VUOTA: un archivio
+-- aperto in sola lettura non ha una «richiesta in corso», quindi il filtro vale come il vecchio idx < max_idx.
+CREATE TEMP TABLE IF NOT EXISTS cur_chain(rid TEXT PRIMARY KEY);
 """
 
 RECALL_DESC = (
@@ -373,7 +376,8 @@ def build_mcp_parser():
 
 def main(argv=None):
     a = build_mcp_parser().parse_args(argv)
-    compat.console_safe(sys.stderr)
+    # Only stderr: the stdio protocol writes JSON bytes on sys.stdout.buffer and must stay UTF-8.
+    sys.stderr = compat.console_safe(sys.stderr)
     srv = McpServer(Archive(a.db, a.journal, a.max_tokens, a.tokenizer))
     if a.http:
         srv.serve_http(a.host, a.http)

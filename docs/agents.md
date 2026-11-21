@@ -1,0 +1,283 @@
+# Agents
+
+## Connect your agent
+
+Point the agent at the proxy (port 8096) instead of the engine and turn off the agent's own auto-compaction,
+otherwise two context managers fight over the same history:
+
+| agent | point it at | turn off | setup |
+|---|---|---|---|
+| pi, omp | `http://127.0.0.1:8096/v1` (`openai-completions`) | `"compaction": {"enabled": false}` | [T1 step 6](install.md#t1--a-real-model-on-cpu), [omp](#pi-hermes-continue--chat-completions) |
+| opencode | `http://127.0.0.1:8096/v1` (`openai-compatible` provider) | `"compaction": {"auto": false}` | [opencode](#opencode-chat-completions) |
+| Hermes Agent | `http://127.0.0.1:8096/v1` (custom provider) | `compression.enabled: false` | [Hermes setup and test notes](hermes-agent.md) |
+| DeepSeek Harness (`dsh`) | `baseURL: http://127.0.0.1:8096/v1` (`api: openai-completions`) | `compaction-basic` and `tool-result-pruner`: `disabled: true` | [DeepSeek Harness](#deepseek-harness-chat-completions) |
+| Continue, other Chat Completions clients | `http://127.0.0.1:8096/v1` | the client's own context compaction | [Chat Completions](#pi-hermes-continue--chat-completions) |
+| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:8096` (no `/v1`) | `DISABLE_AUTO_COMPACT=1` | [Claude Code](#claude-code-anthropic-messages) |
+| Codex | `base_url = "http://127.0.0.1:8096/v1"`, `wire_api = "responses"` | no switch: `model_auto_compact_token_limit = 100000000` | [Codex](#codex-openai-responses) |
+| any MCP client (Claude Code, Codex, Hermes) | `mnemonic-mcp --db ./data/archive.sqlite` (read-only search of the archive) | — | [MCP](#mcp-recall-server-claude-code-codex-hermes) |
+
+## pi, Hermes, Continue, … (Chat Completions)
+
+Point the client's OpenAI base URL at `http://127.0.0.1:8096/v1`. For pi, the two files of T1 step 6 (with your real
+`contextWindow`/`maxTokens`). For other clients: their OpenAI-compatible provider setting, plus their own way to turn
+off context compaction.
+
+**omp ([oh-my-pi](https://github.com/can1357/oh-my-pi))** — tested with 18.10.1 on Strata. omp reads YAML from
+`~/.omp/agent/` (or `$PI_CODING_AGENT_DIR`). Add the proxy as a provider in `models.yml`:
+
+```yaml
+providers:
+  mnemonic:
+    baseUrl: http://127.0.0.1:8096/v1
+    api: openai-completions
+    apiKey: none
+    auth: apiKey
+    compat:
+      supportsDeveloperRole: false
+      supportsReasoningEffort: false
+      maxTokensField: max_tokens
+      thinkingFormat: qwen-chat-template   # for Qwen models; drop it for others
+    models:
+      - id: qwen3.8-flash-next-iq3_xxs     # the id your engine reports at /v1/models
+        name: Flash Next via mnemonic-proxy
+        reasoning: true
+        input: [text]
+        contextWindow: 131072              # the engine's real window
+        maxTokens: 16384                   # leave room for reasoning (see the ds4 note below)
+        cost: {input: 0, output: 0, cacheRead: 0, cacheWrite: 0}
+```
+
+and turn omp's own compaction off in `config.yml`, so the proxy manages the window:
+
+```yaml
+compaction:
+  enabled: false
+```
+
+Then `omp --model mnemonic/qwen3.8-flash-next-iq3_xxs`. If you use extensions that also shorten tool output (for
+example SoL-Pi's ObservationPack), we have not tested them together with the proxy.
+
+## opencode (Chat Completions)
+
+Tested with opencode **1.19.5** on Strata: one 1 h 32 min session, 554 requests, 51 masks, 44 `recall` calls of
+which 19 returned archived text, numbers [below](engines.md#opencode-on-strata-measured). Put this in
+`$XDG_CONFIG_HOME/opencode/opencode.json`
+(global; `$XDG_CONFIG_HOME` defaults to `~/.config`, so that is usually `~/.config/opencode/opencode.json`)
+or `opencode.json` in the project:
+
+<!-- readme-test: real-engine; config: client -->
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "compaction": { "auto": false },
+  "autoupdate": false,
+  "provider": {
+    "mnemonic": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "mnemonic-proxy",
+      "options": {
+        "baseURL": "http://127.0.0.1:8096/v1",
+        "apiKey": "local",
+        "timeout": false,
+        "headerTimeout": false,
+        "chunkTimeout": false
+      },
+      "models": {
+        "qwen3.8-flash-next-iq3_xxs": {
+          "name": "Flash Next via mnemonic-proxy",
+          "tool_call": true,
+          "reasoning": true,
+          "limit": { "context": 131072, "output": 16384 },
+          "cost": { "input": 0, "output": 0, "cache_read": 0, "cache_write": 0 }
+        }
+      }
+    }
+  },
+  "model": "mnemonic/qwen3.8-flash-next-iq3_xxs"
+}
+```
+
+The model key is the id your engine reports at `/v1/models`; `limit.context` is the engine's real window. Then
+`opencode` (TUI) or, non-interactively, `opencode run --model mnemonic/qwen3.8-flash-next-iq3_xxs --auto "…"` and
+`opencode run -c --model … --auto "…"` to continue the same session.
+
+**Auto-compaction off**: `"compaction": {"auto": false}` is the real option (`Enable automatic compaction when
+context is full`, default `true`, in opencode's own `config.json` schema). With it off, a 537-message session
+produced no summary message and no compaction event in opencode's database. Note that opencode counts tokens from
+the `usage` the proxy returns — the **physical** prompt (max 108K here), not the real history (1.17 M tokens at the
+end) — so it would rarely trigger compaction anyway; turn it off regardless, so only one context manager is at work.
+
+**Timeouts off, for a local engine only**: `false` disables opencode's waits (current opencode docs: 5 minutes for
+the response headers, 15 minutes between streamed chunks, then up to three retries). With a local engine a slow
+answer is normal, not a failure: reading a 105K-token prompt cold, then about 2 minutes of handoff notes at a
+segment switch, then a long answer can go past those limits, and a retry starts the same work again. In front of a
+hosted API, keep finite timeouts instead (for example `"chunkTimeout": 120000`): there a silent connection is a fault,
+and with `false` the session waits with no error. The proxy's own wait for the engine is fixed at one hour of
+silence, so it is not a substitute. Thanks to u/FallElectronic3774 for pointing this out.
+
+Limits found:
+
+- Use the **`provider`** key with **`npm`**, not the newer plural `providers` + `package`: with `providers` the
+  model does not appear in `opencode models` and `opencode run` fails with
+  `UnknownError … Unexpected server error`.
+- If npm blocks install scripts, `opencode-ai`'s `postinstall` does not fetch the binary: run
+  `cd node_modules/opencode-ai && node postinstall.mjs` once.
+- `opencode run` needs `--auto`, otherwise it waits for permission approvals that never come.
+- Tool calls go through unchanged (669 calls: `read`, `bash`, `edit`, `write`, `grep`; no empty results, no HTTP
+  errors). The only failures were 5 `edit` calls rejected **by opencode** with `Could not find oldString in the
+  file`: the model rebuilt the old text from memory after its own earlier tool arguments had been masked. It
+  recovered with `write`.
+- `recall` never appears in opencode's tool list: the proxy injects it and answers it in its own internal rounds.
+- The model re-reads a lot (415 `reread` events, often `read … limit=60`); in one turn that became a ~20 minute
+  read loop before it wrote the file. That is the model, not the proxy.
+
+## DeepSeek Harness (Chat Completions)
+
+Tested with DeepSeek Harness (`dsh`) **0.2.2-rc.1** (Node 24), in front of Unsloth with Qwen3.6-35B-A3B and a 64K
+window; numbers [below](#deepseek-harness-measured). `dsh` takes a custom OpenAI-compatible provider in the patch layer
+of a profile, `$DSH_HOME/profiles/<profile>/cordis.patch.yml` (the profile folder appears after the first
+`dsh --profile <profile>`). This is the file we used for the `headless` profile:
+
+<!-- readme-test: real-engine; config: client -->
+```yaml
+- id: llm-pi-ai
+  config:
+    providers:
+      mnemonic:
+        displayName: mnemonic-proxy
+        apiKeyEnv: MNEMONIC_PROXY_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8096/v1
+        streamIdleTimeoutMs: 1800000
+        models:
+          - id: Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL
+            name: Qwen3.6-35B-A3B via mnemonic-proxy
+            contextWindow: 1000000
+            maxTokens: 8192
+- id: agent-default-model
+  config:
+    provider: mnemonic
+    model: Qwen3.6-35B-A3B-MTP-UD-Q4_K_XL
+- id: compaction-basic
+  disabled: true
+- id: tool-result-pruner
+  disabled: true
+```
+
+The model `id` is the one your engine reports at `/v1/models`. `apiKeyEnv` names the environment variable dsh reads
+the key from; we set it to any value (the proxy does not check it, and passes its own `--api-key` to the engine). Then:
+
+<!-- readme-test: real-engine -->
+```bash
+MNEMONIC_PROXY_KEY=local dsh --profile headless "…"
+MNEMONIC_PROXY_KEY=local dsh --profile headless --session-id session-… "…"   # continue the same session
+```
+
+`dsh --profile headless --dump-config` shows the composed profile: both entries must carry `disabled: true`.
+
+- **Two context managers off.** `compaction-basic` is dsh's own compaction and `tool-result-pruner` cuts tool
+  outputs over 8,192 characters to a head and a tail; with both on, dsh and the proxy would shrink the same history.
+  With them off, dsh prints `warning: 1 entry did not activate` (`command-compact`, waiting for the compaction
+  service): expected, `/compact` is simply not there.
+- **`contextWindow` above the real window.** The agent's history can grow past the engine's window; the proxy keeps
+  the prompt inside the real one, which it reads from the engine. We did not test what dsh does with a value equal to
+  the engine's window.
+- **`streamIdleTimeoutMs`.** dsh gives up after 5 minutes without a streamed chunk (default 300000). A cold
+  long prompt or the handoff notes of a segment switch can be silent for longer on a local engine; 30 minutes here.
+  In front of a hosted API keep a finite value of a few minutes, [as for opencode](#opencode-chat-completions).
+- **Side requests.** dsh asks the model for a session title in a separate, short request; the proxy files it as its
+  own conversation, next to the agent's.
+
+### DeepSeek Harness, measured
+
+`dsh --profile headless --json` on AI395 (Radeon 8060S, Vulkan), Unsloth 2026.11.3 with Qwen3.6-35B-A3B
+`UD-Q4_K_XL` and `--context-length 65536`, mnemonic-proxy 0.3.25 from PyPI. Task: read 12 files of about 3,000
+tokens each one per tool call, add up the numbers in each, give the grand total; then, in the same session
+(`--session-id`), give the code written on line 71 of the first file without reading it again.
+
+| | |
+|---|---|
+| answers | grand total **82,885** (exact); code **`AMBER-7731-KESTREL`** (exact), taken back with `recall` |
+| requests | 7 to the engine, 0 errors; 17 `read` calls, all with results |
+| history archived | 68,653 tokens; peak prompt 57,243 (window 65,536); dsh's system prompt and tools alone ≈ 19,200 |
+| masks / `recall` | 2 masks (47,309 tokens hidden) / 6 `recall`, 24-344 ms each |
+| segment switches | none (the task stayed inside one segment) |
+| wall time | 5 min 49 s for both turns |
+
+## Claude Code (Anthropic Messages)
+
+Checked against Claude Code 2.1.287; a 1 h 41 min session with 2.1.284 on Strata is measured
+[below](benchmarks.md#claude-code-and-codex-live-on-strata). Claude Code may print `unrecognized_model local-model`: it works
+anyway.
+
+<!-- readme-test: real-engine -->
+```sh
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8096      # no /v1
+export ANTHROPIC_AUTH_TOKEN=local                    # any value; the proxy does not check it
+export ANTHROPIC_MODEL=local-model                   # any name; the engine serves its loaded model
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=local-model     # background tasks (replaces ANTHROPIC_SMALL_FAST_MODEL)
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1    # fewer side requests competing for the engine
+export DISABLE_AUTO_COMPACT=1                        # turns off auto-compaction; /compact still works
+claude
+```
+
+`ANTHROPIC_SMALL_FAST_MODEL` is still read by 2.1.287 (it takes precedence), but the documented name is
+`ANTHROPIC_DEFAULT_HAIKU_MODEL`. `DISABLE_COMPACT=1` would also turn off the manual `/compact`.
+`POST /v1/messages` (streaming and not) and `POST /v1/messages/count_tokens` are supported. Thinking blocks get a
+local placeholder signature: a session started through the proxy cannot be continued on Anthropic's API.
+
+With `--client-key-file` the proxy checks the key a client sends, so `ANTHROPIC_AUTH_TOKEN` has to be the key read from
+`--client-key-file` ([Security & privacy](security.md#security--privacy)).
+
+## Codex (OpenAI Responses)
+
+Codex 0.160 speaks only the Responses API (`wire_api = "chat"` is rejected). In `~/.codex/config.toml` (or a separate
+`CODEX_HOME`):
+
+```toml
+model = "local-model"
+model_provider = "local"
+model_context_window = 131072              # the proxy's window; Codex compacts relative to this
+model_auto_compact_token_limit = 100000000 # compaction threshold far above any real session
+
+[model_providers.local]
+name = "local engine via mnemonic-proxy"
+base_url = "http://127.0.0.1:8096/v1"
+wire_api = "responses"
+env_key = "LOCAL_API_KEY"          # export LOCAL_API_KEY=local (any value)
+requires_openai_auth = false
+supports_websockets = false
+```
+
+Codex 0.160 has no setting that turns auto-compaction off: `model_auto_compact_token_limit` only moves the
+threshold. Set it far above any session, as above, so that in practice the proxy is the only context manager.
+Codex's `prompt_cache_key` is used as the conversation key. Stateless only (`store=false`, no
+`previous_response_id`), which is what Codex sends.
+
+## MCP recall server (Claude Code, Codex, Hermes)
+
+The archive can also be searched from any MCP client, read-only (sqlite `mode=ro`; the proxy can keep writing). Three
+tools: `recall` (same search as the proxy's tool), `conversations`, `journal`.
+
+<!-- readme-test: ci -->
+```sh
+mnemonic-mcp --db ./data/archive.sqlite                 # stdio
+mnemonic-mcp --db ./data/archive.sqlite --http 8133     # streamable HTTP on 127.0.0.1:8133/mcp
+```
+
+<!-- readme-test: real-engine -->
+```sh
+claude mcp add mnemonic -- mnemonic-mcp --db /path/to/data/archive.sqlite
+codex mcp add mnemonic -- mnemonic-mcp --db /path/to/data/archive.sqlite
+hermes mcp add mnemonic --command mnemonic-mcp --args --db /path/to/data/archive.sqlite
+```
+
+`python3 -m ctxproxy.mcp_server` is the same program. Hermes `config.yaml` equivalent:
+
+```yaml
+mcp_servers:
+  mnemonic:
+    command: mnemonic-mcp
+    args: [--db, /path/to/data/archive.sqlite]
+    enabled: true
+```

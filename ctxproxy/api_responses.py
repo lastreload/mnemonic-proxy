@@ -106,7 +106,7 @@ def to_chat_messages(instructions, items, custom_names=()) -> list[dict]:
             elif role == "user":
                 out.append({"role": "user", "content": text})
             else:
-                raise BadRequest("%s: ruolo non supportato: %r" % (where, role))
+                raise BadRequest("%s: unsupported role: %r" % (where, role))
         elif t == "reasoning":
             if pend is not None and (pend.get("tool_calls") or pend.get("content")):
                 flush()
