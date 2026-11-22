@@ -36,8 +36,24 @@ def _tool_view(tdef):
     return _ToolView(tdef) if isinstance(tdef, dict) else tdef
 
 
+def _openai_tools(tools):
+    """Canonical input used by common_chat_tools_to_json_oaicompat, not client extras."""
+    out = []
+    for tool in tools or []:
+        fn = tool.get('function') if isinstance(tool, dict) else None
+        if not isinstance(fn, dict) or tool.get('type') != 'function' or 'name' not in fn:
+            raise ValueError('openai pack tools require type=function and function.name')
+        out.append({'type': 'function', 'function': {
+            'name': fn['name'], 'description': fn.get('description', ''),
+            'parameters': fn.get('parameters', {})}})
+    return out or None
+
+
 class PackTemplate:
-    def __init__(self, path):
+    def __init__(self, path, *, tools_format='strata'):
+        if tools_format not in ('strata', 'openai'):
+            raise ValueError("template_tools_format must be 'strata' or 'openai'")
+        self.tools_format = tools_format
         try:
             from jinja2.sandbox import ImmutableSandboxedEnvironment
             env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True,
@@ -80,12 +96,18 @@ class PackTemplate:
             role = msg.get('role')
             if role == 'developer':
                 role = 'system'
-            if role == 'system' and i > 0:
+            if role == 'system' and i > 0 and self.tools_format == 'strata':
                 role = 'user'
             content = msg.get('content')
             if _has_image(content):
                 # vetted by picture_contract: a leading system message got there, no source is empty
                 body = parts_of(content, 'messages[%d].content' % i)
+            elif self.tools_format == 'openai' and isinstance(content, list):
+                # common's string-content normalization joins text parts with newlines.
+                body = ''
+                for part in content:
+                    if isinstance(part, dict) and part.get('type') == 'text':
+                        body += ('\n' if body else '') + part.get('text', '')
             else:
                 # a picture-free content goes to the template as its text, exactly as _parts_of flattens it
                 body = _text_of(content)
@@ -103,12 +125,14 @@ class PackTemplate:
                                               **({'id': call['id']} if call.get('id') else {})})
             # PolyStrata ignores completed empty assistant turns. A message with parts is never treated as empty:
             # a picture is content, and dropping the turn would silently drop the engine's promise of seeing it.
-            if (i != len(messages) - 1 and role == 'assistant' and isinstance(out['content'], str)
+            if (self.tools_format == 'strata' and i != len(messages) - 1 and role == 'assistant' and isinstance(out['content'], str)
                     and not out['content'].strip() and not out.get('tool_calls')):
                 continue
             normalized.append(out)
-        tdefs = [_tool_view(t.get('function', t) if t.get('type') == 'function' else t)
-                 for t in tools or []] or None
+        # Frontend contract, not a model-family heuristic. Preserve the default.
+        tdefs = _openai_tools(tools) if self.tools_format == 'openai' else [
+            _tool_view(t.get('function', t) if t.get('type') == 'function' else t)
+            for t in tools or []] or None
         try:
             rendered = self.template.render(messages=normalized, tools=tdefs, add_generation_prompt=True,
                                             **{'enable_thinking': True, **kwargs})
@@ -133,8 +157,8 @@ class PackTemplate:
         return (rendered, markers) if with_counts else rendered
 
 
-def discover(tokenizer_path):
+def discover(tokenizer_path, *, tools_format='strata'):
     path = Path(tokenizer_path)
     directory = path if path.is_dir() else path.parent
     template = directory / 'chat_template.jinja'
-    return PackTemplate(template) if template.is_file() else None
+    return PackTemplate(template, tools_format=tools_format) if template.is_file() else None

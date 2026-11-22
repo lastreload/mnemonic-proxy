@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.35 — 2026-11-22
+
+- **Optional model profiles (#45 / #27).** Each request's concrete `model` selects its tokenizer and
+  adjacent chat template, slot directory, window, archive/accounting and saved-file ownership. Exact names
+  win over patterns; unknown names fail before streaming unless an explicit default profile is configured.
+  Returning A → B → A resumes A's own state, not B's. Client-supplied history is not filtered.
+- Automatic-configuration provenance is retained per runtime through refresh/restart; explicit small-window
+  thresholds scale only once. Only the active model's idle autosaver runs; `--mode off` starts no profile
+  managed-state workers. Existing setups without profiles require no migration or configuration changes;
+  optional authentication, input/image protections and native reasoning-effort handling remain unchanged.
+- **Explicit pack-template frontend format.** `template_tools_format: "openai"` opts into canonical
+  llama.cpp-style tool inputs and text-message normalization for local counting, without rewriting the
+  forwarded body or model template. The `"strata"` default is unchanged. Enabling it can increase counts
+  and trigger masking earlier than the old unwrapped format. No engine/model-name autodetection is added.
+- **Limits and evidence.** Real text-only Qwen3-0.6B → Granite4.2-3B → Qwen switching, proxy restart and
+  saved-state isolation were checked against backend revision `6c5afc86`, with exact final forwarded counts.
+  Subsequent opt-in renderer changes were checked offline against the same library and preserved all four
+  captured prompts/token-ID arrays. This is not universal backend/template or PolyStrata qualification,
+  nor an output-quality benchmark. See [configuration and scope](docs/configuration.md#model-profiles).
+- `forget` refuses active profile data/configuration before any changes, including list/dry-run: full
+  profile-aware deletion is not implemented. Empty/absent profiles retain legacy single-archive deletion.
+  MCP still opens one explicitly selected archive. See the [profile limits](docs/configuration.md#model-profiles).
+- Thanks to @akohlsmith for describing the multi-model workflow and helping shape the request.
+
 ## 0.3.34 — 2026-11-21
 
 - **Model-native reasoning effort (#100).** Prompt counting no longer promotes `high` or unknown values to

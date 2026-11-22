@@ -323,6 +323,9 @@ class Config:
     live_dump: bool = False         # scrive data_dir/live/last_request.json (prompt fisico + risposta) per la dashboard
     # motore (engines.py): auto = rilevato all'avvio; strata | llama.cpp | openai lo forzano
     engine: str = "auto"
+    # Pack-template input contract: default PolyStrata unwraps definitions;
+    # opt-in OpenAI/llama.cpp preserves wrappers for the template to handle.
+    template_tools_format: str = "strata"
     slot_id: int = 0                # slot del motore (llama-server con --parallel N)
     engine_tokenize: bool = False   # conteggio token esatto via /tokenize del motore (llama.cpp), se non c'è --tokenizer
     # 0.3.7 llama-server router mode (router.py): model used when the client's "model" is not served by the router
@@ -331,6 +334,9 @@ class Config:
     router_load_timeout_s: float = 600.0
     # streaming only: while the model loads the client gets an SSE comment (": loading model <id>") this often
     router_keepalive_s: float = 10.0
+    # 0.3.20: optional per-model profiles (issue #27). Empty = the legacy single-configuration path, unchanged.
+    profiles: dict = dataclasses.field(default_factory=dict)
+    default_profile: str = ""
     # ds4-server: ds4 rimette nel prompt le tool call campionate prese per id (exact DSML replay), quindi
     # mask_tool_args non serve e viene spento; false solo se ds4-server gira con --disable-exact-dsml-tool-replay
     ds4_exact_tool_replay: bool = True
@@ -702,7 +708,9 @@ class TokenCounter:
     `scale` si calibra con i prompt_tokens reali restituiti da Strata."""
 
     def __init__(self, chars_per_token: float = 3.5, tokenizer_path: str | None = None,
-                 min_samples: int = CALIB_MIN_SAMPLES):
+                 min_samples: int = CALIB_MIN_SAMPLES, *, template_tools_format: str = "strata"):
+        if template_tools_format not in ("strata", "openai"):
+            raise ValueError("template_tools_format must be 'strata' or 'openai'")
         self.cpt = chars_per_token
         self.scale = 1.0
         self.samples = 0            # accepted calibration samples (see calibrate)
@@ -721,7 +729,7 @@ class TokenCounter:
         self.prompt_template = None
         if self.tk is not None and tokenizer_path:
             from .chattemplate import discover
-            self.prompt_template = discover(tokenizer_path)
+            self.prompt_template = discover(tokenizer_path, tools_format=template_tools_format)
 
     @property
     def exact(self) -> bool:
@@ -1226,6 +1234,8 @@ class Manager:
         self._split_gate = NativeSplitGate(cfg, journal)
         self._tool_heads_fp: dict = {}   # conv -> impronta dell'elenco strumenti già registrato (evento tool_heads)
         self.question = ""           # ultima domanda dell'utente (recall_leaf_select), impostata dal server
+        # ProfileProxy sets the concrete model here. Empty preserves the legacy hashes and conversation ids.
+        self.conversation_namespace = ""
 
     def L(self, it: str, en: str) -> str:
         """Testo nella lingua della conversazione corrente."""
@@ -1549,10 +1559,12 @@ class Manager:
         events: list[dict] = []
         conv, known = self.store.find_conv(hs)
         if hint:
-            conv = "c-" + H(hint)[:16]
+            conv = "c-" + H((self.conversation_namespace + "\0" + hint) if self.conversation_namespace else hint)[:16]
         existed = conv is not None and self.store.has_conv(conv)   # già nell'archivio prima di questa richiesta
         if conv is None:
-            conv = "c" + uuid.uuid4().hex[:12]
+            # A model namespace makes saved-state filenames unique even if a caller replaces uuid4 in tests.
+            conv = "c" + H(self.conversation_namespace + "\0" + uuid.uuid4().hex)[:12] \
+                if self.conversation_namespace else "c" + uuid.uuid4().hex[:12]
             events.append(self.journal.log("new_conversation", conv=conv, messages=len(msgs)))
         elif known < len(hs) - 1 and known >= 0 and self.store.has_successor(conv, known):
             # un messaggio in posizione known+1 era già stato visto, ma diverso: modifica/rigenerazione = ramo

@@ -290,7 +290,14 @@ def main(argv=None):
     if a.conv is not None and not re.fullmatch(r"[A-Za-z0-9_-]+", a.conv):
         ap.error("invalid conversation id (expected letters, digits, '_' or '-')")
     try:
-        _, cfg = load_config(a)
+        raw, cfg = load_config(a)
+        data = Path(a.data).resolve()
+        # A root-only deletion could erase the journal and falsely report success while
+        # leaving model-specific plaintext untouched. Until profile-aware maintenance is
+        # implemented, fail before locking, snapshots, or any write, even without --config.
+        if raw.get("profiles") or any((data / "models").glob("*/archive.sqlite")):
+            raise ValueError("forget does not yet support model-profile archives; no data changed. "
+                             "Do not use a root-only deletion for this data directory.")
         source = a.config or os.environ.get("MNEMONIC_CONFIG") or "Config defaults"
         slot = os.path.abspath(os.path.expanduser(a.slot_dir)) if a.slot_dir else cfg.slot_dir
         if a.slot_dir:

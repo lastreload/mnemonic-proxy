@@ -374,6 +374,9 @@ def handle(h, proxy, path: str, raw: bytes):
     except (ValueError, TypeError, KeyError, AttributeError) as e:
         return h._send(400, error_body(400, str(e)))
     if path.endswith("/count_tokens"):
+        if hasattr(proxy, "count_tokens"):
+            st, out = proxy.count_tokens(req)
+            return h._send(st, out if st == 200 else error_body(st, _err_message(out)))
         n, _ = proxy.mgr.estimate(req["messages"], req.get("tools"))
         return h._send(200, {"input_tokens": int(n)})
     hint = h.headers.get("X-Strata-Conversation")

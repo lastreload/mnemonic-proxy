@@ -1,5 +1,110 @@
 # Configuration
 
+## Pack template tool input
+
+`template_tools_format` defaults to `"strata"`: tool definitions are unwrapped,
+with the existing `tool.function` compatibility view. Set it explicitly to
+`"openai"` for the qualified llama.cpp-style canonical input contract.
+This rebuilds the canonical
+`type/function/name/description/parameters` catalogue as that frontend does,
+including defaults and discarding client-only extras, without changing the
+forwarded body. The opt-in also preserves intermediate system/empty assistant
+turns and joins text parts with newlines; the Strata default stays unchanged.
+The setting is inherited and may be overridden per model profile. Unknown
+values fail startup. Malformed OpenAI tools fail counting rather than silently
+claiming an exact count for a body the frontend would reject.
+
+This does not rewrite the model's template or qualify every backend/template
+combination. Compare the complete prompt and token IDs with the actual backend
+before enabling it. Existing callers and the built-in renderer keep their
+previous default. No frontend is inferred from a model name.
+
+Enabling `"openai"` can increase tool-bearing prompt counts and trigger masking
+sooner than the old unwrapped format; it is not a global default change. It affects
+local pack-template rendering only: without a matching local chat template it is
+not a replacement for backend-specific counting qualification.
+
+## Model profiles
+
+Since 0.3.35, `profiles` maps each request's concrete `model` to a tokenizer and optional adjacent
+`chat_template.jinja`, session directory, window and normal configuration fields:
+
+<!-- readme-test: illustrative; config: partial -->
+```json
+{
+  "profiles": {
+    "model-a": {"tokenizer": "/packs/a/tokenizer", "slot_dir": "/slots/a"},
+    "model-b": {"tokenizer": "/packs/b/tokenizer", "slot_dir": "/slots/b"},
+    "model-c-*": {"tokenizer": "/packs/c/tokenizer", "slot_dir": "/slots/c"}
+  }
+}
+```
+
+Replace those model IDs and placeholder paths with your actual engine aliases,
+local tokenizer packs and engine-side session directories. Install
+`mnemonic-proxy[exact]` for local tokenizer/template support. For the qualified
+llama.cpp frontend path, also set `"template_tools_format": "openai"` at the
+top level (or in each relevant profile); keep the default for Strata. This choice
+is explicit, not inferred by automatic configuration. Then run `mnemonic-proxy
+check --upstream http://127.0.0.1:8095 --data ./data-profiles --config profiles.json`
+with your engine address and config file, and start with the same arguments
+without `check`. No change is required for a single-model setup without profiles.
+
+Exact names win; shell-style patterns are checked in declaration order. An unknown or missing model is
+HTTP 400 before streaming starts, unless `default_profile` explicitly names an exact profile; then that
+concrete model is selected, never whichever handled the preceding request. A profile inherits top-level
+options and may override them. Invalid tokenizers/templates fail startup rather than silently estimate.
+The engine-reported context wins over a configured fallback; `window_override: true` requests the configured
+window but does not bypass engine safety checks. Explicit small-window thresholds scale only once.
+
+Each concrete model, including two ids matching the same pattern, owns a runtime, token counter/template,
+conversation accounting and SQLite archive under `data/models/<sha256(model)[:20]>`. `model.json` records
+the concrete id and profile. Switching A → B → A retains A's archived state; it does not transfer it to B.
+This is archive isolation, NOT client-history filtering: if the client resends A's raw messages to B, B
+receives those messages. Use separate client conversations when separate histories are intended.
+The archive HTTP endpoint keyed only by a recall id is an administrative view, not a model authorization
+boundary; ids derived from identical messages may be present in more than one archive.
+
+Automatic configuration uses each concrete model directory's own provenance, read before creating the
+archive. New directories get `autoconfig.json`; old directories without that mark keep their previous
+choices unless `auto_config` is explicitly enabled. Startup, request refresh and restart preserve this
+rule. Explicit profile/top-level options win. Default live dumps go into that model directory. Internal
+notes, recall, final retries, anchors, saves and remote token counting retain the selected model id.
+
+The shared engine is serialized. Only the active runtime's idle autosaver is ticked; `--mode off` does not
+start profile autosave/archive workers or archive/mask client messages. Session-file ownership is recorded
+in `profile-slot-models.json`, shared across runtimes and persistent across restart. A restore owned by a
+different or unknown concrete model is refused before calling the engine. Use distinct engine-side
+session directories and the engine's real model aliases. Retention caps (`autosave_keep`, `autosave_max_gb`)
+are PER RUNTIME, not a global disk cap; explicitly shared custom `data_dir`/archive paths remain the
+operator's responsibility.
+
+Limitations:
+
+- `forget` refuses active model-profile data/configuration, including `--list` and `--dry-run`, with a nonzero
+  exit and no changes. It does not falsely report root-only deletion as successful. Profile-aware
+  deletion is not implemented; do not claim such data has been deleted. An empty/absent `profiles` map
+  keeps the legacy single-archive behavior.
+- MCP still opens one explicitly selected SQLite archive, not an automatic cross-model aggregate.
+- Static `check` lists profile fallbacks without loading inactive models; `check --live` actively switches
+  through exact profiles. It is not a read-only inventory; do not run it against an engine in use.
+- Strata selection may issue a one-token probe before reading the selected model's context. Pattern
+  matches are validated when a concrete model is requested.
+
+Qualification: one text-only backend build (`6c5afc86`), Qwen3-0.6B-Q8_0 at 32768 tokens and
+Granite4.2-3B-Q4_K_M at 49152 tokens. Four generations covered A → B → A and a proxy-only restart:
+final guard, Manager, tokenizer and backend usage agreed at 1444 / 1671 / 1472 / 1501 tokens with
+scale 1, separate archive/recall and two real restores of A's saved state. The generative runtime
+preceded the last opt-in normalization fix; the final renderer was checked offline against twenty
+cases from the exact common library, with all four captured prompt/token-ID hashes unchanged.
+This does not establish universal llama.cpp/template compatibility or qualify PolyStrata, vision,
+or model output quality. One final response did not follow the requested literal wording; it was
+not retried or counted as a quality success. CPU fixture tests cover additional lifecycle and HTTP
+cases but are not further real-model evidence.
+
+Without `profiles`, the 0.3.34 path and its optional authentication, image checks, native reasoning-effort
+handling and `off` pass-through are retained. No new key, migration or profile configuration is required.
+
 Output limits in managed mode: `max_completion_tokens` takes precedence over `max_tokens` when both are supplied;
 without either field, `default_response` is used (16384 by default). These values are ceilings, not a reason to
 switch segments. After masking and any necessary switch, the proxy caps the response to
