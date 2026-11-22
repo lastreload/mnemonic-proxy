@@ -15,14 +15,14 @@ from ctxproxy.core import Config, TokenCounter
 from ctxproxy.render import template_kwargs
 
 F = Path(__file__).parent / 'fixtures' / 'pr45_real'
-RAW = json.loads((F / 'backend-A.json').read_text())
+RAW = json.loads((F / 'backend-A.json').read_text(encoding='utf-8'))
 
 
 @unittest.skipUnless(importlib.util.find_spec('jinja2') and importlib.util.find_spec('tokenizers'),
                      'install mnemonic-proxy[exact]')
 class RealTemplateTests(unittest.TestCase):
     def test_exact_common_library_variants(self):
-        cases = json.loads((F / 'library-variants.json').read_text())
+        cases = json.loads((F / 'library-variants.json').read_text(encoding='utf-8'))
         self.assertEqual(len(cases), 20)
         for c in cases:
             with self.subTest(case=c['id']):
