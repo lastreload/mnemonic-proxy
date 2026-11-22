@@ -2131,8 +2131,12 @@ class Manager:
             if i in drops and is_human_user(m):
                 end = self.exchange_end(msgs, i)
                 js = [phys_of[k] for k in range(i + 1, end) if k in phys_of]
+                # exchanges containing an assistant closing message are not drop-masked:
+                # the closing text stays visible so the closing rule survives in the history
                 if js and all(x not in protected for x in js) and after[end - 1] >= cfg.min_age_turns \
-                        and not any(k in pinned for k in range(i, end)):
+                        and not any(k in pinned for k in range(i, end)) \
+                        and not any(msgs[k].get("role") == "assistant" and content_text(msgs[k].get("content")).strip()
+                                    and not msgs[k].get("tool_calls") for k in range(i, end)):
                     before = sum(per[x] for x in js)
                     note = self.L(DROP_NOTE, DROP_NOTE_EN).format(
                         n=before, fx=self.exchange_receipts(msgs, i, end, self.lang) or
