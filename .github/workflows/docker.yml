@@ -6,11 +6,27 @@ on:
   push:
     paths:
       - Dockerfile
+      - .dockerignore
+      - ctxproxy/**
+      - dashboard/**
+      - examples/**
+      - pyproject.toml
+      - README.md
+      - LICENSE
+      - tests/test_docker_launcher.py
       - docker/**
       - .github/workflows/docker.yml
   pull_request:
     paths:
       - Dockerfile
+      - .dockerignore
+      - ctxproxy/**
+      - dashboard/**
+      - examples/**
+      - pyproject.toml
+      - README.md
+      - LICENSE
+      - tests/test_docker_launcher.py
       - docker/**
       - .github/workflows/docker.yml
   workflow_dispatch:
@@ -33,6 +49,8 @@ jobs:
         run: |
           python -m venv /tmp/venv
           /tmp/venv/bin/pip install .
+      - name: launcher and health command regressions
+        run: python -m unittest tests.test_docker_launcher -v
       - name: build the image
         run: docker build -t mnemonic-proxy:ci .
       - name: fake engine
@@ -69,3 +87,18 @@ jobs:
           docker logs smoke 2>&1 | tee /tmp/docker-logs.txt
           grep -q '\[ctx-dashboard\]' /tmp/docker-logs.txt
           docker inspect -f '{{.State.Running}}' smoke | grep -q true
+      - name: release the original smoke container
+        run: docker rm -fv smoke
+      - name: real container lifecycle, custom port, separate keys and persistence
+        env:
+          SMOKE_OUTPUT: docker-evidence
+        run: /tmp/venv/bin/python docker/smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-evidence
+          path: docker-evidence/
+          if-no-files-found: warn
+      - name: clean up original smoke container on failure
+        if: always()
+        run: docker rm -fv smoke 2>/dev/null || true

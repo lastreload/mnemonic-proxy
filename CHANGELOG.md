@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **Proxy and dashboard in one Docker image (#106, contributed by @LawiK974).**
+  Persist the archive in `/data`, configure optional independent engine/client key files,
+  and keep the dashboard on loopback. The launcher forwards TERM/INT, stops and reaps both
+  children, and preserves the first child's exit status. Health follows `DASH_PORT` and
+  checks dashboard liveness, not upstream readiness. CI exercises a real container's stop,
+  child failures, custom port, separate read-only keys, chat/streaming and restart persistence.
+
 ## 0.3.35 — 2026-11-22
 
 - **Optional model profiles (#45 / #27).** Each request's concrete `model` selects its tokenizer and

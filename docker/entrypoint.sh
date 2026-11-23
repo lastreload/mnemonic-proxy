@@ -33,9 +33,20 @@ dash=(python dashboard/ctxdash.py --strata "$UPSTREAM" --data "$DATA"
 if [ -n "$engine_key" ]; then dash+=(--api-key-file "$engine_key"); fi
 if [ -n "$client_file" ]; then dash+=(--proxy-api-key-file "$client_file"); fi
 
+cleanup() {
+  trap - EXIT TERM INT
+  # Query our job table rather than saved $! values: a signal can arrive
+  # between starting a child and assigning its PID. Only our own jobs exist here.
+  local pid
+  for pid in $(jobs -p); do kill "$pid" 2>/dev/null || true; done
+  wait 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+
 "${proxy[@]}" & proxy_pid=$!
 "${dash[@]}" & dash_pid=$!
 code=0
 wait -n || code=$?   # first process to exit ends the container
-kill "$proxy_pid" "$dash_pid" 2>/dev/null || true
 exit "$code"
