@@ -237,10 +237,15 @@ class Proxy:
                 box["e"] = e
         t = threading.Thread(target=run, daemon=True)
         t.start()
-        while t.is_alive():
-            t.join(2.0)
-            if t.is_alive():
-                emit(None)  # se il client è andato via solleva ClientGone; prepare finisce comunque da solo
+        try:
+            while t.is_alive():
+                t.join(2.0)
+                if t.is_alive():
+                    emit(None)
+        finally:
+            # A failed keepalive does not cancel prepare. Settle its shared-state
+            # mutations before the caller can release Proxy.chat's request lock.
+            t.join()
         if "e" in box:
             raise box["e"]
         return box["p"]
