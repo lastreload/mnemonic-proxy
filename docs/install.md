@@ -617,6 +617,51 @@ output safety net, but cannot make an already oversized prompt fit. `window_marg
 Disable the agent's own auto-compaction in every client ([Connect your agent](agents.md#connect-your-agent)), otherwise two context managers fight over the same
 history.
 
+### In one container (Docker)
+
+`Dockerfile` runs the proxy and the dashboard together in one image; the archive lives in `/data`.
+
+<!-- readme-test: illustrative -->
+```sh
+docker build -t mnemonic-proxy .
+docker run --network=host -v ./data:/data -e PROXY_HOST=127.0.0.1 -e UPSTREAM=http://127.0.0.1:8095 mnemonic-proxy
+# Optional separate keys (files must already exist):
+# --mount type=bind,src=/absolute/path/engine.key,dst=/keys/engine,readonly -e API_KEY_FILE=/keys/engine
+# --mount type=bind,src=/absolute/path/client.key,dst=/keys/client,readonly -e CLIENT_KEY_FILE=/keys/client
+```
+
+`--network=host` (Linux) is what makes the dashboard reachable from a browser: it keeps its loopback-only bind, so
+`-p` cannot forward it. With `-p 127.0.0.1:8096:8096` instead you get the proxy on the host and the dashboard only
+inside the container. The engine is expected outside the container (use `host.docker.internal` on macOS/Windows).
+
+| env | default | |
+|---|---|---|
+| `UPSTREAM` | `http://127.0.0.1:8095` | the engine; also what the dashboard reads |
+| `API_KEY` | empty | key sent upstream, written to `/data/.api_key` (`0600`) and forwarded to the dashboard |
+| `CLIENT_KEY` | empty | key clients must send, written to `/data/.client_key` (`0600`) and read by the proxy with `--client-key-file`, which activates the check; defaults to `API_KEY` |
+| `API_KEY_FILE` / `CLIENT_KEY_FILE` | unset | existing engine/client key files; mounted read-only files are supported and are not rewritten |
+| `PROXY_HOST` / `PROXY_PORT` | `0.0.0.0` / `8096` | proxy bind; authentication is enabled only when a client/shared key is configured |
+| `DASH_HOST` / `DASH_PORT` | `127.0.0.1` / `8097` | loopback only, never published |
+| `DATA` | `/data` | archive, journal, and the key files (`0600`) the two processes read |
+| `PROXY_ARGS` | empty | extra proxy flags, split on spaces (`--config …`, `--tokenizer …`, `--mode off`) |
+
+The file options take precedence over inline keys. If only an engine key is configured, the container
+also uses it for client authentication; supply **both** files with distinct values for independent keys.
+Without any key, authentication remains disabled. The default proxy bind is public inside the container;
+use a loopback host mapping or `PROXY_HOST=127.0.0.1` with host networking for local-only access.
+
+Inline keys are written to files in `DATA` rather than passed as arguments. These managed files are
+written **before** the proxy validates its configuration; an invalid configuration can still replace them.
+Prefer externally managed read-only `*_FILE` mounts if this matters. Inline environment values are visible
+to container administrators. Mount `DATA` as a private volume you own (`-v ./data:/data`), or set
+`DATA=/tmp/scratch` for ephemeral archive storage. `PROXY_ARGS` uses shell word splitting and globbing,
+not shell evaluation; paths containing spaces cannot be expressed through this variable.
+
+`docker stop` forwards TERM to both services and waits for them; the container also stops when either
+service exits. Its healthcheck follows `DASH_PORT` and checks **dashboard liveness only**: it may stay
+healthy while the engine is unavailable or the proxy reports `/health` 503. It is not an upstream
+readiness check. No engine is bundled in the image.
+
 ## Platforms
 
 - **Linux**: the reference. Every tested combination below ran on Linux.

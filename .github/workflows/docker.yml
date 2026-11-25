@@ -1,0 +1,104 @@
+# Author: Maurizio Verde — LastReload
+# Builds the image and smoke-tests it: proxy + dashboard in one container, against the fake engine on the runner.
+# No secrets, no model — the key is a fixed string.
+name: docker
+on:
+  push:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - ctxproxy/**
+      - dashboard/**
+      - examples/**
+      - pyproject.toml
+      - README.md
+      - LICENSE
+      - tests/test_docker_launcher.py
+      - docker/**
+      - .github/workflows/docker.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - ctxproxy/**
+      - dashboard/**
+      - examples/**
+      - pyproject.toml
+      - README.md
+      - LICENSE
+      - tests/test_docker_launcher.py
+      - docker/**
+      - .github/workflows/docker.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install the package (the fake engine runs on the runner)
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install .
+      - name: launcher and health command regressions
+        run: python -m unittest tests.test_docker_launcher -v
+      - name: build the image
+        run: docker build -t mnemonic-proxy:ci .
+      - name: fake engine
+        run: |
+          cd /tmp
+          /tmp/venv/bin/python -m ctxproxy.fake_engine --flavor llama --n-ctx 32768 --port 18095 &
+          # `if ... break; fi` and `|| true`: with bash -e a failed curl (connection refused) would abort the step.
+          for i in $(seq 1 50); do if curl -sf localhost:18095/health > /dev/null; then break; fi; sleep 0.2; done
+      - name: start the container
+        # the container shares the runner's network: the fake engine listens on 127.0.0.1, which a bridge network cannot reach.
+        run: |
+          docker run -d --name smoke --network=host \
+            -e UPSTREAM=http://127.0.0.1:18095 -e API_KEY=ci-key mnemonic-proxy:ci
+      - name: the proxy takes the key and refuses the rest
+        run: |
+          code=0
+          for i in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-key' localhost:8096/health || true)
+            if [ "$code" = 200 ]; then break; fi
+            sleep 0.5
+          done
+          test "$code" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8096/health || true)" = 401
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-key' \
+            -H 'Content-Type: application/json' -d '{"model":"local-model","messages":[{"role":"user","content":"hi"}]}' \
+            localhost:8096/v1/chat/completions || true)" = 200
+      - name: the dashboard answers inside the container
+        run: |
+          docker exec smoke python -c "import urllib.request,json;print(json.load(urllib.request.urlopen('http://127.0.0.1:8097/health',timeout=5)))"
+          # forwards the key to the proxy: 200 here means it did (401 would mean it did not)
+          docker exec smoke python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:8097/api/marks?conv=smoke',timeout=5).status)"
+      - name: logs
+        run: |
+          docker logs smoke 2>&1 | tee /tmp/docker-logs.txt
+          grep -q '\[ctx-dashboard\]' /tmp/docker-logs.txt
+          docker inspect -f '{{.State.Running}}' smoke | grep -q true
+      - name: release the original smoke container
+        run: docker rm -fv smoke
+      - name: real container lifecycle, custom port, separate keys and persistence
+        env:
+          SMOKE_OUTPUT: docker-evidence
+        run: /tmp/venv/bin/python docker/smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: docker-evidence
+          path: docker-evidence/
+          if-no-files-found: warn
+      - name: clean up original smoke container on failure
+        if: always()
+        run: docker rm -fv smoke 2>/dev/null || true
