@@ -275,7 +275,7 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 | `min_batch_tokens` | 16000 | a block runs only if it frees at least this much | default |
 | `keep_recent_tokens` / `min_age_turns` | 16000 / 2 | protected tail, never masked | default |
 | `mask_reasoning` / `mask_tool_args` | false / false | also mask old reasoning / large old tool-call arguments | **true / true** (opt-in: they change the prompt, see [Automatic configuration](#automatic-configuration)) |
-| `mask_keep_closing` | false | opt-in: an exchange marked disposable that contains an assistant closing message (text with no tool calls) is never drop-masked, so the closing text stays in the history. Off by default: drop-masking of disposable exchanges stays as in 0.3.0 | default (opt-in: it changes the prompt) |
+| `mask_keep_closing` | false | opt-in: an exchange marked disposable that contains an assistant closing message (text with no tool calls) is not drop-masked, so the closing text stays in the active history. Off by default: disposable exchanges retain their existing drop-masking behavior | default (opt-in: it changes the prompt) |
 | `mask_anchor`, `anchor_min_tokens` | false, 24000 | save/restore engine state at the masking frontier (saved state) | **chosen automatically**, 24000 |
 | `slot_dir` | "" | the engine's `--slot-save-path` folder, same host (anchor cleanup, autosave, `kv_archive`) | set (one field: the saved-state options then follow by themselves) |
 | `segments_enabled`, `tail_max`, `notes_max_tokens` | true, 24000, 8192 | segment switch with handoff notes | true, 24000, **chosen automatically** (`window * 3 / 32`) |
@@ -302,6 +302,13 @@ the ones the proxy now picks for you when the engine and the machine allow it.
 | `engine`, `slot_id`, `engine_tokenize` | "auto", 0, false | engine type, slot, token counting via the engine's `/tokenize` | auto, 0, **chosen automatically** |
 | `router_model`, `router_load_timeout_s`, `router_keepalive_s` | "", 600, 10 | llama-server router mode: model used when the client's `model` is not served (empty = refuse), how long a model may take to load, seconds between two SSE comments to a streaming client while the model loads | default |
 | `live_dump` | false | write `data/live/last_request.json` for the dashboard | **true** (opt-in: it writes the full prompt to disk) |
+
+With `mask_keep_closing: true`, retained exchanges can fill the active window sooner. If masking cannot
+free enough room, the proxy may switch segments earlier or return HTTP 400 (`window_guard`) when segments
+are disabled. Large tool outputs can still be masked individually. Only separate assistant messages with
+non-empty text and no tool calls protect an exchange; text in the same message as a tool call does not.
+The option does not guarantee that closing messages survive a segment switch, or that the model follows
+a closing-text instruction. Leave it off to keep the existing disposable-exchange behavior.
 
 A config for llama-server with saved state, as recommended above:
 
