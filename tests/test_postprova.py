@@ -171,6 +171,25 @@ class TestManager(unittest.TestCase):
         self.assertTrue(mgr.store.masks_for([chain(msgs, TOOLS)[1] + DROP_SUFFIX]))
         tmp.cleanup()
 
+    def test_mask_keep_closing_opt_in(self):
+        # opt-in mask_keep_closing: lo scambio usa e getta con la chiusura dell'assistant non e` mascherato
+        mgr, tmp = mk(mask_keep_closing=True)
+        msgs = [SYSTEM, {"role": "user", "content": "~ avvia il server di prova"}]
+        msgs += [{"role": "assistant", "content": "", "reasoning_content": "avvio " * 300,
+                  "tool_calls": [call("s1", "bash", command="node tools/serve.mjs 8123")]},
+                 {"role": "tool", "tool_call_id": "s1", "content": "in ascolto su 8123\n" + "log\n" * 900},
+                 {"role": "assistant", "content": "server avviato"}]
+        msgs += session(12)[1:]
+        p = self.prep(mgr, msgs)
+        ev = [e for e in p.events if e["event"] == "mask"]
+        self.assertFalse(any(x["tipo"] == "scambio" for e in ev for x in e["pieces"]))
+        u = [m for m in p.messages if m.get("role") == "user" and "avvia il server" in m["content"]][0]
+        self.assertNotIn("disposable", u["content"])
+        self.assertTrue(any(m.get("tool_call_id") == "s1" for m in p.messages))
+        self.assertTrue(any(m.get("role") == "assistant" and m.get("content") == "server avviato"
+                            for m in p.messages))
+        tmp.cleanup()
+
     def test_pins_block(self):
         mgr, tmp = mk()
         msgs = session()
