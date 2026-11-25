@@ -365,8 +365,14 @@ def error_text(text: str, lang: str = "it") -> str:
 
 # ---------------------------------------------------------------- guardia in uscita
 # write/edit/bash di pi; Write/Edit/MultiEdit/NotebookEdit/Bash di Claude Code; apply_patch/exec_command/shell di
-# Codex (il confronto ignora maiuscole e minuscole, vedi is_guarded)
-GUARD_NAMES = ("write", "edit", "bash", "multiedit", "notebookedit", "apply_patch", "exec_command", "shell")
+# Codex; editor/write_to_file/replace_in_file/insert_content/apply_diff/search_and_replace, run_commands/
+# execute_command/terminal di Cline (Roo e Kilo usano gli stessi nomi). 0.3.27: senza questi ultimi, con Cline
+# is_guarded() rispondeva sempre False e la guardia non veniva mai applicata (server.py: "held":
+# cfg.receipt_guard and is_guarded(name)): una chiamata che ricopiava il segnaposto "…" di una chiamata vecchia
+# sarebbe stata scritta nel file. (il confronto ignora maiuscole e minuscole, vedi is_guarded)
+GUARD_NAMES = ("write", "edit", "bash", "multiedit", "notebookedit", "apply_patch", "exec_command", "shell",
+               "editor", "write_to_file", "replace_in_file", "insert_content", "apply_diff", "search_and_replace",
+               "run_commands", "execute_command", "terminal")
 _GUARD_RE = re.compile(r"\u27eactx-archive id=[rta][0-9a-f]{12}|\u27eb Ricevuta: |\u27eb Receipt: |"
                        r"\[gestore del contesto: richiamo automatico\] Pezzi|"
                        r"\[context manager: automatic recall\] Pieces|"
